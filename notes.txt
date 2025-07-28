@@ -1,0 +1,46 @@
+MAIN BRANCH:
+
+1 GPU:
+
+Without peft:
+(RayTrainWorker pid=3054643) [2025-07-28 11:43:03,943] [INFO] [config.py:925:print]   zero_enabled ................. False
+(RayTrainWorker pid=3054643) [2025-07-28 11:43:03,943] [INFO] [config.py:925:print]   zero_force_ds_cpu_optimizer .. True
+(RayTrainWorker pid=3054643) [2025-07-28 11:43:03,943] [INFO] [config.py:925:print]   zero_optimization_stage ...... 0
+(RayTrainWorker pid=3054643) [2025-07-28 11:43:03,944] [INFO] [config.py:911:print_user_config]   json = {
+(RayTrainWorker pid=3054643)     "zero_optimization": {
+(RayTrainWorker pid=3054643)         "stage": 0, 
+(RayTrainWorker pid=3054643)         "overlap_comm": true
+(RayTrainWorker pid=3054643)     }, 
+(RayTrainWorker pid=3054643)     "train_batch_size": 8, 
+(RayTrainWorker pid=3054643)     "train_micro_batch_size_per_gpu": 8, 
+(RayTrainWorker pid=3054643)     "gradient_clipping": 1.0, 
+(RayTrainWorker pid=3054643)     "gradient_accumulation_steps": 1, 
+(RayTrainWorker pid=3054643)     "optimizer": {
+(RayTrainWorker pid=3054643)         "type": "AdamW", 
+(RayTrainWorker pid=3054643)         "params": {
+(RayTrainWorker pid=3054643)             "lr": 5e-05, 
+(RayTrainWorker pid=3054643)             "betas": [0.9, 0.999], 
+(RayTrainWorker pid=3054643)             "eps": 1e-08, 
+(RayTrainWorker pid=3054643)             "weight_decay": 0.0
+(RayTrainWorker pid=3054643)         }
+(RayTrainWorker pid=3054643)     }, 
+(RayTrainWorker pid=3054643)     "bf16": {
+(RayTrainWorker pid=3054643)         "enabled": false
+(RayTrainWorker pid=3054643)     }, 
+(RayTrainWorker pid=3054643)     "activation_checkpointing": {
+(RayTrainWorker pid=3054643)         "partition_activations": false, 
+(RayTrainWorker pid=3054643)         "cpu_checkpointing": false, 
+(RayTrainWorker pid=3054643)         "contiguous_memory_optimization": false, 
+(RayTrainWorker pid=3054643)         "number_checkpoints": null, 
+(RayTrainWorker pid=3054643)         "synchronize_checkpoint_boundary": false, 
+(RayTrainWorker pid=3054643)         "profile": false
+(RayTrainWorker pid=3054643)     }, 
+(RayTrainWorker pid=3054643)     "steps_per_print": inf, 
+(RayTrainWorker pid=3054643)     "fp16": {
+(RayTrainWorker pid=3054643)         "enabled": false
+(RayTrainWorker pid=3054643)     }
+(RayTrainWorker pid=3054643) }
+
+With peft nothing
+
+

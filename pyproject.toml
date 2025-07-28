@@ -1,0 +1,35 @@
+[project]
+name = "leap-finetune"
+version = "0.1.0"
+description = "A simple trl wrapper to streamline v2 fine-tuning"
+readme = "README.md"
+authors = [
+    { name = "Liquid AI", email = "support@liquid.ai" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate>=1.7.0",
+    "peft>=0.15.2",
+    "deepspeed>=0.17.1",
+    "ray[train]>=2.47.1",
+    "torch>=2.7.1",
+    "transformers",
+    "trl>=0.18.2",
+    "rich>=14.1.0",
+]
+
+[project.scripts]
+leap-finetune = "leap_finetune:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.2.0",
+    "ruff>=0.11.13",
+]
+
+[tool.uv.sources]
+transformers = { git = "https://github.com/huggingface/transformers.git", rev = "bf607f6d3bd7bf95aaa1094c3a51c3476e4ddc29" }

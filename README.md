@@ -30,6 +30,7 @@ cd leap_finetune
 
 ```bash
 uv sync
+source .venv/bin/activate
 ```
 
 ## 🚀 Quickstart
@@ -76,3 +77,5 @@ Pre-commit will now run automatically on commits, or run manually:
 ```bash
 uv run pre-commit run --all-files
 ```
+
+Please include a thorough description of changes and additions in your PR.

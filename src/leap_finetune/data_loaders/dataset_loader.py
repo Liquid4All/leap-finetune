@@ -4,7 +4,7 @@ from typing import Literal, Optional, Tuple
 
 from datasets import Dataset, load_dataset
 
-from .validate_loader import validate_data_loader
+from .validate_loader import validate_data_loader, validate_dataset_format
 
 
 @dataclass
@@ -45,6 +45,9 @@ class DatasetLoader:
                 raise ValueError(
                     f"Failed to load HuggingFace dataset '{self.dataset_path}': {e}"
                 )
+
+        # Validate dataset format
+        dataset = validate_dataset_format(dataset, self.dataset_type)
 
         # Split dataset
         split_dataset = dataset.train_test_split(test_size=self.test_size)

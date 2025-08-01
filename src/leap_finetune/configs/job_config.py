@@ -1,4 +1,3 @@
-import warnings
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -23,6 +22,7 @@ class JobConfig:
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
 
     def __post_init__(self):
+        self.dataset = self.dataset.load()  # Load dataset after init
         self._validate_job_name()
         self._validate_training_config()
 
@@ -36,7 +36,7 @@ class JobConfig:
         # Check if job dir already exists - warn but don't fail
         # (Ray workers might import config after directory is created)
         if not is_job_name_unique(self.training_type, self.job_name):
-            warnings.warn(
+            raise ValueError(
                 f"Job directory already exists for job '{self.job_name}' with training type '{self.training_type}'. "
                 f"This might be from a previous run or concurrent Ray worker initialization."
             )

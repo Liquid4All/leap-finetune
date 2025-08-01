@@ -21,7 +21,7 @@ Args:
 
 smoltalk_dataset = DatasetLoader(
     "HuggingFaceTB/smoltalk", "sft", limit=1000, test_size=0.2, subset="all"
-).load()
+)
 
 
 #################################

@@ -30,7 +30,6 @@ cd leap_finetune
 
 ```bash
 uv sync
-source .venv/bin/activate
 ```
 
 ## 🚀 Quickstart

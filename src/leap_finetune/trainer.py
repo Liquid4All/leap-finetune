@@ -60,10 +60,7 @@ def ray_trainer(job_config: dict) -> None:
         name="ray_logs",
     )
 
-    print(f"\nTraining {job_config['model_name']}-{training_type} on {num_gpus} GPUs")
-    print(f"Output directory: {output_dir}")
-    print(f"Job name: {job_name}")
-    print("-" * 60)
+    print(f"\nTraining on {num_gpus} GPUs")
 
     trainer = TorchTrainer(
         train_loop_per_worker=train_loop,

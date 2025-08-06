@@ -7,7 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from leap_finetune.configs import PeftConfig, TrainingConfig
-from leap_finetune.utils.output_paths import is_job_name_unique
+from leap_finetune.utils.output_paths import is_job_name_unique, resolve_model_output_path
 
 
 @dataclass
@@ -71,6 +71,9 @@ class JobConfig:
         """Print summary of current configuration"""
         console = Console()
 
+        # Calculate output directory
+        output_dir = resolve_model_output_path(self.training_type, self.job_name)
+
         # Create a table for the configuration
         table = Table(show_header=False, box=None, padding=(0, 2))
         table.add_column("Property", style="bold cyan", min_width=15)
@@ -79,6 +82,7 @@ class JobConfig:
         table.add_row("Model", self.model_name)
         table.add_row("Job Name", self.job_name)
         table.add_row("Training Type", self.training_type.upper())
+        table.add_row("Output Directory", str(output_dir))
         table.add_row("PEFT", "✅ Enabled" if self.peft_config.value else "❌ Disabled")
         table.add_row("Train Samples", f"{len(self.dataset[0]):,}")
         table.add_row("Test Samples", f"{len(self.dataset[1]):,}")

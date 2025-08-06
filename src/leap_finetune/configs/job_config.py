@@ -7,7 +7,10 @@ from rich.panel import Panel
 from rich.table import Table
 
 from leap_finetune.configs import PeftConfig, TrainingConfig
-from leap_finetune.utils.output_paths import is_job_name_unique, resolve_model_output_path
+from leap_finetune.utils.output_paths import (
+    is_job_name_unique,
+    resolve_model_output_path,
+)
 
 
 @dataclass

@@ -15,15 +15,6 @@ DEEPSEED_CONFIG = {
     "train_micro_batch_size_per_gpu": "auto",
     "gradient_clipping": "auto",
     "gradient_accumulation_steps": "auto",
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": "auto",  # Uses learning_rate from training config
-            "betas": "auto",  # DEFAULT: (0.9, 0.999)
-            "eps": "auto",  # DEFAULT: 1e-8
-            "weight_decay": "auto",  # DEFAULT: 0.01
-        },
-    },
     "bf16": {"enabled": "auto"},
     "activation_checkpointing": {
         "partition_activations": False,
@@ -54,5 +45,6 @@ DEFAULT_DPO_CONFIG = {
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "load_best_model_at_end": True,
-    # "deepspeed": DEEPSEED_CONFIG,
+    "ddp_find_unused_parameters": False,
+    "deepspeed": DEEPSEED_CONFIG,
 }

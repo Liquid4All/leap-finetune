@@ -1,4 +1,3 @@
-import warnings
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -8,7 +7,10 @@ from rich.panel import Panel
 from rich.table import Table
 
 from leap_finetune.configs import PeftConfig, TrainingConfig
-from leap_finetune.utils.output_paths import is_job_name_unique
+from leap_finetune.utils.output_paths import (
+    is_job_name_unique,
+    resolve_model_output_path,
+)
 
 
 @dataclass
@@ -23,6 +25,7 @@ class JobConfig:
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
 
     def __post_init__(self):
+        self.dataset = self.dataset.load()  # Load dataset after init
         self._validate_job_name()
         self._validate_training_config()
 
@@ -36,7 +39,7 @@ class JobConfig:
         # Check if job dir already exists - warn but don't fail
         # (Ray workers might import config after directory is created)
         if not is_job_name_unique(self.training_type, self.job_name):
-            warnings.warn(
+            raise ValueError(
                 f"Job directory already exists for job '{self.job_name}' with training type '{self.training_type}'. "
                 f"This might be from a previous run or concurrent Ray worker initialization."
             )
@@ -71,6 +74,9 @@ class JobConfig:
         """Print summary of current configuration"""
         console = Console()
 
+        # Calculate output directory
+        output_dir = resolve_model_output_path(self.training_type, self.job_name)
+
         # Create a table for the configuration
         table = Table(show_header=False, box=None, padding=(0, 2))
         table.add_column("Property", style="bold cyan", min_width=15)
@@ -79,6 +85,7 @@ class JobConfig:
         table.add_row("Model", self.model_name)
         table.add_row("Job Name", self.job_name)
         table.add_row("Training Type", self.training_type.upper())
+        table.add_row("Output Directory", str(output_dir))
         table.add_row("PEFT", "✅ Enabled" if self.peft_config.value else "❌ Disabled")
         table.add_row("Train Samples", f"{len(self.dataset[0]):,}")
         table.add_row("Test Samples", f"{len(self.dataset[1]):,}")

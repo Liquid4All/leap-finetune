@@ -54,5 +54,6 @@ DEFAULT_SFT_CONFIG = {
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "load_best_model_at_end": True,
+    "ddp_find_unused_parameters": False,
     "deepspeed": DEEPSEED_CONFIG,
 }

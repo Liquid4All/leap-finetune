@@ -1,14 +1,16 @@
 import sys
 
-from leap_finetune.trainer import ray_trainer
 from leap_finetune.utils.logging import setup_training_environment
-from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
 
-# Set Ray Core logging before importing Ray
 setup_training_environment()
+
+from leap_finetune.trainer import ray_trainer  # noqa
+from leap_finetune.utils.constants import LEAP_FINETUNE_DIR  # noqa
 
 
 def main() -> None:
+    # Set Ray Core logging before importing Ray
+
     print("Launching leap-finetune ✅")
 
     # Import config only in main process, not Ray workers
@@ -29,7 +31,7 @@ def main() -> None:
             "JOB_CONFIG not found in config.py. Please define JOB_CONFIG in your config.py file."
         )
     except ValueError as e:
-        raise ValueError(f"Invalid JOB_CONFIG: {e}")
+        raise ValueError(f"Issue with JOB_CONFIG: {e}")
     finally:
         sys.path.remove(root_path)
 

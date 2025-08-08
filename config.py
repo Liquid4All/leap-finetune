@@ -19,8 +19,12 @@ Args:
     subset: Dataset subset to use for HuggingFace datasets, default None
 """
 
-smoltalk_dataset = DatasetLoader(
+example_sft_dataset = DatasetLoader(
     "HuggingFaceTB/smoltalk", "sft", limit=1000, test_size=0.2, subset="all"
+)
+
+example_dpo_dataset = DatasetLoader(
+    "mlabonne/orpo-dpo-mix-40k", "dpo", limit=1000, test_size=0.2, subset="default"
 )
 
 
@@ -72,10 +76,10 @@ Args:
 """
 
 JOB_CONFIG = JobConfig(
-    job_name="my_output_dir",
+    job_name="my_job",
     model_name="LFM2-1.2B",
     training_type="sft",
-    dataset=smoltalk_dataset,
+    dataset=example_sft_dataset,
     training_config=training_config,
     peft_config=peft_config,
 )

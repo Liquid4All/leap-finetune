@@ -21,7 +21,7 @@ Args:
 
 example_sft_dataset = DatasetLoader(
     "HuggingFaceTB/smoltalk", "sft", limit=1000, test_size=0.2, subset="all"
-).load()
+)
 
 example_dpo_dataset = DatasetLoader(
     "mlabonne/orpo-dpo-mix-40k", "dpo", limit=1000, test_size=0.2, subset="default"
@@ -76,7 +76,7 @@ Args:
 """
 
 JOB_CONFIG = JobConfig(
-    job_name="my_sft",
+    job_name="my_job",
     model_name="LFM2-1.2B",
     training_type="sft",
     dataset=example_sft_dataset,

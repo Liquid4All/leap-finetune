@@ -54,6 +54,10 @@ It uses Ray Train + Accelerate for distributed training.
 
 Unless you overwrote `output_dir`, results will be stored in `outputs/training_type/job_name/`
 
+### 3. Bundle Checkpoint for LEAP
+
+When training is done, you can bundle your output checkpoint with `leap-bundle` to use it directly within LEAP. Checkout our [Quick Start guide](https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github&utm_medium=link&utm_campaign=LEAP&utm_content=general).
+
 ## 🧪 Advanced Configuration
 
 ### Default Configs Location and Adding New Configs

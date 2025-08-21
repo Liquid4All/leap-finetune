@@ -60,8 +60,6 @@ When training is done, you can bundle your output checkpoint with `leap-bundle` 
 
 ## 🧪 Advanced Configuration
 
-### Default Configs Location and Adding New Configs
-
 The default configurations are located in:
 
 - **SFT Training**: [`src/leap_finetune/configs/sft_configs.py`](./src/leap_finetune/configs/sft_configs.py)
@@ -69,6 +67,9 @@ The default configurations are located in:
 - **PEFT/LoRA**: [`src/leap_finetune/configs/peft_configs.py`](./src/leap_finetune/configs/peft_configs.py)
 
 To add a new training configuration add it to the respective file and then reference it in [`src/leap_finetune/configs/__init__.py`](./src/leap_finetune/configs/__init__.py) in the `TrainingConfig` and/or `PeftConfig` enum.
+
+We also support [Liger Kernel](https://github.com/linkedin/Liger-Kernel) and it comes pre-installed.
+Just add `"use_liger_kernel": True"` to your `user_config`
 
 ## Contributing
 

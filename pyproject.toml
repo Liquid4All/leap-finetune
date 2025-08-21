@@ -1,7 +1,7 @@
 [project]
 name = "leap-finetune"
 version = "0.1.0"
-description = "A simple trl wrapper to streamline v2 fine-tuning"
+description = "A minimal fine-tuning repo for LFM2, fully built on Open Source."
 readme = "README.md"
 authors = [
     { name = "Liquid AI", email = "support@liquid.ai" }
@@ -13,9 +13,10 @@ dependencies = [
     "deepspeed>=0.17.1",
     "ray[train]>=2.47.1",
     "torch>=2.7.1",
-    "transformers",
+    "transformers>=4.55.0",
     "trl>=0.18.2",
     "rich>=14.1.0",
+    "liger-kernel>=0.6.1",
 ]
 
 [project.scripts]
@@ -30,6 +31,3 @@ dev = [
     "pre-commit>=4.2.0",
     "ruff>=0.11.13",
 ]
-
-[tool.uv.sources]
-transformers = { git = "https://github.com/huggingface/transformers.git", rev = "bf607f6d3bd7bf95aaa1094c3a51c3476e4ddc29" }

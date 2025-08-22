@@ -14,7 +14,7 @@ def setup_training_environment() -> None:
     os.environ.setdefault("DEEPSPEED_LOG_LEVEL", "ERROR")
     warnings.filterwarnings("ignore")  # keep only tracebacks
 
-    cache = "/dev/shm/triton_cache"
+    cache = "/dev/shm"
     try:
         os.makedirs(cache, exist_ok=True)
     except OSError:

@@ -58,7 +58,63 @@ Unless you overwrote `output_dir`, results will be stored in `outputs/training_t
 
 When training is done, you can bundle your output checkpoint with `leap-bundle` to use it directly within LEAP. Checkout our [Quick Start guide](https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github&utm_medium=link&utm_campaign=LEAP&utm_content=general).
 
+## 📊 Expected Dataset Formats
+
+### SFT (Supervised Fine-Tuning)
+
+```json
+{
+  "messages": [
+    { "role": "user", "content": "What is the capital of France?" },
+    { "role": "assistant", "content": "The capital of France is Paris." }
+  ]
+}
+```
+
+### DPO (Direct Preference Optimization)
+
+```json
+{
+  "prompt": "What is the capital of France?",
+  "chosen": "The capital of France is Paris.",
+  "rejected": "The capital of France is London."
+}
+```
+
+### VLM SFT (Vision-Language Model)
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are an image-based assistant. Answer questions based on the provided image."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        { "type": "image", "image": "/path/to/image.jpg" },
+        { "type": "text", "text": "What do you see in this image?" }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [{ "type": "text", "text": "I see a car in the image." }]
+    }
+  ]
+}
+```
+
+> **Note**: VLM datasets commonly have images in a separate row and are referenced in the messages column. If your image URLs or Paths are in a separate column from your messages, you'll need to merge the images into the 'messages' section like above.
+
 ## 🧪 Advanced Configuration
+
+### Default Configs Location and Adding New Configs
 
 The default configurations are located in:
 

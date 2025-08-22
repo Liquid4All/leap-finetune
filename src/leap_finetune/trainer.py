@@ -4,15 +4,15 @@ import os
 from accelerate.utils import set_seed
 from ray.train import RunConfig, ScalingConfig
 from ray.runtime_env import RuntimeEnv
-from ray.train.torch import TorchTrainer
+from ray.train.torch import TorchTrainer, TorchConfig
 from rich.console import Console
 from rich.panel import Panel
 from torch import cuda
 
 from leap_finetune.utils.constants import RUNTIME_DIR
-from leap_finetune.utils.output_paths import resolve_model_output_path
 from leap_finetune.training_loops.sft_run import sft_run
 from leap_finetune.training_loops.dpo_run import dpo_run
+from leap_finetune.training_loops.vlm_sft_run import vlm_sft_run
 
 
 #################################
@@ -25,8 +25,8 @@ def ray_trainer(job_config: dict) -> None:
     Runs on each Ray worker after loading config, setting seed, and calling a training loop
     """
 
-    job_name = job_config["job_name"]
     training_type = job_config["training_type"]
+    output_dir = job_config["training_config"]["output_dir"]
 
     set_seed(42)
     num_gpus = cuda.device_count()
@@ -38,13 +38,35 @@ def ray_trainer(job_config: dict) -> None:
         ray_temp_dir = os.path.expanduser("~/ray_temp")
         os.makedirs(ray_temp_dir, exist_ok=True)
         ray.init(
-            runtime_env=RuntimeEnv(working_dir=str(RUNTIME_DIR)), _temp_dir=ray_temp_dir
+            runtime_env=RuntimeEnv(
+                working_dir=str(RUNTIME_DIR),
+                env_vars={
+                    "TMPDIR": ray_temp_dir,
+                    "TEMP": ray_temp_dir,
+                    "TMP": ray_temp_dir,
+                    "NCCL_IB_DISABLE": "1",
+                    "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
+                    "NCCL_SOCKET_IFNAME": "lo",
+                    "TORCH_NCCL_BLOCKING_WAIT": "1",
+                    "NCCL_TIMEOUT": "300",  # 5 minute safe timeout
+                    "RAY_DISABLE_IMPORT_WARNING": "1",
+                    "RAY_memory_monitor_refresh_ms": "0",
+                    # Suppress Ray Data verbose logging
+                    "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
+                    "RAY_IGNORE_UNHANDLED_ERRORS": "1",
+                },
+            ),
+            _temp_dir=ray_temp_dir,
         )
 
-    train_loop = sft_run if training_type == "sft" else dpo_run
-    output_dir = resolve_model_output_path(training_type, job_name)
-
-    job_config["training_config"]["output_dir"] = str(output_dir)
+    if training_type == "sft":
+        train_loop = sft_run
+    elif training_type == "dpo":
+        train_loop = dpo_run
+    elif training_type == "vlm_sft":
+        train_loop = vlm_sft_run
+    else:
+        raise ValueError(f"Invalid training type: {training_type}")
 
     train_loop_config = {
         "model_name": job_config["model_name"],
@@ -69,6 +91,7 @@ def ray_trainer(job_config: dict) -> None:
         train_loop_config=train_loop_config,
         scaling_config=scale_config,
         run_config=run_config,
+        torch_config=TorchConfig(backend="nccl"),
     )
 
     trainer.fit()

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Literal
+from pathlib import Path
 
 from datasets import Dataset
 from rich.console import Console
@@ -7,10 +8,14 @@ from rich.panel import Panel
 from rich.table import Table
 
 from leap_finetune.configs import PeftConfig, TrainingConfig
-from leap_finetune.utils.output_paths import (
-    is_job_name_unique,
-    resolve_model_output_path,
-)
+from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+
+
+def is_job_name_unique(output_dir: str) -> bool:
+    """
+    Checks if a job with the given name exists for a given training type.
+    """
+    return not Path(output_dir).exists()
 
 
 @dataclass
@@ -19,13 +24,17 @@ class JobConfig:
 
     job_name: str
     model_name: str = "LFM2-1.2B"
-    training_type: Literal["sft", "dpo"] = "sft"
-    dataset: Dataset | None = None
+    training_type: Literal["sft", "dpo", "vlm_sft"] = "sft"
+    dataset: DatasetLoader | tuple[Dataset, Dataset] | None = None
     training_config: TrainingConfig = TrainingConfig.DEFAULT_SFT
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
 
     def __post_init__(self):
-        self.dataset = self.dataset.load()  # Load dataset after init
+        if isinstance(self.dataset, DatasetLoader):
+            self.dataset = self.dataset.load()
+        self.training_config.value["output_dir"] = str(
+            Path(self.training_config.value.get("output_dir")) / self.job_name
+        )
         self._validate_job_name()
         self._validate_training_config()
 
@@ -38,10 +47,10 @@ class JobConfig:
 
         # Check if job dir already exists - warn but don't fail
         # (Ray workers might import config after directory is created)
-        if not is_job_name_unique(self.training_type, self.job_name):
+        if not is_job_name_unique(self.training_config.value.get("output_dir")):
             raise ValueError(
-                f"Job directory already exists for job '{self.job_name}' with training type '{self.training_type}'. "
-                f"This might be from a previous run or concurrent Ray worker initialization."
+                "Job output directory already exists\n"
+                "This might be from a previous run or concurrent Ray worker initialization."
             )
 
     def _validate_training_config(self):
@@ -75,7 +84,7 @@ class JobConfig:
         console = Console()
 
         # Calculate output directory
-        output_dir = resolve_model_output_path(self.training_type, self.job_name)
+        output_dir = self.training_config.value.get("output_dir")
 
         # Create a table for the configuration
         table = Table(show_header=False, box=None, padding=(0, 2))

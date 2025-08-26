@@ -16,7 +16,9 @@ dependencies = [
     "transformers>=4.55.0",
     "trl>=0.18.2",
     "rich>=14.1.0",
-    "liger-kernel>=0.6.1",
+    "pillow>=11.3.0",
+    "mpi4py>=4.1.0",
+    "liger-kernel>=0.6.2",
 ]
 
 [project.scripts]

@@ -27,6 +27,10 @@ example_dpo_dataset = DatasetLoader(
     "mlabonne/orpo-dpo-mix-40k", "dpo", limit=1000, test_size=0.2, subset="default"
 )
 
+example_vlm_sft_dataset = DatasetLoader(
+    "alay2shah/example-vlm-sft-dataset", "vlm_sft", limit=None, test_size=0.2
+)
+
 
 #################################
 #       Training Config         #
@@ -37,10 +41,12 @@ Choose a default training config and override some of the parameters.
 
 Default SFT: TrainingConfig.DEFAULT_SFT
 Default DPO: TrainingConfig.DEFAULT_DPO
+Default VLM SFT: TrainingConfig.DEFAULT_VLM_SFT
 
-Default LORA: PeftConfig.DEFAULT_LORA
-High R LORA: PeftConfig.HIGH_R_LORA
 No LORA (full finetuning): PeftConfig.NO_LORA
+Default LORA: PeftConfig.DEFAULT_LORA
+High R LoRA: PeftConfig.HIGH_R_LORA
+VLM LoRA: PeftConfig.DEFAULT_VLM_LORA
 
 Args:
     output_dir: Output directory for training artifacts
@@ -76,7 +82,7 @@ Args:
 """
 
 JOB_CONFIG = JobConfig(
-    job_name="my_job",
+    job_name="my_job_name",
     model_name="LFM2-1.2B",
     training_type="sft",
     dataset=example_sft_dataset,

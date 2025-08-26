@@ -1,6 +1,6 @@
 import sys
 
-from leap_finetune.utils.logging import setup_training_environment
+from leap_finetune.utils.logging_utils import setup_training_environment
 
 setup_training_environment()
 

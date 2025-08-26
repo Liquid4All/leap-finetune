@@ -12,7 +12,7 @@ class DatasetLoader:
     """Dataset loader for training and testing datasets"""
 
     dataset_path: str
-    dataset_type: Literal["sft", "dpo"]
+    dataset_type: Literal["sft", "dpo", "vlm_sft"]
     limit: Optional[int] = None  # Default: all samples
     split: str = "train"  # Default: "train"
     test_size: float = 0.2  # Default: 80/20 split

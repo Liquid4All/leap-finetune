@@ -106,7 +106,7 @@ def ray_trainer(job_config: dict) -> None:
         "[bold green]Training complete![/bold green]\n\n"
         f"[bold]Checkpoint directory:[/bold] [cyan]{output_dir}[/cyan]\n\n"
         "Bundle your output checkpoint with [bold]leap-bundle[/bold] to use it in LEAP:\n"
-        f"[dim]leap-bundle create {output_dir}[/dim]\n\n"
+        f"[dim]leap-bundle create {output_dir}/[CHECKPOINT_NAME][/dim]\n\n"
         f"Quick Start: [link={quick_start_url}]{quick_start_url}[/link]"
     )
 

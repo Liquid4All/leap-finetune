@@ -65,6 +65,7 @@ user_config = {
     "per_device_train_batch_size": None,
     "gradient_accumulation_steps": None,
     "learning_rate": None,
+    "wandb_logging": False, # If set to True, set your wandb API key via 'export WANDB_API_KEY=<your_api_key>'
 }
 
 

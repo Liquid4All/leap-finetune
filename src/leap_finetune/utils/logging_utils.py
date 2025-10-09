@@ -20,25 +20,14 @@ def setup_training_environment() -> None:
     os.environ.setdefault("DEEPSPEED_LOG_LEVEL", "ERROR")
     warnings.filterwarnings("ignore")  # keep only tracebacks
 
-    pid = os.getpid()
-    existing_base = os.environ.get("TRITON_CACHE_DIR")
+    # Use a writable cache directory to avoid permission errors
+    cache = "/tmp/triton_cache"
+    os.makedirs(cache, exist_ok=True)
+    os.environ["TRITON_CACHE_DIR"] = cache
 
-    if existing_base:
-        cache_dir = f"{existing_base}_{pid}"
-    else:
-        default_base = "/dev/shm"
-        cache_dir = os.path.join(default_base, f"triton_cache_{pid}")
-
-    try:
-        os.makedirs(cache_dir, exist_ok=True)
-    except (OSError, PermissionError):
-        fallback_base = tempfile.gettempdir()
-        cache_dir = os.path.join(fallback_base, f"triton_cache_{pid}")
-        os.makedirs(cache_dir, exist_ok=True)
-
-    os.environ["TRITON_CACHE_DIR"] = cache_dir
-    # DeepSpeed also respects DS_TRITON_CACHE_DIR. Set both for completeness.
-    os.environ["DS_TRITON_CACHE_DIR"] = cache_dir
+    # Disable DeepSpeed Triton autotune to prevent /dev/shm permission errors
+    os.environ.setdefault("DS_TRITON_AUTOTUNE", "0")
+    os.environ.setdefault("TRITON_DISABLE_AUTOTUNE", "1")
 
     try:
         import deepspeed

@@ -54,7 +54,21 @@ It uses Ray Train + Accelerate for distributed training.
 
 Unless you overwrote `output_dir`, results will be stored in `outputs/training_type/job_name/`
 
-### 3. Bundle Checkpoint for LEAP
+### 3. (Optional) Weights & Biases logging
+
+To enable W&B experiment tracking:
+
+- Set `wandb_logging=True` in `config.py` in your `user_config` overrides or default configs.
+- Export your API key (recommended) or run offline by default if no key is set.
+
+```bash
+export WANDB_API_KEY=your_key   # optional; if missing, logging runs offline
+export WANDB_PROJECT=leap-finetune  # optional; default is `leap-finetune`
+```
+
+Runs are named after your `job_name` and metrics are reported via TRL/Transformers to W&B.
+
+### 4. Bundle Checkpoint for LEAP
 
 When training is done, you can bundle your output checkpoint with `leap-bundle` to use it directly within LEAP. Checkout our [Quick Start guide](https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github&utm_medium=link&utm_campaign=LEAP&utm_content=general).
 

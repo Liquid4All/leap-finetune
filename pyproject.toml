@@ -19,6 +19,7 @@ dependencies = [
     "pillow>=11.3.0",
     "mpi4py>=4.1.0",
     "liger-kernel>=0.6.2",
+    "wandb>=0.22.2",
 ]
 
 [project.scripts]

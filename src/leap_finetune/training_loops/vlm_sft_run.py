@@ -1,12 +1,13 @@
 import copy
-import os
 
 from trl import SFTConfig, SFTTrainer
 from ray.train.huggingface.transformers import prepare_trainer
+from ray.train import get_context
 
 from leap_finetune.data_loaders.image_loader import load_image
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
+from leap_finetune.utils.logging_utils import configure_wandb_logging
 
 
 def create_collate_fn(processor):
@@ -63,21 +64,21 @@ def vlm_sft_run(training_config: dict) -> None:
     train_dataset = [sample["messages"] for sample in train_dataset]
     test_dataset = [sample["messages"] for sample in eval_dataset]
 
+    excluded_keys = {"training_type", "wandb_logging"}
     train_config_filtered = {
         k: v
         for k, v in training_config.get("train_config").items()
-        if k != "training_type"
+        if k not in excluded_keys
     }
     # Configure W&B reporting if enabled via config
     job_name = training_config.get("job_name", "leap-ft-run")
-    wandb_logging = bool(training_config.get("train_config", {}).get("wandb_logging", False))
-    if wandb_logging:
-        if not os.environ.get("WANDB_API_KEY"):
-            os.environ.setdefault("WANDB_MODE", "offline")
-        os.environ.setdefault("WANDB_PROJECT", "leap-finetune")
+    wandb_logging = bool(
+        training_config.get("train_config", {}).get("wandb_logging", False)
+    )
+    configure_wandb_logging(wandb_logging)
 
     training_args = SFTConfig(
-        report_to=["wandb"] if wandb_logging else [],
+        report_to="wandb" if wandb_logging else "none",
         run_name=job_name,
         **train_config_filtered,
     )
@@ -108,7 +109,6 @@ def vlm_sft_run(training_config: dict) -> None:
         print("✅ Training completed successfully")
     except RuntimeError as e:
         error_msg = str(e)
-        # Safely handle hang errors that occur during cleanup -- training is still successful
         if any(
             keyword in error_msg.lower()
             for keyword in ["cuda error", "ecc error", "nccl", "collective", "timeout"]
@@ -124,4 +124,7 @@ def vlm_sft_run(training_config: dict) -> None:
 
     # Save PEFT model if applicable
     if peft_config:
-        merge_and_save_peft_model(model, processor, training_args.output_dir)
+        ctx = get_context()
+        is_rank_zero = ctx is None or ctx.get_world_rank() == 0
+        if is_rank_zero:
+            merge_and_save_peft_model(model, processor, training_args.output_dir)

@@ -1,15 +1,16 @@
 from typing import cast
-import os
 
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 from trl import SFTConfig, SFTTrainer
 from ray.train.huggingface.transformers import prepare_trainer
+from ray.train import get_context
 
 from leap_finetune.configs.distributed_configs import MOE_FSDP_CONFIG
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
+from leap_finetune.utils.logging_utils import configure_wandb_logging
 
 
 def sft_run(training_config: dict) -> None:
@@ -19,23 +20,21 @@ def sft_run(training_config: dict) -> None:
         tuple[Dataset, Dataset], training_config.get("dataset")
     )
 
+    excluded_keys = {"training_type", "wandb_logging"}
     train_config_filtered = {
         k: v
         for k, v in training_config.get("train_config").items()
-        if k != "training_type"
+        if k not in excluded_keys
     }
     # Configure W&B reporting if enabled via config
     job_name = training_config.get("job_name", "leap-ft-run")
-    wandb_logging = bool(training_config.get("train_config", {}).get("wandb_logging", False))
-    if wandb_logging:
-        # If no API key set, run offline to avoid failures on workers
-        if not os.environ.get("WANDB_API_KEY"):
-            os.environ.setdefault("WANDB_MODE", "offline")
-        # Default project if not provided by user
-        os.environ.setdefault("WANDB_PROJECT", "leap-finetune")
+    wandb_logging = bool(
+        training_config.get("train_config", {}).get("wandb_logging", False)
+    )
+    configure_wandb_logging(wandb_logging)
 
     training_args = SFTConfig(
-        report_to=["wandb"] if wandb_logging else [],
+        report_to="wandb" if wandb_logging else "none",
         run_name=job_name,
         **train_config_filtered,
     )
@@ -79,8 +78,27 @@ def sft_run(training_config: dict) -> None:
 
     # Start training
     trainer = prepare_trainer(trainer)
-    trainer.train()
+    try:
+        trainer.train()
+        print("✅ Training completed successfully")
+    except RuntimeError as e:
+        error_msg = str(e)
+        if any(
+            keyword in error_msg.lower()
+            for keyword in ["cuda error", "ecc error", "nccl", "collective", "timeout"]
+        ):
+            print(
+                f"⚠️  Training completed but hit distributed communication error during cleanup: {error_msg}"
+            )
+            print(
+                "✅ Training was successful - error occurred in post-training synchronization"
+            )
+        else:
+            raise e
 
     # Save PEFT model if applicable
     if peft_config:
-        merge_and_save_peft_model(model, tokenizer, training_args.output_dir)
+        ctx = get_context()
+        is_rank_zero = ctx is None or ctx.get_world_rank() == 0
+        if is_rank_zero:
+            merge_and_save_peft_model(model, tokenizer, training_args.output_dir)

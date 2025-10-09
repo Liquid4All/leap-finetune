@@ -1,4 +1,5 @@
 from typing import cast
+import os
 
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
@@ -18,7 +19,26 @@ def sft_run(training_config: dict) -> None:
         tuple[Dataset, Dataset], training_config.get("dataset")
     )
 
-    train_config = training_config.get("train_config")
+    train_config_filtered = {
+        k: v
+        for k, v in training_config.get("train_config").items()
+        if k != "training_type"
+    }
+    # Configure W&B reporting if enabled via config
+    job_name = training_config.get("job_name", "leap-ft-run")
+    wandb_logging = bool(training_config.get("train_config", {}).get("wandb_logging", False))
+    if wandb_logging:
+        # If no API key set, run offline to avoid failures on workers
+        if not os.environ.get("WANDB_API_KEY"):
+            os.environ.setdefault("WANDB_MODE", "offline")
+        # Default project if not provided by user
+        os.environ.setdefault("WANDB_PROJECT", "leap-finetune")
+
+    training_args = SFTConfig(
+        report_to=["wandb"] if wandb_logging else [],
+        run_name=job_name,
+        **train_config_filtered,
+    )
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
 

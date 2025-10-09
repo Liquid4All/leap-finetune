@@ -1,4 +1,5 @@
 import copy
+import os
 
 from trl import SFTConfig, SFTTrainer
 from ray.train.huggingface.transformers import prepare_trainer
@@ -67,7 +68,19 @@ def vlm_sft_run(training_config: dict) -> None:
         for k, v in training_config.get("train_config").items()
         if k != "training_type"
     }
-    training_args = SFTConfig(**train_config_filtered)
+    # Configure W&B reporting if enabled via config
+    job_name = training_config.get("job_name", "leap-ft-run")
+    wandb_logging = bool(training_config.get("train_config", {}).get("wandb_logging", False))
+    if wandb_logging:
+        if not os.environ.get("WANDB_API_KEY"):
+            os.environ.setdefault("WANDB_MODE", "offline")
+        os.environ.setdefault("WANDB_PROJECT", "leap-finetune")
+
+    training_args = SFTConfig(
+        report_to=["wandb"] if wandb_logging else [],
+        run_name=job_name,
+        **train_config_filtered,
+    )
 
     model, processor = load_vlm_model(training_config.get("model_name"))
 

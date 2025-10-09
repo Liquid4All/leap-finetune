@@ -72,6 +72,7 @@ def ray_trainer(job_config: dict) -> None:
 
     train_loop_config = {
         "model_name": job_config["model_name"],
+        "job_name": job_config.get("job_name", "leap-ft-run"),
         "train_config": job_config["training_config"],
         "peft_config": job_config["peft_config"],
         "dataset": job_config["dataset"],

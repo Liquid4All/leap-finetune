@@ -2,6 +2,10 @@ from leap_finetune.configs import PeftConfig, TrainingConfig
 from leap_finetune.configs.job_config import JobConfig
 from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 
+# i.e., for WANDB vars
+from dotenv import load_dotenv
+
+load_dotenv()
 
 #################################
 #         Dataset Loader       #
@@ -84,7 +88,7 @@ Args:
 JOB_CONFIG = JobConfig(
     job_name="my_job_name",
     model_name="LFM2-1.2B",
-    training_type="sft",
+    training_type="sft_weave",
     dataset=example_sft_dataset,
     training_config=training_config,
     peft_config=peft_config,

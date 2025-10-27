@@ -1,9 +1,7 @@
 import ray
 import os
 
-from accelerate.utils import set_seed
 from ray.train import RunConfig, ScalingConfig
-from ray.runtime_env import RuntimeEnv
 from ray.train.torch import TorchTrainer, TorchConfig
 from rich.console import Console
 from rich.panel import Panel
@@ -13,6 +11,7 @@ from leap_finetune.utils.constants import RUNTIME_DIR
 from leap_finetune.training_loops.sft_run import sft_run
 from leap_finetune.training_loops.dpo_run import dpo_run
 from leap_finetune.training_loops.vlm_sft_run import vlm_sft_run
+from leap_finetune.training_loops.sft_weave_run import sft_weave_run
 
 
 #################################
@@ -28,6 +27,8 @@ def ray_trainer(job_config: dict) -> None:
     training_type = job_config["training_type"]
     output_dir = job_config["training_config"]["output_dir"]
 
+    from accelerate.utils import set_seed
+
     set_seed(42)
     num_gpus = cuda.device_count()
 
@@ -35,6 +36,8 @@ def ray_trainer(job_config: dict) -> None:
         raise ValueError("No GPU available for training")
 
     if not ray.is_initialized():
+        from ray.runtime_env import RuntimeEnv
+
         ray_temp_dir = os.path.expanduser("~/ray_temp")
         os.makedirs(ray_temp_dir, exist_ok=True)
         ray.init(
@@ -54,13 +57,17 @@ def ray_trainer(job_config: dict) -> None:
                     # Suppress Ray Data verbose logging
                     "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
                     "RAY_IGNORE_UNHANDLED_ERRORS": "1",
+                    "LD_LIBRARY_PATH": os.getenv("LD_LIBRARY_PATH", ""),
                 },
             ),
             _temp_dir=ray_temp_dir,
+            num_gpus=num_gpus,
         )
 
     if training_type == "sft":
         train_loop = sft_run
+    elif training_type == "sft_weave":
+        train_loop = sft_weave_run
     elif training_type == "dpo":
         train_loop = dpo_run
     elif training_type == "vlm_sft":

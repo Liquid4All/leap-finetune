@@ -15,16 +15,16 @@ DEEPSEED_CONFIG = {
     "train_micro_batch_size_per_gpu": "auto",
     "gradient_clipping": "auto",
     "gradient_accumulation_steps": "auto",
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": "auto",  # Uses learning_rate from training config
-            "betas": "auto",  # DEFAULT: (0.9, 0.999)
-            "eps": "auto",  # DEFAULT: 1e-8
-            "weight_decay": "auto",  # DEFAULT: 0.01
-        },
-    },
-    "bf16": {"enabled": "auto"},
+    # "optimizer": {
+    #     "type": "AdamW",
+    #     "params": {
+    #         "lr": "auto",  # Uses learning_rate from training config
+    #         "betas": "auto",  # DEFAULT: (0.9, 0.999)
+    #         "eps": "auto",  # DEFAULT: 1e-8
+    #         "weight_decay": "auto",  # DEFAULT: 0.01
+    #     },
+    # },
+    "bf16": {"enabled": True},
     "activation_checkpointing": {
         "partition_activations": False,
         "cpu_checkpointing": False,
@@ -53,7 +53,15 @@ DEFAULT_SFT_CONFIG = {
     "logging_steps": 10,
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
+    "save_steps": 500,  # Add explicit save_steps
+    "save_total_limit": 2,  # Limit number of checkpoints
     "load_best_model_at_end": True,
     "ddp_find_unused_parameters": False,
+    # Optimizer configuration (matches what was in DeepSpeed config)
+    "optim": "adamw_torch_fused",  # AdamW optimizer
+    "weight_decay": 0.0,  # Was "auto" in DeepSpeed (default: 0.01), but logs showed 0.0
+    "adam_beta1": 0.9,  # Was "auto" in DeepSpeed (default: 0.9)
+    "adam_beta2": 0.999,  # Was "auto" in DeepSpeed (default: 0.999)
+    "adam_epsilon": 1e-8,  # Was "auto" in DeepSpeed (default: 1e-8)
     "deepspeed": DEEPSEED_CONFIG,
 }

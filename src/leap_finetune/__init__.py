@@ -1,11 +1,43 @@
 import sys
 
-from leap_finetune.utils.logging_utils import setup_training_environment
-
-setup_training_environment()
 
 from leap_finetune.trainer import ray_trainer  # noqa
 from leap_finetune.utils.constants import LEAP_FINETUNE_DIR  # noqa
+
+
+# Export new W&B and Weave integration modules
+from leap_finetune.models import UnslothLoRALFM2  # noqa
+from leap_finetune.callbacks import (  # noqa
+    conversation_scorer,
+    conversation_improvement_scorer,
+    response_length_scorer,
+    coherence_scorer,
+    diversity_scorer,
+)
+from leap_finetune.utils.weave_trainer_utils import (  # noqa
+    get_trainer_with_evaluation_callback,
+    create_sft_config_with_weave_eval,
+    DEFAULT_SCORERS,
+)
+from leap_finetune.data_loaders import (  # noqa
+    preprocess_dataset_for_weave_evaluation,
+    preprocess_dataset_for_weave_evaluation_list,
+)
+
+__all__ = [
+    "ray_trainer",
+    "UnslothLoRALFM2",
+    "conversation_scorer",
+    "conversation_improvement_scorer",
+    "response_length_scorer",
+    "coherence_scorer",
+    "diversity_scorer",
+    "get_trainer_with_evaluation_callback",
+    "create_sft_config_with_weave_eval",
+    "DEFAULT_SCORERS",
+    "preprocess_dataset_for_weave_evaluation",
+    "preprocess_dataset_for_weave_evaluation_list",
+]
 
 
 def main() -> None:

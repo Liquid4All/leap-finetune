@@ -24,7 +24,7 @@ class JobConfig:
 
     job_name: str
     model_name: str = "LFM2-1.2B"
-    training_type: Literal["sft", "dpo", "vlm_sft"] = "sft"
+    training_type: Literal["sft", "dpo", "vlm_sft", "sft_weave"] = "sft"
     dataset: DatasetLoader | tuple[Dataset, Dataset] | None = None
     training_config: TrainingConfig = TrainingConfig.DEFAULT_SFT
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
@@ -60,10 +60,15 @@ class JobConfig:
 
         if isinstance(config_value, dict):
             config_training_type = config_value.get("training_type")
-            if config_training_type and config_training_type != self.training_type:
-                raise ValueError(
-                    f"Training config type '{config_training_type}' doesn't match job training type '{self.training_type}'"
-                )
+            if config_training_type:
+                # Allow variant training types (e.g., "sft_weave") to match base types (e.g., "sft")
+                job_base_type = self.training_type.split("_")[0]
+                config_base_type = config_training_type.split("_")[0]
+
+                if config_base_type != job_base_type:
+                    raise ValueError(
+                        f"Training config type '{config_training_type}' doesn't match job training type '{self.training_type}'"
+                    )
 
     def to_dict(self, dataset: tuple[Dataset, Dataset] | None = None) -> dict[str, Any]:
         """Convert to final ft_job_config dict"""

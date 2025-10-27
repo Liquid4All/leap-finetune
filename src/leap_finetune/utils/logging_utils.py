@@ -1,5 +1,4 @@
 import os
-import warnings
 import logging
 
 _ENV_DONE = False
@@ -11,8 +10,8 @@ def setup_training_environment() -> None:
         return
 
     os.environ.setdefault("DS_DISABLE_CONFIG_PRINT", "1")
-    os.environ.setdefault("DEEPSPEED_LOG_LEVEL", "ERROR")
-    warnings.filterwarnings("ignore")  # keep only tracebacks
+    os.environ.setdefault("DEEPSPEED_LOG_LEVEL", "DEBUG")
+    # warnings.filterwarnings("ignore")  # keep only tracebacks
 
     cache = "/dev/shm"
     try:

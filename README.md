@@ -2,6 +2,8 @@
 
 A minimal fine-tuning repo for LFM2, fully built on Open Source.
 
+**✨ New: Enhanced W&B and Weave Integration** - Now includes periodic evaluation, Weave tracing, and full observability during training! See [WEAVE_INTEGRATION.md](./WEAVE_INTEGRATION.md) for details.
+
 > **⚠️ Important**
 >
 > - **Hardware:** We tested this tool on H100 80GB GPU. Multi-GPU parallelization has been tested up to 8 such GPUs.
@@ -54,7 +56,27 @@ It uses Ray Train + Accelerate for distributed training.
 
 Unless you overwrote `output_dir`, results will be stored in `outputs/training_type/job_name/`
 
-### 3. Bundle Checkpoint for LEAP
+### 3. Training Types
+
+leap-finetune supports multiple training types:
+
+- **`sft`**: Standard Supervised Fine-Tuning
+- **`weave_sft`**: Enhanced SFT with W&B and Weave integration for periodic evaluation and full observability ✨ NEW
+- **`dpo`**: Direct Preference Optimization
+- **`vlm_sft`**: Vision-Language Model Fine-Tuning
+
+Set the training type in your `config.py`:
+
+```python
+JOB_CONFIG = JobConfig(
+    training_type="weave_sft",  # or "sft", "dpo", "vlm_sft"
+    # ... other config
+)
+```
+
+For more details on the enhanced `weave_sft` training, see [WEAVE_INTEGRATION.md](./WEAVE_INTEGRATION.md).
+
+### 4. Bundle Checkpoint for LEAP
 
 When training is done, you can bundle your output checkpoint with `leap-bundle` to use it directly within LEAP. Checkout our [Quick Start guide](https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github&utm_medium=link&utm_campaign=LEAP&utm_content=general).
 

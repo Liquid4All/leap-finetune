@@ -7,7 +7,7 @@ from ray.train import get_context
 from leap_finetune.data_loaders.image_loader import load_image
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
-from leap_finetune.utils.logging_utils import configure_wandb_logging
+from leap_finetune.utils.logging_utils import init_wandb_if_enabled
 
 
 def create_collate_fn(processor):
@@ -70,12 +70,14 @@ def vlm_sft_run(training_config: dict) -> None:
         for k, v in training_config.get("train_config").items()
         if k not in excluded_keys
     }
-    # Configure W&B reporting if enabled via config
+    # Configure wandb reporting if enabled via config
     job_name = training_config.get("job_name", "leap-ft-run")
     wandb_logging = bool(
         training_config.get("train_config", {}).get("wandb_logging", False)
     )
-    configure_wandb_logging(wandb_logging)
+
+    # Initialize wandb with project and run name if logging is enabled
+    init_wandb_if_enabled(job_name, wandb_logging)
 
     training_args = SFTConfig(
         report_to="wandb" if wandb_logging else "none",

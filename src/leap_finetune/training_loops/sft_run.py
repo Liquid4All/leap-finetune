@@ -10,7 +10,7 @@ from leap_finetune.configs.distributed_configs import MOE_FSDP_CONFIG
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
-from leap_finetune.utils.logging_utils import configure_wandb_logging
+from leap_finetune.utils.logging_utils import init_wandb_if_enabled
 
 
 def sft_run(training_config: dict) -> None:
@@ -26,12 +26,14 @@ def sft_run(training_config: dict) -> None:
         for k, v in training_config.get("train_config").items()
         if k not in excluded_keys
     }
-    # Configure W&B reporting if enabled via config
+    # Configure wandb reporting if enabled via config
     job_name = training_config.get("job_name", "leap-ft-run")
     wandb_logging = bool(
         training_config.get("train_config", {}).get("wandb_logging", False)
     )
-    configure_wandb_logging(wandb_logging)
+
+    # Initialize wandb with project and run name if logging is enabled
+    init_wandb_if_enabled(job_name, wandb_logging)
 
     training_args = SFTConfig(
         report_to="wandb" if wandb_logging else "none",

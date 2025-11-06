@@ -54,19 +54,30 @@ It uses Ray Train + Accelerate for distributed training.
 
 Unless you overwrote `output_dir`, results will be stored in `outputs/training_type/job_name/`
 
-### 3. (Optional) Weights & Biases logging
+### 3. (Optional) Experiment Tracking with Weights & Biases
 
-To enable W&B experiment tracking:
+To enable experiment tracking (using [Weights & Biases](https://wandb.ai)):
 
 - Set `wandb_logging=True` in `config.py` in your `user_config` overrides or default configs.
-- Export your API key (recommended) or run offline by default if no key is set.
+- **Offline mode (default)**: If no `WANDB_API_KEY` is set, wandb logs locally to `./wandb/` directory. No API key needed!
+- **Online mode**: Set the `WANDB_API_KEY` environment variable to sync to wandb.ai dashboard:
 
 ```bash
-export WANDB_API_KEY=your_key   # optional; if missing, logging runs offline
-export WANDB_PROJECT=leap-finetune  # optional; default is `leap-finetune`
+export WANDB_API_KEY=your_api_key  # optional; for online syncing to wandb.ai
 ```
 
-Runs are named after your `job_name` and metrics are reported via TRL/Transformers to W&B.
+You can also customize the project name (defaults to `"leap-finetune"`):
+
+```bash
+export WANDB_PROJECT=my-custom-project  # optional; defaults to "leap-finetune"
+```
+
+After training, view your metrics:
+
+- **Online mode**: View at `https://wandb.ai/<your-entity>/<project-name>/runs/<run-name>`
+- **Offline mode**: Sync later with `wandb sync ./wandb/offline-run-*` or view locally
+
+Runs are named after your `job_name` and metrics are reported via TRL/Transformers. Training metrics (loss, learning rate, etc.) are logged every `logging_steps` (default: 10), and evaluation metrics are logged at the end of each epoch.
 
 ### 4. Bundle Checkpoint for LEAP
 

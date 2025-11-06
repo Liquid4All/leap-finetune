@@ -1,5 +1,6 @@
 import ray
 import os
+import logging
 
 from accelerate.utils import set_seed
 from ray.train import RunConfig, ScalingConfig
@@ -48,6 +49,10 @@ def ray_trainer(job_config: dict) -> None:
 
         ray_temp_dir = select_ray_temp_dir(os.path.expanduser("~/ray_temp"))
         spill_dir = select_object_spilling_dir(ray_temp_dir)
+
+        # Reduce Ray logging verbosity
+        ray_logger = logging.getLogger("ray")
+        ray_logger.setLevel(logging.ERROR)  # Only show errors, not INFO/WARNING
 
         runtime_env = RuntimeEnv(
             working_dir=str(RUNTIME_DIR),

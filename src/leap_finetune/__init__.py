@@ -1,12 +1,8 @@
-import os
 import sys
 
 from leap_finetune.utils.logging_utils import setup_training_environment
 
 setup_training_environment()
-
-if "WANDB_API_KEY" not in os.environ and "WANDB_MODE" not in os.environ:
-    os.environ["WANDB_MODE"] = "offline"
 
 from leap_finetune.trainer import ray_trainer  # noqa
 from leap_finetune.utils.constants import LEAP_FINETUNE_DIR  # noqa

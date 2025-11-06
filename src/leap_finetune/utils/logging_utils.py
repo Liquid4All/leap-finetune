@@ -11,6 +11,44 @@ import shutil
 _ENV_DONE = False
 
 
+def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
+    """Initialize wandb with project and run name if logging is enabled.
+
+    This must be called BEFORE creating the trainer to ensure training metrics are logged.
+
+    Args:
+        job_name: Name for the wandb run (defaults to job_name from config)
+        wandb_logging: Whether wandb logging is enabled
+    """
+    if not wandb_logging:
+        return
+
+    try:
+        from ray.train import get_context
+        import wandb
+
+        ctx = get_context()
+        is_rank_zero = ctx is None or ctx.get_world_rank() == 0
+
+        if is_rank_zero:
+            project = os.environ.get("WANDB_PROJECT", "leap-finetune")
+
+            wandb.init(
+                project=project,
+                name=job_name,
+                resume="allow",  # Allow resuming if run exists (replaces deprecated reinit=True)
+                settings=wandb.Settings(
+                    _disable_stats=False,  # Enable stats collection
+                ),
+            )
+    except ImportError:
+        pass
+    except Exception as e:
+        import warnings
+
+        warnings.warn(f"Failed to initialize wandb: {e}", UserWarning)
+
+
 def setup_training_environment() -> None:
     global _ENV_DONE
     if _ENV_DONE:
@@ -20,8 +58,12 @@ def setup_training_environment() -> None:
     os.environ.setdefault("DEEPSPEED_LOG_LEVEL", "ERROR")
     warnings.filterwarnings("ignore")  # keep only tracebacks
 
-    # Use a writable cache directory to avoid permission errors
-    cache = "/tmp/triton_cache"
+    if "WANDB_API_KEY" not in os.environ and "WANDB_MODE" not in os.environ:
+        os.environ["WANDB_MODE"] = "offline"
+
+    # Use per-process cache directories to avoid permission errors with multiple Ray workers
+    pid = os.getpid()
+    cache = f"/tmp/triton_cache_{pid}"
     os.makedirs(cache, exist_ok=True)
     os.environ["TRITON_CACHE_DIR"] = cache
 
@@ -48,6 +90,24 @@ def setup_training_environment() -> None:
 
         BF16_Optimizer.destroy = _safe_ds_destroy
 
+        # Suppress Triton matmul autotune atexit callback errors
+
+        try:
+            from deepspeed.ops.transformer.inference.triton import matmul_ext
+
+            _orig_update = getattr(matmul_ext, "matmul_ext_update_autotune_table", None)
+            if _orig_update:
+
+                def _safe_update_autotune():
+                    try:
+                        _orig_update()
+                    except (PermissionError, OSError, FileNotFoundError):
+                        pass
+
+                matmul_ext.matmul_ext_update_autotune_table = _safe_update_autotune
+        except (ImportError, AttributeError):
+            pass
+
     except ImportError:
         print("Deepspeed not available in environment; nothing to patch")
 
@@ -55,16 +115,9 @@ def setup_training_environment() -> None:
     _ENV_DONE = True
 
 
-def configure_wandb_logging(wandb_logging: bool) -> None:
-    if wandb_logging:
-        if not os.environ.get("WANDB_API_KEY"):
-            os.environ.setdefault("WANDB_MODE", "offline")
-        os.environ.setdefault("WANDB_PROJECT", "leap-finetune")
-
-
 def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
     """Environment variables passed to ray.init runtime_env.env_vars"""
-    return {
+    env_vars = {
         "TMPDIR": ray_temp_dir,
         "TEMP": ray_temp_dir,
         "TMP": ray_temp_dir,
@@ -77,7 +130,24 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "RAY_memory_monitor_refresh_ms": "0",
         "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
         "RAY_IGNORE_UNHANDLED_ERRORS": "1",
+        # Reduce Ray logging verbosity
+        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver (reduce terminal noise)
+        "RAY_DEDUP_LOGS": "1",  # Keep deduplication enabled (shows ... for repeated messages)
     }
+
+    wandb_api_key = os.environ.get("WANDB_API_KEY")
+    wandb_mode = os.environ.get("WANDB_MODE")
+
+    if wandb_api_key:
+        env_vars["WANDB_API_KEY"] = wandb_api_key
+        if wandb_mode:
+            env_vars["WANDB_MODE"] = wandb_mode
+        # If mode not set but API key is, defaults to online (wandb default)
+    else:
+        # No API key - default to offline mode to avoid login prompts
+        env_vars["WANDB_MODE"] = wandb_mode if wandb_mode else "offline"
+
+    return env_vars
 
 
 def print_next_steps_panel(output_dir: str) -> None:

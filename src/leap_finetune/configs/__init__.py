@@ -1,9 +1,11 @@
 from enum import Enum
 from .dpo_configs import (
     DEFAULT_DPO_CONFIG,
+    MOE_DPO_CONFIG,
 )
 from .sft_configs import (
     DEFAULT_SFT_CONFIG,
+    MOE_SFT_CONFIG,
 )
 from .vlm_sft_config import (
     DEFAULT_VLM_SFT_CONFIG,
@@ -12,6 +14,8 @@ from .peft_configs import (
     LFM2_LORA_DEFAULT_CONFIG,
     LFM2_LORA_HIGH_R_CONFIG,
     LFM2_VLM_LORA_CONFIG,
+    LFM2_MOE_LORA_CONFIG,
+    LFM2_MOE_LORA_HIGH_R_CONFIG,
 )
 
 
@@ -19,6 +23,8 @@ class TrainingConfig(Enum):
     DEFAULT_SFT = DEFAULT_SFT_CONFIG
     DEFAULT_DPO = DEFAULT_DPO_CONFIG
     DEFAULT_VLM_SFT = DEFAULT_VLM_SFT_CONFIG
+    MOE_SFT = MOE_SFT_CONFIG
+    MOE_DPO = MOE_DPO_CONFIG
 
     def override(self, **overrides):
         """Create a custom TrainingConfig with overrides"""
@@ -38,3 +44,5 @@ class PeftConfig(Enum):
     DEFAULT_LORA = LFM2_LORA_DEFAULT_CONFIG
     HIGH_R_LORA = LFM2_LORA_HIGH_R_CONFIG
     DEFAULT_VLM_LORA = LFM2_VLM_LORA_CONFIG
+    MOE_LORA = LFM2_MOE_LORA_CONFIG
+    MOE_LORA_HIGH_R = LFM2_MOE_LORA_HIGH_R_CONFIG

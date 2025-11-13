@@ -37,3 +37,28 @@ LFM2_VLM_LORA_CONFIG = LoraConfig(
     bias="none",
     target_modules=LFM_MODULES + VISION_TOWER_MODULES + MULTI_MODAL_PROJECTOR_MODULES,
 )
+
+
+########################
+#     MOE CONFIGS      #
+########################
+
+LFM2_MOE_LORA_CONFIG = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    inference_mode=False,
+    r=8,
+    lora_alpha=16,
+    lora_dropout=0.1,
+    bias="none",
+    target_modules="all-linear",  # Target all linear layers in MoE architecture
+)
+
+LFM2_MOE_LORA_HIGH_R_CONFIG = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    inference_mode=False,
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.1,
+    bias="none",
+    target_modules="all-linear",  # Target all linear layers in MoE architecture
+)

@@ -24,6 +24,8 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
         model = AutoModelForCausalLM.from_pretrained(
             model_name, torch_dtype=torch.bfloat16
         )
+        # Disable use_cache for training compatibility (gradient checkpointing requires this)
+        model.config.use_cache = False
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -35,6 +37,8 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
         model = AutoModelForCausalLM.from_pretrained(
             model_id, torch_dtype=torch.bfloat16
         )
+        # Disable use_cache for training compatibility (gradient checkpointing requires this)
+        model.config.use_cache = False
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 

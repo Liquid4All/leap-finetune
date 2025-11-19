@@ -38,14 +38,8 @@ DEEPSPEED_CONFIG = {
 
 MOE_DEEPSPEED_CONFIG = {
     "zero_optimization": {
-        "stage": 2,
+        "stage": 0,
         "overlap_comm": True,
-        "contiguous_gradients": True,
-        "allgather_partitions": True,
-        "reduce_scatter": True,
-        "allgather_bucket_size": 50000000,
-        "reduce_bucket_size": 50000000,
-        "round_robin_gradients": False,
     },
     "train_batch_size": "auto",
     "train_micro_batch_size_per_gpu": "auto",
@@ -69,9 +63,6 @@ MOE_DEEPSPEED_CONFIG = {
         "synchronize_checkpoint_boundary": False,
         "profile": False,
     },
-    # Ray Train + TRL compatibility settings
-    "wall_clock_breakdown": False,
-    "steps_per_print": 10,
 }
 
 
@@ -105,9 +96,8 @@ DEFAULT_SFT_CONFIG = {
 MOE_SFT_CONFIG = {
     "training_type": "sft",
     "output_dir": SFT_OUTPUT_PATH,
-    "num_train_epochs": 1,  # MoE models typically need fewer epochs
-    "per_device_train_batch_size": 1,  # MoE models are larger, use smaller batch size
-    "per_device_eval_batch_size": 1,
+    "num_train_epochs": 2,  # MoE models typically need fewer epochs
+    "per_device_train_batch_size": 2,  # MoE models are larger, use smaller batch size
     "learning_rate": 5e-5,
     "lr_scheduler_type": "linear",
     "warmup_steps": 100,
@@ -116,5 +106,5 @@ MOE_SFT_CONFIG = {
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "load_best_model_at_end": True,
-    "deepspeed": MOE_DEEPSPEED_CONFIG,
+    "deepspeed": MOE_DEEPSPEED_CONFIG,  # DeepSpeed ZeRO Stage 0
 }

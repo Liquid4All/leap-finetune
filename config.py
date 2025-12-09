@@ -63,6 +63,7 @@ user_config = {
     "output_dir": None,
     "num_train_epochs": None,
     "per_device_train_batch_size": None,
+    "gradient_accumulation_steps": None,
     "learning_rate": None,
 }
 
@@ -85,9 +86,9 @@ Args:
 
 JOB_CONFIG = JobConfig(
     job_name="my_job_name",
-    model_name="LFM2-1.2B",
+    model_name="LFM2-8B-A1B",
     training_type="sft",
     dataset=example_sft_dataset,
-    training_config=TrainingConfig.SFT.override(**user_config),
-    peft_config=PeftConfig.DEFAULT_LORA,
+    training_config=TrainingConfig.MOE_SFT.override(**user_config),
+    peft_config=PeftConfig.NO_LORA,
 )

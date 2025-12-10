@@ -21,9 +21,7 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
         # Load from local path (for checkpoints)
         print(f"Loading model from local path: {model_name}")
 
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=torch.bfloat16
-        )
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
         # Disable use_cache for training compatibility (gradient checkpointing requires this)
         model.config.use_cache = False
 
@@ -34,9 +32,7 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
         model_id = f"LiquidAI/{model_name}"
         print(f"Loading model from Hub: {model_id}")
 
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.bfloat16
-        )
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16)
         # Disable use_cache for training compatibility (gradient checkpointing requires this)
         model.config.use_cache = False
 
@@ -63,7 +59,7 @@ def load_vlm_model(
 
         model = AutoModelForImageTextToText.from_pretrained(
             model_path,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             trust_remote_code=True,
         )
 
@@ -80,7 +76,7 @@ def load_vlm_model(
 
         model = AutoModelForImageTextToText.from_pretrained(
             model_id,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             trust_remote_code=True,
         )
 

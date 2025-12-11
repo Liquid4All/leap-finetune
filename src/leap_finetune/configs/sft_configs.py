@@ -90,29 +90,16 @@ DEFAULT_SFT_CONFIG = {
 
 
 ########################
-#     FSDP CONFIGS     #
-########################
-
-FSDP_CONFIG = {
-    "fsdp": ["shard_grad_op", "auto_wrap"],
-    "fsdp_config": {
-        "transformer_layer_cls_to_wrap": "transformers.models.lfm2_moe.modeling_lfm2_moe.Lfm2MoeDecoderLayer",
-        "backward_prefetch": "backward_pre",
-        "sync_module_states": True,
-        "use_orig_params": False,
-    },
-}
-
-
-########################
 #   MOE SFT CONFIGS    #
 ########################
 
+# Base MoE SFT config - distributed strategy is applied automatically in runner
+# based on PEFT presence: DeepSpeed for LoRA, FSDP for full fine-tuning
 MOE_SFT_CONFIG = {
     "training_type": "sft",
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 2,  # MoE models typically need fewer epochs
-    "per_device_train_batch_size": 1,  # Reduced to save memory
+    "per_device_train_batch_size": 2,  # Reduced to save memory
     "gradient_accumulation_steps": 1,  # Set to 1 to match Accelerate config for testing
     "learning_rate": 5e-5,
     "lr_scheduler_type": "linear",
@@ -123,25 +110,9 @@ MOE_SFT_CONFIG = {
     "eval_strategy": "epoch",
     "load_best_model_at_end": True,
     "max_grad_norm": 1.0,
-    "deepspeed": MOE_DEEPSPEED_CONFIG,
-}
-
-
-MOE_SFT_NO_LORA_CONFIG = {
-    "training_type": "sft",
-    "output_dir": SFT_OUTPUT_PATH,
-    "num_train_epochs": 2,
-    "per_device_train_batch_size": 2,
-    "gradient_accumulation_steps": 1,
-    "learning_rate": 5e-5,
-    "lr_scheduler_type": "linear",
-    "warmup_steps": 100,
-    "warmup_ratio": 0.2,
-    "logging_steps": 10,
-    "save_strategy": "epoch",
-    "eval_strategy": "epoch",
-    "load_best_model_at_end": True,
-    "max_grad_norm": 1.0,
     "bf16": True,
-    **FSDP_CONFIG,
+    # Distributed strategy will be set automatically:
+    # - With PEFT: uses MOE_DEEPSPEED_CONFIG
+    # - Without PEFT: uses FSDP_CONFIG
+    "deepspeed": MOE_DEEPSPEED_CONFIG,
 }

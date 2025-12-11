@@ -73,24 +73,11 @@ DEFAULT_DPO_CONFIG = {
 
 
 ########################
-#     FSDP CONFIGS     #
-########################
-
-FSDP_CONFIG = {
-    "fsdp": "shard_grad_op auto_wrap",
-    "fsdp_config": {
-        "transformer_layer_cls_to_wrap": "transformers.models.lfm2_moe.modeling_lfm2_moe.Lfm2MoeDecoderLayer",
-        "backward_prefetch": "backward_pre",
-        "sync_module_states": True,
-        "use_orig_params": False,
-    },
-}
-
-
-########################
 #   MOE DPO CONFIGS    #
 ########################
 
+# Base MoE DPO config - distributed strategy is applied automatically in runner
+# based on PEFT presence: DeepSpeed for LoRA, FSDP for full fine-tuning
 MOE_DPO_CONFIG = {
     "training_type": "dpo",
     "output_dir": DPO_OUTPUT_PATH,
@@ -105,25 +92,10 @@ MOE_DPO_CONFIG = {
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "load_best_model_at_end": True,
-    "deepspeed": MOE_DEEPSPEED_CONFIG,
-}
-
-
-MOE_DPO_NO_LORA_CONFIG = {
-    "training_type": "dpo",
-    "output_dir": DPO_OUTPUT_PATH,
-    "num_train_epochs": 2,
-    "per_device_train_batch_size": 2,
-    "learning_rate": 1e-6,
-    "lr_scheduler_type": "linear",
-    "beta": 0.1,
-    "loss_type": "sigmoid",
-    "logging_steps": 10,
-    "logging_first_step": True,
-    "save_strategy": "epoch",
-    "eval_strategy": "epoch",
-    "load_best_model_at_end": True,
     "max_grad_norm": 1.0,
     "bf16": True,
-    **FSDP_CONFIG,
+    # Distributed strategy will be set automatically:
+    # - With PEFT: uses MOE_DEEPSPEED_CONFIG
+    # - Without PEFT: uses FSDP_CONFIG
+    "deepspeed": MOE_DEEPSPEED_CONFIG,
 }

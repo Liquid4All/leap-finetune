@@ -5,7 +5,9 @@ from transformers import PreTrainedTokenizerBase
 from trl import SFTConfig, SFTTrainer
 from ray.train.huggingface.transformers import prepare_trainer
 
+from leap_finetune.configs.distributed_configs import MOE_FSDP_CONFIG
 from leap_finetune.utils.load_models import load_model
+from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 
 
@@ -16,15 +18,32 @@ def sft_run(training_config: dict) -> None:
         tuple[Dataset, Dataset], training_config.get("dataset")
     )
 
-    train_config_filtered = {
-        k: v
-        for k, v in training_config.get("train_config").items()
-        if k != "training_type"
-    }
-    training_args = SFTConfig(**train_config_filtered)
+    train_config = training_config.get("train_config")
     peft_config = training_config.get("peft_config")
+    model_name = training_config.get("model_name", "")
 
-    model, tokenizer = load_model(training_config.get("model_name"))
+    # Check for MoE model
+    is_moe = is_moe_model_from_name(model_name)
+    use_fsdp = is_moe and peft_config is None
+
+    # Remove non-SFTConfig parameters
+    train_config.pop("training_type", None)
+
+    # Apply FSDP for MoE without PEFT
+    if use_fsdp:
+        train_config.pop("deepspeed", None)
+        fsdp_config = MOE_FSDP_CONFIG["fsdp_config"].copy()
+        training_args = SFTConfig(
+            **train_config,
+            fsdp=MOE_FSDP_CONFIG["fsdp"],
+            fsdp_config=fsdp_config,
+        )
+    else:
+        # MoE with PEFT or non-MoE: use DeepSpeed (already in config)
+        training_args = SFTConfig(**train_config)
+
+    # Load model after config is created
+    model, tokenizer = load_model(model_name)
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)

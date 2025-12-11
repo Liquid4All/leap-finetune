@@ -34,9 +34,10 @@ def ray_trainer(job_config: dict) -> None:
     if not cuda.is_available():
         raise ValueError("No GPU available for training")
 
+    ray_temp_dir = os.path.expanduser("~/ray_temp")
+    os.makedirs(ray_temp_dir, exist_ok=True)
+
     if not ray.is_initialized():
-        ray_temp_dir = os.path.expanduser("~/ray_temp")
-        os.makedirs(ray_temp_dir, exist_ok=True)
         ray.init(
             runtime_env=RuntimeEnv(
                 working_dir=str(RUNTIME_DIR),
@@ -45,6 +46,7 @@ def ray_trainer(job_config: dict) -> None:
                     "TEMP": ray_temp_dir,
                     "TMP": ray_temp_dir,
                     "NCCL_IB_DISABLE": "1",
+                    "NCCL_P2P_DISABLE": "1",  # Added to force CPU level communication during synchronization
                     "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
                     "NCCL_SOCKET_IFNAME": "lo",
                     "TORCH_NCCL_BLOCKING_WAIT": "1",

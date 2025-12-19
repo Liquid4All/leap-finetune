@@ -30,8 +30,9 @@ class JobConfig:
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
 
     def __post_init__(self):
-        if isinstance(self.dataset, DatasetLoader):
-            self.dataset = self.dataset.load()
+        # Note: quick_validate moved to create_ray_datasets for cleaner output grouping
+        # Dataset validation happens right before Ray data loading
+
         self.training_config.value["output_dir"] = str(
             Path(self.training_config.value.get("output_dir")) / self.job_name
         )
@@ -65,9 +66,8 @@ class JobConfig:
                     f"Training config type '{config_training_type}' doesn't match job training type '{self.training_type}'"
                 )
 
-    def to_dict(self, dataset: tuple[Dataset, Dataset] | None = None) -> dict[str, Any]:
-        """Convert to final ft_job_config dict"""
-
+    def to_dict(self, dataset=None) -> dict[str, Any]:
+        """Convert to config dict for ray_trainer."""
         dataset_to_use = dataset if dataset is not None else self.dataset
 
         return {
@@ -82,11 +82,8 @@ class JobConfig:
     def print_config_summary(self):
         """Print summary of current configuration"""
         console = Console()
-
-        # Calculate output directory
         output_dir = self.training_config.value.get("output_dir")
 
-        # Create a table for the configuration
         table = Table(show_header=False, box=None, padding=(0, 2))
         table.add_column("Property", style="bold cyan", min_width=15)
         table.add_column("Value", style="green")
@@ -95,16 +92,28 @@ class JobConfig:
         table.add_row("Job Name", self.job_name)
         table.add_row("Training Type", self.training_type.upper())
         table.add_row("Output Directory", str(output_dir))
-        table.add_row("PEFT", "✅ Enabled" if self.peft_config.value else "❌ Disabled")
-        table.add_row("Train Samples", f"{len(self.dataset[0]):,}")
-        table.add_row("Test Samples", f"{len(self.dataset[1]):,}")
+        table.add_row(
+            "PEFT",
+            "✅ Enabled"
+            if self.peft_config and self.peft_config.value
+            else "❌ Disabled",
+        )
 
-        # Wrap in a panel
+        # Dataset info - handle both DatasetLoader and tuple
+        if isinstance(self.dataset, DatasetLoader):
+            table.add_row("Dataset", self.dataset.dataset_path)
+            if self.dataset.limit:
+                table.add_row("Limit", f"{self.dataset.limit:,} samples")
+            table.add_row("Test Size", f"{self.dataset.test_size:.0%}")
+        # Legacy path: pre-loaded (Dataset, Dataset) tuple (deprecate eventually)
+        elif isinstance(self.dataset, tuple):
+            table.add_row("Train Samples", f"{len(self.dataset[0]):,}")
+            table.add_row("Test Samples", f"{len(self.dataset[1]):,}")
+
         panel = Panel(
             table,
             title="[bold blue]Training Configuration[/bold blue]",
             border_style="blue",
             padding=(1, 2),
         )
-
         console.print(panel)

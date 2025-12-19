@@ -108,7 +108,6 @@ class DatasetLoader:
         )
 
         # Stream batches and put into Ray object store
-        # Using .batch() is ~100x fewer Python iterations than item-by-item
         refs = []
         batch_size = 10000
         total_items = 0

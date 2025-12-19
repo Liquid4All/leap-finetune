@@ -30,9 +30,6 @@ class JobConfig:
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
 
     def __post_init__(self):
-        # Note: quick_validate moved to create_ray_datasets for cleaner output grouping
-        # Dataset validation happens right before Ray data loading
-
         self.training_config.value["output_dir"] = str(
             Path(self.training_config.value.get("output_dir")) / self.job_name
         )

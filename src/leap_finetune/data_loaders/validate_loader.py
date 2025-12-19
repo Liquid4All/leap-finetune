@@ -1,8 +1,251 @@
 import os
 from functools import wraps
-from typing import Any
-from datasets import Dataset
-from trl import extract_prompt
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from rich.console import Console
+import pandas as pd
+from datasets import Dataset, load_dataset
+
+
+# ============================================================================
+# QUICK VALIDATION (Pre-Ray, ~10 samples)
+# ============================================================================
+
+
+def _is_cloud_path(path: str) -> bool:
+    """Check if path is a cloud storage path (S3, GCS, Azure)."""
+    cloud_prefixes = ("s3://", "gs://", "az://", "abfs://", "abfss://")
+    return path.startswith(cloud_prefixes)
+
+
+def _get_source_type(dataset_path: str) -> str:
+    """Determine the source type for display and loading logic."""
+    path_lower = dataset_path.lower()
+
+    if _is_cloud_path(dataset_path):
+        if path_lower.startswith("s3://"):
+            return "s3"
+        elif path_lower.startswith("gs://"):
+            return "gcs"
+        elif path_lower.startswith(("az://", "abfs://", "abfss://")):
+            return "azure"
+        return "cloud"
+    elif Path(dataset_path).exists() or dataset_path.startswith(("./", "/", "~")):
+        if path_lower.endswith(".parquet"):
+            return "parquet"
+        else:
+            return "jsonl"
+    else:
+        return "huggingface"
+
+
+def quick_validate_schema(
+    dataset_path: str,
+    dataset_type: str,
+    subset: Optional[str] = None,
+    split: str = "train",
+    num_samples: int = 10,
+) -> None:
+    """
+    Fast schema validation on small sample. Fails fast on obvious errors.
+    Runs in main process before Ray starts.
+
+    Uses the same thorough validation as full validation, just on fewer samples.
+    """
+    console = Console()
+
+    source_type = _get_source_type(dataset_path)
+    console.print(
+        f"[dim]Validating {source_type} schema ({num_samples} samples)...[/dim]"
+    )
+
+    sample_ds = _load_sample_dataset(dataset_path, subset, split, num_samples)
+
+    if len(sample_ds) == 0:
+        raise ValueError(f"Dataset appears to be empty: {dataset_path}")
+
+    # Use the same validation as full validation
+    validate_dataset_format(sample_ds, dataset_type)
+
+    console.print("[green]✓ Schema validated[/green]")
+
+
+def _load_sample_dataset(
+    dataset_path: str,
+    subset: Optional[str],
+    split: str,
+    num_samples: int,
+) -> Dataset:
+    """Load a small sample as HF Dataset."""
+    try:
+        source_type = _get_source_type(dataset_path)
+
+        if source_type in ("s3", "gcs", "azure", "cloud"):
+            # Cloud storage - use Ray Data to read samples
+            import ray.data
+
+            path_lower = dataset_path.lower()
+            if ".parquet" in path_lower or ".pq" in path_lower:
+                ray_ds = ray.data.read_parquet(dataset_path)
+            else:
+                ray_ds = ray.data.read_json(dataset_path)
+            # Take only num_samples
+            samples = list(ray_ds.limit(num_samples).iter_rows())
+            return Dataset.from_list(samples)
+
+        elif source_type in ("parquet", "jsonl"):
+            # Local file - use HuggingFace
+            path_lower = dataset_path.lower()
+            if path_lower.endswith(".parquet"):
+                file_type = "parquet"
+            else:
+                file_type = "json"
+            return load_dataset(
+                file_type, data_files=dataset_path, split=f"{split}[:{num_samples}]"
+            )
+
+        else:
+            # HuggingFace Hub - use streaming then convert to Dataset
+            ds_stream = load_dataset(dataset_path, subset, split=split, streaming=True)
+            samples = []
+            for i, item in enumerate(ds_stream):
+                if i >= num_samples:
+                    break
+                samples.append(item)
+            return Dataset.from_list(samples)
+    except Exception as e:
+        raise ValueError(f"Failed to load dataset samples from '{dataset_path}': {e}")
+
+
+# ============================================================================
+# DISTRIBUTED FILTERING (Ray Data native operations)
+# ============================================================================
+
+
+def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
+    """
+    Get a row filter function for ray.data.filter().
+    Uses pure Python - Ray handles Arrow/serialization internally.
+    """
+
+    def is_valid_sft(row: dict) -> bool:
+        """Check if row has valid SFT conversational format."""
+        # Find the messages column
+        messages = None
+        for col in ["messages", "conversations", "chat", "dialogue"]:
+            if col in row and row[col]:
+                messages = row[col]
+                break
+
+        if not messages or len(messages) == 0:
+            return False
+
+        first = messages[0]
+        return isinstance(first, dict) and "role" in first and "content" in first
+
+    def is_valid_dpo(row: dict) -> bool:
+        """Check if row has valid DPO format."""
+        chosen = row.get("chosen")
+        rejected = row.get("rejected")
+
+        if not chosen or not rejected:
+            return False
+
+        return chosen != rejected
+
+    if dataset_type == "sft":
+        return is_valid_sft
+    elif dataset_type == "dpo":
+        return is_valid_dpo
+    else:
+        return lambda row: True  # VLM and others pass through
+
+
+def normalize_columns(dataset_type: str):
+    """
+    Get a row transform function to normalize column names.
+    For use with ray.data.map() if needed.
+    """
+
+    def normalize_sft(row: dict) -> dict:
+        # Rename conversation column to 'messages' if needed
+        for col in ["conversations", "chat", "dialogue"]:
+            if col in row and "messages" not in row:
+                row["messages"] = row.pop(col)
+                break
+        return row
+
+    def add_dpo_prompt(row: dict) -> dict:
+        if "prompt" not in row or not row["prompt"]:
+            # Extract prompt from chosen
+            chosen = row.get("chosen", [])
+            if isinstance(chosen, list):
+                for msg in chosen:
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        row["prompt"] = msg.get("content", "")
+                        break
+                else:
+                    row["prompt"] = ""
+            else:
+                row["prompt"] = ""
+        return row
+
+    if dataset_type == "sft":
+        return normalize_sft
+    elif dataset_type == "dpo":
+        return add_dpo_prompt
+    else:
+        return lambda row: row
+
+
+def _find_messages_column(batch: pd.DataFrame) -> Optional[str]:
+    """Find the conversational column in a batch."""
+    for col in ["messages", "conversations", "chat", "dialogue"]:
+        if col in batch.columns:
+            return col
+    for col in batch.columns:
+        if len(batch) > 0 and _is_valid_conversation(batch[col].iloc[0]):
+            return col
+    return None
+
+
+def _is_valid_conversation(content: Any) -> bool:
+    """Check if content is valid conversational format.
+
+    Accepts both Python lists and numpy arrays (parquet returns ndarray).
+    Validates structure: list of dicts with 'role' and 'content' keys.
+    """
+    import numpy as np
+
+    # Must be a sequence type (list or numpy array)
+    if not isinstance(content, (list, np.ndarray)):
+        return False
+
+    # Must have at least one message
+    if len(content) == 0:
+        return False
+
+    # First message must have required fields
+    first = content[0]
+    if not isinstance(first, dict):
+        return False
+
+    return "role" in first and "content" in first
+
+
+def _extract_prompt(chosen: Any) -> str:
+    """Extract prompt from chosen (conversational format)."""
+    if isinstance(chosen, list):
+        for msg in chosen:
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                return msg.get("content", "")
+    return ""
+
+
+# ============================================================================
+# VALIDATION FUNCTIONS
+# ============================================================================
 
 
 def validate_data_loader(func):
@@ -41,26 +284,60 @@ def validate_dataset_format(dataset: Dataset, dataset_type: str) -> Dataset:
 
 
 def validate_sft_format(dataset: Dataset) -> Dataset:
-    """Validate and convert SFT dataset to proper format"""
+    """Validate and convert SFT dataset to proper format."""
     columns = dataset.column_names
 
     if any(col in columns for col in ["chosen", "rejected"]):
         raise ValueError("This is a DPO dataset, not SFT. Use dataset_type='dpo'")
 
-    if "messages" in columns and is_valid_conversational_format(dataset, "messages"):
-        return dataset
+    # Find the conversational column
+    conv_col = _find_conversational_column(dataset, columns)
+    if conv_col is None:
+        raise ValueError(
+            f"No conversational column found. Expected 'messages' with format: "
+            f"[{{'role': 'user', 'content': '...'}}]. Found columns: {columns}"
+        )
 
+    # Validate ALL samples
+    invalid_indices = []
+    for i in range(len(dataset)):
+        if not _is_valid_conversation(dataset[i][conv_col]):
+            invalid_indices.append(i)
+
+    if invalid_indices:
+        # Show first few invalid indices
+        shown = invalid_indices[:5]
+        msg = f"Found {len(invalid_indices)} invalid samples (indices: {shown}"
+        if len(invalid_indices) > 5:
+            msg += f"... and {len(invalid_indices) - 5} more"
+        msg += "). Each message must have 'role' and 'content' fields."
+        raise ValueError(msg)
+
+    # Rename column if needed
+    if conv_col != "messages":
+        return dataset.rename_column(conv_col, "messages")
+
+    return dataset
+
+
+def _find_conversational_column(dataset: Dataset, columns: list) -> Optional[str]:
+    """Find the column containing conversational data."""
+    # Check known column names first
+    for col in ["messages", "conversations", "chat", "dialogue"]:
+        if col in columns and len(dataset) > 0:
+            if _is_valid_conversation(dataset[0][col]):
+                return col
+
+    # Fall back to checking all columns
     for col in columns:
-        if is_valid_conversational_format(dataset, col):
-            return dataset.rename_column(col, "messages")
+        if len(dataset) > 0 and _is_valid_conversation(dataset[0].get(col)):
+            return col
 
-    raise ValueError(
-        f"No conversational column found. Expected: [{'role': 'user', 'content': '...'}]"
-    )
+    return None
 
 
 def validate_dpo_format(dataset: Dataset) -> Dataset:
-    """Validate and convert DPO dataset to proper format"""
+    """Validate and convert DPO dataset to proper format."""
     columns = set(dataset.column_names)
 
     # Check required columns
@@ -69,13 +346,42 @@ def validate_dpo_format(dataset: Dataset) -> Dataset:
             f"DPO needs 'chosen' and 'rejected' columns. Found: {list(columns)}"
         )
 
+    # Validate ALL samples
+    invalid_indices = []
+    identical_indices = []
+
+    for i in range(len(dataset)):
+        chosen = dataset[i]["chosen"]
+        rejected = dataset[i]["rejected"]
+
+        # Check non-empty
+        if not chosen or not rejected:
+            invalid_indices.append(i)
+            continue
+
+        # Check chosen != rejected
+        if chosen == rejected:
+            identical_indices.append(i)
+
+    if invalid_indices:
+        shown = invalid_indices[:5]
+        raise ValueError(
+            f"Found {len(invalid_indices)} samples with empty chosen/rejected "
+            f"(indices: {shown}{'...' if len(invalid_indices) > 5 else ''})"
+        )
+
+    if identical_indices:
+        shown = identical_indices[:5]
+        raise ValueError(
+            f"Found {len(identical_indices)} samples where chosen == rejected "
+            f"(indices: {shown}{'...' if len(identical_indices) > 5 else ''})"
+        )
+
+    # Add prompt if missing
     if "prompt" in columns:
         return dataset
 
-    try:
-        return dataset.map(extract_prompt)
-    except Exception as e:
-        raise ValueError(f"Failed to convert DPO format: {e}")
+    return dataset.map(lambda x: {**x, "prompt": _extract_prompt(x["chosen"])})
 
 
 def validate_vlm_sft_format(dataset: Dataset) -> Dataset:
@@ -227,21 +533,3 @@ def validate_vlm_sft_format(dataset: Dataset) -> Dataset:
         f"✅ Dataset validation passed! {len(dataset)} samples with expected VLM format"
     )
     return dataset
-
-
-def is_valid_conversational_format(dataset: Dataset, column_name: str) -> bool:
-    """Check for ChatML format"""
-    try:
-        sample = dataset[0][column_name]
-        if not isinstance(sample, list) or len(sample) == 0:
-            return False
-
-        first_message = sample[0]
-        return (
-            isinstance(first_message, dict)
-            and "role" in first_message
-            and "content" in first_message
-        )
-
-    except (KeyError, IndexError, TypeError):
-        return False

@@ -4,7 +4,7 @@ import psutil
 import ray
 import ray.data
 from accelerate.utils import set_seed
-from ray.train import RunConfig, ScalingConfig
+from ray.train import CheckpointConfig, RunConfig, ScalingConfig
 from ray.runtime_env import RuntimeEnv
 from ray.train.torch import TorchTrainer, TorchConfig
 from torch import cuda
@@ -113,6 +113,11 @@ def ray_trainer(job_config: dict) -> None:
     run_config = RunConfig(
         storage_path=output_dir,
         name="ray_logs",
+        checkpoint_config=CheckpointConfig(
+            num_to_keep=3,
+            checkpoint_score_attribute="eval_loss",
+            checkpoint_score_order="min",
+        ),
     )
 
     print(f"\nTraining on {num_gpus} GPUs")

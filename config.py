@@ -20,7 +20,7 @@ Args:
 """
 
 example_sft_dataset = DatasetLoader(
-    "HuggingFaceTB/smoltalk", "sft", limit=None, test_size=0.2, subset="all"
+    "HuggingFaceTB/smoltalk", "sft", limit=1000, test_size=0.2, subset="all"
 )
 
 example_dpo_dataset = DatasetLoader(
@@ -31,15 +31,15 @@ example_vlm_sft_dataset = DatasetLoader(
     "alay2shah/example-vlm-sft-dataset", "vlm_sft", limit=None, test_size=0.2
 )
 
-# Local file examples (for testing)
+# Example with local files (jsonl and parquet)
 local_jsonl_dataset = DatasetLoader(
-    "/lambdafs/alay/datasets/HuggingFaceTB_smoltalk_all/train.jsonl",
+    "/path/to/your/dataset.jsonl",
     "sft",
     test_size=0.2,
 )
 
 local_parquet_dataset = DatasetLoader(
-    "/lambdafs/alay/datasets/HuggingFaceTB_smoltalk_all/train.parquet",
+    "/path/to/your/dataset.parquet",
     "sft",
     test_size=0.2,
 )
@@ -70,6 +70,8 @@ Args:
     num_train_epochs: Number of training epochs
     per_device_train_batch_size: Batch size per device
     learning_rate: Learning rate
+    save_only_model: If True, only save model weights (no optimizer states).
+                     Set to False if you want to resume training from checkpoint.
 """
 
 user_config = {
@@ -79,6 +81,7 @@ user_config = {
     "gradient_accumulation_steps": None,
     "learning_rate": None,
     "wandb_logging": False,  # If set to True, set your wandb API key via 'export WANDB_API_KEY=<your_api_key>'
+    "save_only_model": True,  # Set to False if you want to resume training from checkpoint
 }
 
 

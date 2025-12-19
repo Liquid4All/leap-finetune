@@ -5,6 +5,7 @@ from ray.train.huggingface.transformers import prepare_trainer
 from ray.train import get_context
 
 from leap_finetune.data_loaders.image_loader import load_image
+from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.logging_utils import setup_worker_logging
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
@@ -111,7 +112,8 @@ def vlm_sft_run(training_config: dict) -> None:
         processing_class=processor,
     )
 
-    # Start training
+    # Add Ray checkpoint callback and prepare for distributed training
+    trainer.add_callback(LeapCheckpointCallback())
     trainer = prepare_trainer(trainer)
 
     try:

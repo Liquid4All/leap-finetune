@@ -1,5 +1,3 @@
-"""Ray Data pipeline utilities for distributed data loading."""
-
 from typing import Tuple
 
 import ray.data

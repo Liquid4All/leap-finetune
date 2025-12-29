@@ -6,6 +6,7 @@ from ray.train import get_context
 
 from leap_finetune.data_loaders.image_loader import load_image
 from leap_finetune.utils.load_models import load_vlm_model
+from leap_finetune.utils.logging_utils import setup_worker_logging
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 from leap_finetune.utils.logging_utils import init_wandb_if_enabled
 
@@ -59,6 +60,8 @@ def create_collate_fn(processor):
 
 def vlm_sft_run(training_config: dict) -> None:
     """VLM SFT training loop for Ray Train"""
+
+    setup_worker_logging()
 
     train_dataset, eval_dataset = training_config.get("dataset")
     train_dataset = [sample["messages"] for sample in train_dataset]

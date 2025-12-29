@@ -10,6 +10,15 @@ import shutil
 _ENV_DONE = False
 
 
+def _is_ray_worker() -> bool:
+    """Check if we're running inside a Ray worker process."""
+    # Ray sets these env vars in worker processes
+    return any(
+        os.environ.get(var)
+        for var in ["RAY_WORKER_MODE", "RAY_RAYLET_PID", "RAY_JOB_ID"]
+    )
+
+
 def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
     """Initialize wandb with project and run name if logging is enabled.
 
@@ -47,7 +56,7 @@ def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
 
         warnings.warn(f"Failed to initialize wandb: {e}", UserWarning)
 
-        
+
 def worker_process_setup_hook() -> None:
     """
     Configure logging on Ray worker processes.
@@ -76,15 +85,6 @@ def setup_worker_logging() -> None:
         import datasets
 
         datasets.disable_progress_bars()
-
-
-def _is_ray_worker() -> bool:
-    """Check if we're running inside a Ray worker process."""
-    # Ray sets these env vars in worker processes
-    return any(
-        os.environ.get(var)
-        for var in ["RAY_WORKER_MODE", "RAY_RAYLET_PID", "RAY_JOB_ID"]
-    )
 
 
 def setup_training_environment() -> None:
@@ -173,7 +173,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
         "NCCL_SOCKET_IFNAME": "lo",
         "TORCH_NCCL_BLOCKING_WAIT": "1",
-        "NCCL_TIMEOUT": "300", # 5 minute safe timeout
+        "NCCL_TIMEOUT": "300",  # 5 minute safe timeout
         "RAY_DISABLE_IMPORT_WARNING": "1",
         "RAY_memory_monitor_refresh_ms": "0",
         "RAY_DATA_DISABLE_PROGRESS_BARS": "1",

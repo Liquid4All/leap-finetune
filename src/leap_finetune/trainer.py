@@ -52,15 +52,11 @@ def ray_trainer(job_config: dict) -> None:
         ray_temp_dir = select_ray_temp_dir(os.path.expanduser("~/ray_temp"))
         spill_dir = select_object_spilling_dir(ray_temp_dir)
 
-        # Reduce Ray logging verbosity
-        ray_logger = logging.getLogger("ray")
-        ray_logger.setLevel(logging.ERROR)  # Only show errors, not INFO/WARNING
-
         runtime_env = RuntimeEnv(
             working_dir=str(RUNTIME_DIR),
             env_vars=get_ray_env_vars(ray_temp_dir),
+            worker_process_setup_hook=worker_process_setup_hook,
         )
-
 
         # Calculate system memory for object store
         object_store_mem = int(psutil.virtual_memory().total * 0.4)
@@ -70,6 +66,7 @@ def ray_trainer(job_config: dict) -> None:
             runtime_env=runtime_env,
             _temp_dir=ray_temp_dir,
             object_spilling_directory=spill_dir,
+            object_store_memory=object_store_mem,
         )
 
         # Also suppress on driver (must be after ray.init)
@@ -128,7 +125,8 @@ def ray_trainer(job_config: dict) -> None:
         torch_config=TorchConfig(backend="nccl"),
         datasets=datasets,  # Ray Data handles sharding
     )
-    result = trainer.fit()
+
+    trainer.fit()
 
     print_next_steps_panel(output_dir)
     # Ensure Ray cleans up resources promptly to avoid post-training hangs

@@ -1,12 +1,3 @@
-"""
-Custom Ray Train checkpoint callback for leap-finetune.
-
-Features:
-- Tracks metrics from training/evaluation
-- Creates Ray Checkpoints on save (rank 0 only for ZeRO Stage 2)
-- Provides hooks for post-save actions (S3 upload, merging, eval jobs)
-"""
-
 from typing import Callable
 
 from ray import train

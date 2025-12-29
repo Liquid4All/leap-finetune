@@ -58,36 +58,41 @@ def create_collate_fn(processor):
 
 
 def vlm_sft_run(training_config: dict) -> None:
-    """SFT training loop for Ray Train"""
+    """VLM SFT training loop for Ray Train"""
 
     train_dataset, eval_dataset = training_config.get("dataset")
     train_dataset = [sample["messages"] for sample in train_dataset]
     test_dataset = [sample["messages"] for sample in eval_dataset]
 
+    peft_config = training_config.get("peft_config")
+    model_name = training_config.get("model_name", "")
+    job_name = training_config.get("job_name", "leap-ft-run")
+
+    # Filter out non-SFTConfig parameters
     excluded_keys = {"training_type", "wandb_logging"}
     train_config_filtered = {
         k: v
         for k, v in training_config.get("train_config").items()
         if k not in excluded_keys
     }
+
     # Configure wandb reporting if enabled via config
-    job_name = training_config.get("job_name", "leap-ft-run")
     wandb_logging = bool(
         training_config.get("train_config", {}).get("wandb_logging", False)
     )
-
-    # Initialize wandb with project and run name if logging is enabled
     init_wandb_if_enabled(job_name, wandb_logging)
 
-    training_args = SFTConfig(
-        report_to="wandb" if wandb_logging else "none",
-        run_name=job_name,
+    # Build training args
+    config_kwargs = {
+        "report_to": "wandb" if wandb_logging else "none",
+        "run_name": job_name,
         **train_config_filtered,
-    )
+    }
+    training_args = SFTConfig(**config_kwargs)
 
-    model, processor = load_vlm_model(training_config.get("model_name"))
+    # Load model
+    model, processor = load_vlm_model(model_name)
 
-    peft_config = training_config.get("peft_config")
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
 

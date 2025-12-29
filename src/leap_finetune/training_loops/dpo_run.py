@@ -20,48 +20,42 @@ def dpo_run(training_config: dict) -> None:
         tuple[Dataset, Dataset], training_config.get("dataset")
     )
 
-    excluded_keys = {"training_type", "wandb_logging"}
-    train_config_filtered = {
-        k: v
-        for k, v in training_config.get("train_config").items()
-        if k not in excluded_keys
-    }
-    # Configure wandb reporting if enabled via config
-    job_name = training_config.get("job_name", "leap-ft-run")
-    wandb_logging = bool(
-        training_config.get("train_config", {}).get("wandb_logging", False)
-    )
-
-    # Initialize wandb with project and run name if logging is enabled
-    init_wandb_if_enabled(job_name, wandb_logging)
-
-    training_args = DPOConfig(
-        report_to="wandb" if wandb_logging else "none",
-        run_name=job_name,
-        **train_config_filtered,
-    )
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
+    job_name = training_config.get("job_name", "leap-ft-run")
 
     # Check for MoE model
     is_moe = is_moe_model_from_name(model_name)
     use_fsdp = is_moe and peft_config is None
 
-    # Remove non-DPOConfig parameters
-    train_config.pop("training_type", None)
-
-    # Apply FSDP for MoE without PEFT
+    # Filter out non-DPOConfig parameters
+    excluded_keys = {"training_type", "wandb_logging"}
     if use_fsdp:
-        train_config.pop("deepspeed", None)
-        fsdp_config = MOE_FSDP_CONFIG["fsdp_config"].copy()
-        training_args = DPOConfig(
-            **train_config,
-            fsdp=MOE_FSDP_CONFIG["fsdp"],
-            fsdp_config=fsdp_config,
-        )
-    else:
-        # MoE with PEFT or non-MoE: use DeepSpeed (already in config)
-        training_args = DPOConfig(**train_config)
+        excluded_keys.add("deepspeed")  # Remove deepspeed when using FSDP
+
+    train_config_filtered = {
+        k: v
+        for k, v in training_config.get("train_config").items()
+        if k not in excluded_keys
+    }
+
+    # Configure wandb reporting if enabled via config
+    wandb_logging = bool(
+        training_config.get("train_config", {}).get("wandb_logging", False)
+    )
+    init_wandb_if_enabled(job_name, wandb_logging)
+
+    # Build training args
+    config_kwargs = {
+        "report_to": "wandb" if wandb_logging else "none",
+        "run_name": job_name,
+        **train_config_filtered,
+    }
+    if use_fsdp:
+        config_kwargs["fsdp"] = MOE_FSDP_CONFIG["fsdp"]
+        config_kwargs["fsdp_config"] = MOE_FSDP_CONFIG["fsdp_config"]
+
+    training_args = DPOConfig(**config_kwargs)
 
     # Load model after config is created
     model, tokenizer = load_model(model_name)

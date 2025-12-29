@@ -1,11 +1,11 @@
 from leap_finetune.utils.constants import SFT_OUTPUT_PATH
 
 ########################
-#   DEEPSEED CONFIGS   #
+#   DEEPSPEED CONFIGS   #
 ########################
 
 
-DEEPSEED_CONFIG = {
+DEEPSPEED_CONFIG = {
     "zero_optimization": {
         "stage": 2,
         "overlap_comm": True,
@@ -55,5 +55,5 @@ DEFAULT_VLM_SFT_CONFIG = {
     "load_best_model_at_end": True,
     "gradient_checkpointing": True,
     "dataset_kwargs": {"skip_prepare_dataset": True},
-    "deepspeed": DEEPSEED_CONFIG,
+    "deepspeed": DEEPSPEED_CONFIG,
 }

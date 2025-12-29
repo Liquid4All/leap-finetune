@@ -42,11 +42,15 @@ Choose a default training config and override some of the parameters.
 Default SFT: TrainingConfig.DEFAULT_SFT
 Default DPO: TrainingConfig.DEFAULT_DPO
 Default VLM SFT: TrainingConfig.DEFAULT_VLM_SFT
+MoE SFT: TrainingConfig.MOE_SFT
+MoE DPO: TrainingConfig.MOE_DPO
 
 No LORA (full finetuning): PeftConfig.NO_LORA
 Default LORA: PeftConfig.DEFAULT_LORA
 High R LoRA: PeftConfig.HIGH_R_LORA
 VLM LoRA: PeftConfig.DEFAULT_VLM_LORA
+MoE LoRA: PeftConfig.MOE_LORA
+MoE High R LoRA: PeftConfig.MOE_LORA_HIGH_R
 
 Args:
     output_dir: Output directory for training artifacts
@@ -59,10 +63,9 @@ user_config = {
     "output_dir": None,
     "num_train_epochs": None,
     "per_device_train_batch_size": None,
+    "gradient_accumulation_steps": None,
     "learning_rate": None,
 }
-training_config = TrainingConfig.DEFAULT_SFT.override(**user_config)
-peft_config = PeftConfig.DEFAULT_LORA
 
 
 #################################
@@ -74,8 +77,8 @@ Set up your training job here using JobConfig.
 
 Args:
     job_name: Unique identifier for the training job (alphanumeric, hyphens, underscores only)
-    model_name: Model to fine-tune - default: "LFM2-1.2B". Try also "LFM2-700M" or "LFM2-350M"
-    training_type: "sft" or "dpo"
+    model_name: Model to fine-tune - default: "LFM2-1.2B". Try also "LFM2-700M", "LFM2-350M", or "LFM2-8B-A1B" (MoE)
+    training_type: "sft", "dpo", or "vlm_sft"
     dataset: Dataset to use for training, defined in step 1
     training_config: Training configuration that matches training_type, defined in step 2
     peft_config: PEFT configuration for parameter-efficient fine-tuning, defined in step 2
@@ -83,9 +86,9 @@ Args:
 
 JOB_CONFIG = JobConfig(
     job_name="my_job_name",
-    model_name="LFM2-1.2B",
+    model_name="LFM2-8B-A1B",
     training_type="sft",
     dataset=example_sft_dataset,
-    training_config=training_config,
-    peft_config=peft_config,
+    training_config=TrainingConfig.MOE_SFT.override(**user_config),
+    peft_config=PeftConfig.NO_LORA,
 )

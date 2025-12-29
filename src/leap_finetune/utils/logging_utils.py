@@ -1,6 +1,7 @@
 import os
 import warnings
 import logging
+import tempfile
 
 _ENV_DONE = False
 
@@ -14,13 +15,25 @@ def setup_training_environment() -> None:
     os.environ.setdefault("DEEPSPEED_LOG_LEVEL", "ERROR")
     warnings.filterwarnings("ignore")  # keep only tracebacks
 
-    cache = "/dev/shm"
+    pid = os.getpid()
+    existing_base = os.environ.get("TRITON_CACHE_DIR")
+
+    if existing_base:
+        cache_dir = f"{existing_base}_{pid}"
+    else:
+        default_base = "/dev/shm"
+        cache_dir = os.path.join(default_base, f"triton_cache_{pid}")
+
     try:
-        os.makedirs(cache, exist_ok=True)
-    except OSError:
-        cache = "/tmp/triton_cache"
-        os.makedirs(cache, exist_ok=True)
-    os.environ["TRITON_CACHE_DIR"] = cache
+        os.makedirs(cache_dir, exist_ok=True)
+    except (OSError, PermissionError):
+        fallback_base = tempfile.gettempdir()
+        cache_dir = os.path.join(fallback_base, f"triton_cache_{pid}")
+        os.makedirs(cache_dir, exist_ok=True)
+
+    os.environ["TRITON_CACHE_DIR"] = cache_dir
+    # DeepSpeed also respects DS_TRITON_CACHE_DIR. Set both for completeness.
+    os.environ["DS_TRITON_CACHE_DIR"] = cache_dir
 
     try:
         import deepspeed

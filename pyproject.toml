@@ -13,7 +13,7 @@ dependencies = [
     "deepspeed>=0.17.1",
     "ray[train]>=2.47.1",
     "torch>=2.7.1",
-    "transformers>=4.55.0",
+    "transformers @ git+https://github.com/huggingface/transformers.git@0c9a72e4576fe4c84077f066e585129c97bfd4e6",
     "trl>=0.18.2",
     "rich>=14.1.0",
     "pillow>=11.3.0",
@@ -27,6 +27,9 @@ leap-finetune = "leap_finetune:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [dependency-groups]
 dev = [

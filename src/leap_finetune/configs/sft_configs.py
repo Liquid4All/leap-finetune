@@ -2,11 +2,11 @@ from leap_finetune.utils.constants import SFT_OUTPUT_PATH
 
 
 ########################
-#   DEEPSEED CONFIGS   #
+#   DEEPSPEED CONFIGS   #
 ########################
 
 
-DEEPSEED_CONFIG = {
+DEEPSPEED_CONFIG = {
     "zero_optimization": {
         "stage": 2,
         "overlap_comm": True,
@@ -25,6 +25,36 @@ DEEPSEED_CONFIG = {
         },
     },
     "bf16": {"enabled": "auto"},
+    "activation_checkpointing": {
+        "partition_activations": False,
+        "cpu_checkpointing": False,
+        "contiguous_memory_optimization": False,
+        "number_checkpoints": None,
+        "synchronize_checkpoint_boundary": False,
+        "profile": False,
+    },
+}
+
+
+MOE_DEEPSPEED_CONFIG = {
+    "zero_optimization": {
+        "stage": 0,
+        "overlap_comm": True,
+    },
+    "train_batch_size": "auto",
+    "train_micro_batch_size_per_gpu": "auto",
+    "gradient_clipping": "auto",
+    "gradient_accumulation_steps": "auto",
+    "optimizer": {
+        "type": "AdamW",
+        "params": {
+            "lr": "auto",  # Uses learning_rate from training config
+            "betas": "auto",  # DEFAULT: (0.9, 0.999)
+            "eps": "auto",  # DEFAULT: 1e-8
+            "weight_decay": "auto",  # DEFAULT: 0.01
+        },
+    },
+    "fp16": {"enabled": "auto"},
     "activation_checkpointing": {
         "partition_activations": False,
         "cpu_checkpointing": False,
@@ -55,5 +85,34 @@ DEFAULT_SFT_CONFIG = {
     "eval_strategy": "epoch",
     "load_best_model_at_end": True,
     "ddp_find_unused_parameters": False,
-    "deepspeed": DEEPSEED_CONFIG,
+    "deepspeed": DEEPSPEED_CONFIG,
+}
+
+
+########################
+#   MOE SFT CONFIGS    #
+########################
+
+# Base MoE SFT config - distributed strategy is applied automatically in runner
+# based on PEFT presence: DeepSpeed for LoRA, FSDP for full fine-tuning
+MOE_SFT_CONFIG = {
+    "training_type": "sft",
+    "output_dir": SFT_OUTPUT_PATH,
+    "num_train_epochs": 2,  # MoE models typically need fewer epochs
+    "per_device_train_batch_size": 2,  # Reduced to save memory
+    "gradient_accumulation_steps": 1,  # Set to 1 to match Accelerate config for testing
+    "learning_rate": 5e-5,
+    "lr_scheduler_type": "linear",
+    "warmup_steps": 100,
+    "warmup_ratio": 0.2,
+    "logging_steps": 10,
+    "save_strategy": "epoch",
+    "eval_strategy": "epoch",
+    "load_best_model_at_end": True,
+    "max_grad_norm": 1.0,
+    "bf16": True,
+    # Distributed strategy will be set automatically:
+    # - With PEFT: uses MOE_DEEPSPEED_CONFIG
+    # - Without PEFT: uses FSDP_CONFIG
+    "deepspeed": MOE_DEEPSPEED_CONFIG,
 }

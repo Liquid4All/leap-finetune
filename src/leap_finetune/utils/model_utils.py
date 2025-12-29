@@ -1,6 +1,3 @@
-"""Utility functions for model detection and configuration."""
-
-
 def is_moe_model_from_name(model_name: str) -> bool:
     """Check if a model is a MoE (Mixture of Experts) model based on model name.
 

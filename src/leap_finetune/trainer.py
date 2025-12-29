@@ -1,18 +1,23 @@
 import ray
 import os
+import logging
 
 from accelerate.utils import set_seed
 from ray.train import RunConfig, ScalingConfig
 from ray.runtime_env import RuntimeEnv
 from ray.train.torch import TorchTrainer, TorchConfig
-from rich.console import Console
-from rich.panel import Panel
 from torch import cuda
 
 from leap_finetune.utils.constants import RUNTIME_DIR
 from leap_finetune.training_loops.sft_run import sft_run
 from leap_finetune.training_loops.dpo_run import dpo_run
 from leap_finetune.training_loops.vlm_sft_run import vlm_sft_run
+from leap_finetune.utils.logging_utils import (
+    get_ray_env_vars,
+    print_next_steps_panel,
+    select_ray_temp_dir,
+    select_object_spilling_dir,
+)
 
 
 #################################
@@ -38,27 +43,27 @@ def ray_trainer(job_config: dict) -> None:
     os.makedirs(ray_temp_dir, exist_ok=True)
 
     if not ray.is_initialized():
+        # Force local init and avoid accidental cluster connects
+        for key in ("RAY_ADDRESS", "RAY_HEAD_IP", "RAY_HEAD_NODE_ADDRESS", "RAY_PORT"):
+            os.environ.pop(key, None)
+
+        ray_temp_dir = select_ray_temp_dir(os.path.expanduser("~/ray_temp"))
+        spill_dir = select_object_spilling_dir(ray_temp_dir)
+
+        # Reduce Ray logging verbosity
+        ray_logger = logging.getLogger("ray")
+        ray_logger.setLevel(logging.ERROR)  # Only show errors, not INFO/WARNING
+
+        runtime_env = RuntimeEnv(
+            working_dir=str(RUNTIME_DIR),
+            env_vars=get_ray_env_vars(ray_temp_dir),
+        )
+
         ray.init(
-            runtime_env=RuntimeEnv(
-                working_dir=str(RUNTIME_DIR),
-                env_vars={
-                    "TMPDIR": ray_temp_dir,
-                    "TEMP": ray_temp_dir,
-                    "TMP": ray_temp_dir,
-                    "NCCL_IB_DISABLE": "1",
-                    "NCCL_P2P_DISABLE": "1",  # Added to force CPU level communication during synchronization
-                    "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
-                    "NCCL_SOCKET_IFNAME": "lo",
-                    "TORCH_NCCL_BLOCKING_WAIT": "1",
-                    "NCCL_TIMEOUT": "300",  # 5 minute safe timeout
-                    "RAY_DISABLE_IMPORT_WARNING": "1",
-                    "RAY_memory_monitor_refresh_ms": "0",
-                    # Suppress Ray Data verbose logging
-                    "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
-                    "RAY_IGNORE_UNHANDLED_ERRORS": "1",
-                },
-            ),
+            address="local",
+            runtime_env=runtime_env,
             _temp_dir=ray_temp_dir,
+            object_spilling_directory=spill_dir,
         )
 
     if training_type == "sft":
@@ -72,6 +77,7 @@ def ray_trainer(job_config: dict) -> None:
 
     train_loop_config = {
         "model_name": job_config["model_name"],
+        "job_name": job_config.get("job_name", "leap-ft-run"),
         "train_config": job_config["training_config"],
         "peft_config": job_config["peft_config"],
         "dataset": job_config["dataset"],
@@ -98,24 +104,9 @@ def ray_trainer(job_config: dict) -> None:
 
     trainer.fit()
 
-    console = Console()
-    quick_start_url = (
-        "https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github"
-        "&utm_medium=link&utm_campaign=LEAP&utm_content=general"
-    )
-
-    cta_message = (
-        "[bold green]Training complete![/bold green]\n\n"
-        f"[bold]Checkpoint directory:[/bold] [cyan]{output_dir}[/cyan]\n\n"
-        "Bundle your output checkpoint with [bold]leap-bundle[/bold] to use it in LEAP:\n"
-        f"[dim]leap-bundle create {output_dir}/[CHECKPOINT_NAME][/dim]\n\n"
-        f"Quick Start: [link={quick_start_url}]{quick_start_url}[/link]"
-    )
-
-    console.print(
-        Panel.fit(
-            cta_message,
-            title="Next Step: Bundle for LEAP",
-            border_style="green",
-        )
-    )
+    print_next_steps_panel(output_dir)
+    # Ensure Ray cleans up resources promptly to avoid post-training hangs
+    try:
+        ray.shutdown()
+    except Exception:
+        pass

@@ -1,3 +1,4 @@
+import os
 from peft import get_peft_model
 from transformers import AutoTokenizer, PreTrainedModel
 
@@ -18,6 +19,7 @@ def merge_and_save_peft_model(
     model: PreTrainedModel, tokenizer: AutoTokenizer, output_dir: str
 ) -> None:
     peft_model_dir = f"{output_dir}/merged_model"
+    os.makedirs(peft_model_dir, exist_ok=True)
     print(f"Merging and saving PEFT model to {peft_model_dir}")
 
     model = model.merge_and_unload()

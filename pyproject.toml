@@ -11,7 +11,6 @@ dependencies = [
     "accelerate>=1.7.0",
     "peft>=0.15.2",
     "deepspeed>=0.17.1",
-    "ray[train]>=2.47.1",
     "torch>=2.7.1",
     "transformers @ git+https://github.com/huggingface/transformers.git@0c9a72e4576fe4c84077f066e585129c97bfd4e6",
     "trl>=0.18.2",
@@ -19,6 +18,8 @@ dependencies = [
     "pillow>=11.3.0",
     "mpi4py>=4.1.0",
     "liger-kernel>=0.6.2",
+    "wandb>=0.22.3",
+    "ray==2.48.0",
 ]
 
 [project.scripts]

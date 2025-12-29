@@ -50,6 +50,7 @@ DEFAULT_VLM_SFT_CONFIG = {
     "warmup_steps": 100,
     "warmup_ratio": 0.2,
     "logging_steps": 10,
+    "logging_first_step": True,
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "load_best_model_at_end": True,

@@ -80,7 +80,8 @@ DEFAULT_SFT_CONFIG = {
     "lr_scheduler_type": "linear",
     "warmup_steps": 100,
     "warmup_ratio": 0.2,
-    "logging_steps": 10,
+    "logging_steps": 10,  # Log training metrics every 10 steps
+    "logging_first_step": True,  # Log at step 0 to see initial metrics
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "load_best_model_at_end": True,

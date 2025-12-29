@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import ray.data
 from datasets import Dataset
 from rich.console import Console
@@ -11,7 +9,7 @@ from .validate_loader import get_row_filter, normalize_columns
 def create_ray_datasets(
     loader: DatasetLoader,
     shuffle_seed: int = 42,
-) -> Tuple[ray.data.Dataset, ray.data.Dataset]:
+) -> tuple[ray.data.Dataset, ray.data.Dataset]:
     """
     Create validated, shuffled, split Ray Datasets from a DatasetLoader.
 

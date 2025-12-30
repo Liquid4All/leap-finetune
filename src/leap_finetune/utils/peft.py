@@ -1,5 +1,4 @@
 import os
-from typing import Union
 
 import ray.train
 from peft import get_peft_model
@@ -20,7 +19,7 @@ def apply_peft_to_model(
 
 def merge_and_save_peft_model(
     model: PreTrainedModel,
-    tokenizer_or_processor: Union[AutoTokenizer, ProcessorMixin],
+    tokenizer_or_processor: AutoTokenizer | ProcessorMixin,
     output_dir: str,
 ) -> None:
     """Merge PEFT adapters and save the full model. Only runs on rank 0."""

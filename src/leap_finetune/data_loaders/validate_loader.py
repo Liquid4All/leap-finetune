@@ -1,7 +1,7 @@
 import os
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from rich.console import Console
 import pandas as pd
@@ -43,7 +43,7 @@ def _get_source_type(dataset_path: str) -> str:
 def quick_validate_schema(
     dataset_path: str,
     dataset_type: str,
-    subset: Optional[str] = None,
+    subset: str | None = None,
     split: str = "train",
     num_samples: int = 10,
 ) -> None:
@@ -73,7 +73,7 @@ def quick_validate_schema(
 
 def _load_sample_dataset(
     dataset_path: str,
-    subset: Optional[str],
+    subset: str | None,
     split: str,
     num_samples: int,
 ) -> Dataset:
@@ -199,7 +199,7 @@ def normalize_columns(dataset_type: str):
         return lambda row: row
 
 
-def _find_messages_column(batch: pd.DataFrame) -> Optional[str]:
+def _find_messages_column(batch: pd.DataFrame) -> str | None:
     """Find the conversational column in a batch."""
     for col in ["messages", "conversations", "chat", "dialogue"]:
         if col in batch.columns:
@@ -320,7 +320,7 @@ def validate_sft_format(dataset: Dataset) -> Dataset:
     return dataset
 
 
-def _find_conversational_column(dataset: Dataset, columns: list) -> Optional[str]:
+def _find_conversational_column(dataset: Dataset, columns: list) -> str | None:
     """Find the column containing conversational data."""
     # Check known column names first
     for col in ["messages", "conversations", "chat", "dialogue"]:

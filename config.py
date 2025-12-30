@@ -19,28 +19,51 @@ Args:
     subset: Dataset subset to use for HuggingFace datasets, default None
 """
 
+# ----- HuggingFace Datasets -----
+
 example_sft_dataset = DatasetLoader(
-    "HuggingFaceTB/smoltalk", "sft", limit=1000, test_size=0.2, subset="all"
+    dataset_path="HuggingFaceTB/smoltalk",
+    dataset_type="sft",
+    limit=1000,
+    test_size=0.2,
+    subset="all",
 )
 
 example_dpo_dataset = DatasetLoader(
-    "mlabonne/orpo-dpo-mix-40k", "dpo", limit=1000, test_size=0.2, subset="default"
+    dataset_path="mlabonne/orpo-dpo-mix-40k",
+    dataset_type="dpo",
+    limit=1000,
+    test_size=0.2,
+    subset="default",
 )
 
 example_vlm_sft_dataset = DatasetLoader(
-    "alay2shah/example-vlm-sft-dataset", "vlm_sft", limit=None, test_size=0.2
+    dataset_path="alay2shah/example-vlm-sft-dataset",
+    dataset_type="vlm_sft",
+    limit=None,
+    test_size=0.2,
 )
 
-# Example with local files (jsonl and parquet)
+# ----- Local File Datasets -----
+
 local_jsonl_dataset = DatasetLoader(
-    "/path/to/your/dataset.jsonl",
-    "sft",
+    dataset_path="/path/to/your/dataset.jsonl",
+    dataset_type="sft",
     test_size=0.2,
 )
 
 local_parquet_dataset = DatasetLoader(
-    "/path/to/your/dataset.parquet",
-    "sft",
+    dataset_path="/path/to/your/dataset.parquet",
+    dataset_type="sft",
+    test_size=0.2,
+)
+
+# ----- Cloud Storage Dataset Examples -----
+# Supports s3:// for AWS, gs:// for GCS, az:// for Azure
+
+s3_dataset = DatasetLoader(
+    dataset_path="s3://your-bucket/path/to/dataset.parquet",
+    dataset_type="sft",
     test_size=0.2,
 )
 
@@ -107,5 +130,5 @@ JOB_CONFIG = JobConfig(
     training_type="sft",
     dataset=example_sft_dataset,
     training_config=TrainingConfig.MOE_SFT.override(**user_config),
-    peft_config=PeftConfig.NO_LORA,
+    peft_config=PeftConfig.DEFAULT_LORA,
 )

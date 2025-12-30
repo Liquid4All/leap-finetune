@@ -20,7 +20,7 @@ Args:
 """
 
 example_sft_dataset = DatasetLoader(
-    "HuggingFaceTB/smoltalk", "sft", limit=1000, test_size=0.2, subset="all"
+    "HuggingFaceTB/smoltalk", "sft", limit=None, test_size=0.2, subset="all"
 )
 
 example_dpo_dataset = DatasetLoader(
@@ -29,6 +29,19 @@ example_dpo_dataset = DatasetLoader(
 
 example_vlm_sft_dataset = DatasetLoader(
     "alay2shah/example-vlm-sft-dataset", "vlm_sft", limit=None, test_size=0.2
+)
+
+# Local file examples (for testing)
+local_jsonl_dataset = DatasetLoader(
+    "/lambdafs/alay/datasets/HuggingFaceTB_smoltalk_all/train.jsonl",
+    "sft",
+    test_size=0.2,
+)
+
+local_parquet_dataset = DatasetLoader(
+    "/lambdafs/alay/datasets/HuggingFaceTB_smoltalk_all/train.parquet",
+    "sft",
+    test_size=0.2,
 )
 
 

@@ -1,24 +1,31 @@
 from typing import cast
 
-from datasets import Dataset
+import ray.train
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 from ray.train.huggingface.transformers import prepare_trainer
 from ray.train import get_context
 
 from leap_finetune.configs.distributed_configs import MOE_FSDP_CONFIG
+from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.model_utils import is_moe_model_from_name
-from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 from leap_finetune.utils.logging_utils import init_wandb_if_enabled
+from leap_finetune.utils.logging_utils import setup_worker_logging
+from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 
 
 def dpo_run(training_config: dict) -> None:
     """DPO training loop for Ray Train"""
+    setup_worker_logging()
 
-    train_dataset, test_dataset = cast(
-        tuple[Dataset, Dataset], training_config.get("dataset")
-    )
+    # Get sharded datasets for this worker
+    train_ds_ray = ray.train.get_dataset_shard("train")
+    eval_ds_ray = ray.train.get_dataset_shard("eval")
+
+    # Materialize to HuggingFace Datasets for TRL
+    train_dataset = ray_dataset_to_hf(train_ds_ray)
+    test_dataset = ray_dataset_to_hf(eval_ds_ray)
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")

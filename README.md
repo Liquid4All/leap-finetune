@@ -152,6 +152,127 @@ To add a new training configuration add it to the respective file and then refer
 We also support [Liger Kernel](https://github.com/linkedin/Liger-Kernel) and it comes pre-installed.
 Just add `"use_liger_kernel": True"` to your `user_config`
 
+## 📂 Advanced Dataset Loading
+
+`DatasetLoader` supports multiple data sources with automatic format detection and validation.
+
+### DatasetLoader Parameters
+
+| Parameter      | Type                              | Default   | Description                                            |
+| -------------- | --------------------------------- | --------- | ------------------------------------------------------ |
+| `dataset_path` | `str`                             | required  | Path to dataset (local, cloud, or HuggingFace Hub ID)  |
+| `dataset_type` | `"sft"` \| `"dpo"` \| `"vlm_sft"` | required  | Training format type                                   |
+| `limit`        | `int`                             | `None`    | Limit number of samples (useful for testing)           |
+| `split`        | `str`                             | `"train"` | Dataset split to use                                   |
+| `test_size`    | `float`                           | `0.2`     | Fraction of data for evaluation                        |
+| `subset`       | `str`                             | `None`    | Dataset subset (for HuggingFace datasets with configs) |
+
+### Supported Data Sources
+
+#### Local Files
+
+```python
+# JSONL file
+DatasetLoader("/path/to/data.jsonl", "sft")
+
+# Parquet file (faster for large datasets)
+DatasetLoader("/path/to/data.parquet", "sft")
+```
+
+#### HuggingFace Hub
+
+```python
+# Public dataset
+DatasetLoader("HuggingFaceTB/smoltalk", "sft", subset="all")
+
+# Private dataset (requires HF login)
+DatasetLoader("your-org/private-dataset", "sft")
+```
+
+#### Cloud Storage
+
+Requires appropriate credentials configured (AWS credentials, GCP service account, Azure credentials).
+
+```python
+# Amazon S3
+DatasetLoader("s3://bucket/path/to/data.parquet", "sft")
+DatasetLoader("s3://bucket/path/to/data.jsonl", "sft")
+
+# Google Cloud Storage
+DatasetLoader("gs://bucket/path/to/data.parquet", "sft")
+
+# Azure Blob Storage
+DatasetLoader("az://container/path/to/data.parquet", "sft")
+DatasetLoader("abfs://container@account.dfs.core.windows.net/path/data.parquet", "sft")
+```
+
+### Quick Testing with Limits
+
+Use `limit` to quickly test your pipeline with a subset of data:
+
+```python
+# Test with 100 samples
+DatasetLoader("HuggingFaceTB/smoltalk", "sft", subset="all", limit=100)
+
+# Full dataset
+DatasetLoader("HuggingFaceTB/smoltalk", "sft", subset="all")
+```
+
+### File Format Recommendations
+
+| Format          | Best For                         | Notes                                          |
+| --------------- | -------------------------------- | ---------------------------------------------- |
+| **Parquet**     | Large datasets (>100K rows)      | Columnar format, fast reads, smaller file size |
+| **JSONL**       | Smaller datasets, human-readable | Line-delimited JSON, easy to inspect           |
+| **HuggingFace** | Public datasets                  | Automatic streaming, no local storage needed   |
+
+### Custom Preprocessing
+
+For datasets that need reformatting, filtering, or joining before training, use the `preprocess_fn` parameter. This function receives a Ray Dataset and must return a Ray Dataset in the expected format.
+
+```python
+import ray.data
+
+def my_preprocess(ds: ray.data.Dataset) -> ray.data.Dataset:
+    """Custom preprocessing - runs before validation."""
+
+    # Example: Filter rows where content length > 100
+    ds = ds.filter(lambda row: len(row.get("content", "")) > 100)
+
+    # Example: Transform column names
+    ds = ds.map(lambda row: {
+        "messages": [
+            {"role": "user", "content": row["input"]},
+            {"role": "assistant", "content": row["output"]}
+        ]
+    })
+
+    # Example: Sample 10% of data
+    ds = ds.random_sample(0.1)
+
+    return ds
+
+# Use with DatasetLoader
+DatasetLoader(
+    "path/to/raw-data.jsonl",
+    "sft",
+    preprocess_fn=my_preprocess
+)
+```
+
+**Common preprocessing operations:**
+
+| Operation       | Ray Data Method                                      |
+| --------------- | ---------------------------------------------------- |
+| Filter rows     | `ds.filter(lambda row: condition)`                   |
+| Transform rows  | `ds.map(lambda row: new_row)`                        |
+| Batch transform | `ds.map_batches(fn, batch_format="pandas")`          |
+| Sample data     | `ds.random_sample(fraction)`                         |
+| Drop columns    | `ds.drop_columns(["col1", "col2"])`                  |
+| Rename columns  | `ds.map(lambda row: {new_name: row[old_name], ...})` |
+
+See [Ray Data documentation](https://docs.ray.io/en/latest/data/api/dataset.html) for all available operations.
+
 ## Contributing
 
 1. Hook `pre-commit` to git: `uv run pre-commit install`

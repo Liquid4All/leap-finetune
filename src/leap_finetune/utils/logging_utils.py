@@ -10,6 +10,15 @@ import shutil
 _ENV_DONE = False
 
 
+def _is_ray_worker() -> bool:
+    """Check if we're running inside a Ray worker process."""
+    # Ray sets these env vars in worker processes
+    return any(
+        os.environ.get(var)
+        for var in ["RAY_WORKER_MODE", "RAY_RAYLET_PID", "RAY_JOB_ID"]
+    )
+
+
 def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
     """Initialize wandb with project and run name if logging is enabled.
 
@@ -48,13 +57,52 @@ def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
         warnings.warn(f"Failed to initialize wandb: {e}", UserWarning)
 
 
+def worker_process_setup_hook() -> None:
+    """
+    Configure logging on Ray worker processes.
+
+    Passed to ray.init(runtime_env=RuntimeEnv(worker_process_setup_hook=...))
+    Runs once when each worker process starts, before any tasks execute.
+    """
+    # Only show ERROR level logs from Ray components
+    logging.getLogger("ray.data").setLevel(logging.ERROR)
+    logging.getLogger("ray.train").setLevel(logging.ERROR)
+    logging.getLogger("ray").setLevel(logging.ERROR)
+    warnings.filterwarnings("ignore")
+
+
+def setup_worker_logging() -> None:
+    """
+    Configure logging for Ray Train workers.
+
+    Must be called from within a Ray Train worker (not driver).
+    Disables progress bars on non-rank-0 workers to avoid duplicate logs.
+    """
+    import ray.train
+
+    rank = ray.train.get_context().get_world_rank()
+    if rank != 0:
+        import datasets
+
+        datasets.disable_progress_bars()
+
+
 def setup_training_environment() -> None:
+    """Configure training environment. Only prints messages on driver process."""
     global _ENV_DONE
     if _ENV_DONE:
         return
 
+    is_worker = _is_ray_worker()
+
     os.environ.setdefault("DS_DISABLE_CONFIG_PRINT", "1")
     os.environ.setdefault("DEEPSPEED_LOG_LEVEL", "ERROR")
+    os.environ.setdefault("RAY_DATA_DISABLE_PROGRESS_BARS", "1")
+    # Skip noisy duplicate logs from workers (NCCL warnings, object store warnings, SplitCoordinator)
+    os.environ.setdefault(
+        "RAY_DEDUP_LOGS_SKIP_REGEX",
+        r"ProcessGroupNCCL|object.store.is.configured|SplitCoordinator",
+    )
     warnings.filterwarnings("ignore")  # keep only tracebacks
 
     if "WANDB_API_KEY" not in os.environ and "WANDB_MODE" not in os.environ:
@@ -108,9 +156,10 @@ def setup_training_environment() -> None:
             pass
 
     except ImportError:
-        print("Deepspeed not available in environment; nothing to patch")
+        pass  # Silent - deepspeed not required
 
-    print("Training environment configured ✅")
+    if not is_worker:
+        print("Training environment configured ✅")
     _ENV_DONE = True
 
 
@@ -124,7 +173,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
         "NCCL_SOCKET_IFNAME": "lo",
         "TORCH_NCCL_BLOCKING_WAIT": "1",
-        "NCCL_TIMEOUT": "300",
+        "NCCL_TIMEOUT": "300",  # 5 minute safe timeout
         "RAY_DISABLE_IMPORT_WARNING": "1",
         "RAY_memory_monitor_refresh_ms": "0",
         "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
@@ -132,6 +181,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         # Reduce Ray logging verbosity
         "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver (reduce terminal noise)
         "RAY_DEDUP_LOGS": "1",  # Keep deduplication enabled (shows ... for repeated messages)
+        "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
     }
 
     wandb_api_key = os.environ.get("WANDB_API_KEY")
@@ -198,8 +248,6 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
     candidates.extend(
         [
             "/tmp/ray",
-            "/var/tmp/ray",
-            "/dev/shm/ray",
             home_default,
         ]
     )
@@ -245,10 +293,8 @@ def select_object_spilling_dir(ray_temp_dir: str | None = None) -> str:
     home = str(Path.home())
     candidates = [
         os.path.join(ray_temp_dir or home, "spill"),
-        "/dev/shm/ray_spill",
-        "/tmp/ray_spill",
-        "/var/tmp/ray_spill",
-        f"{home}/ray_spill",
+        "/tmp/ray_spill",  # Usually disk-based, survives reboots
+        f"{home}/ray_spill",  # Fallback on user's home filesystem
     ]
     good = _paths_with_free_space(candidates, min_free_ratio=0.10)
     target = good[0] if good else candidates[-1]

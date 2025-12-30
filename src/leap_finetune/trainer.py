@@ -1,17 +1,19 @@
-import ray
 import os
-import logging
+import psutil
 
+import ray
+import ray.data
 from accelerate.utils import set_seed
 from ray.train import RunConfig, ScalingConfig
 from ray.runtime_env import RuntimeEnv
 from ray.train.torch import TorchTrainer, TorchConfig
 from torch import cuda
 
+from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+from leap_finetune.data_loaders.ray_data_utils import create_ray_datasets
+from leap_finetune.training_loops import TRAINING_LOOPS
 from leap_finetune.utils.constants import RUNTIME_DIR
-from leap_finetune.training_loops.sft_run import sft_run
-from leap_finetune.training_loops.dpo_run import dpo_run
-from leap_finetune.training_loops.vlm_sft_run import vlm_sft_run
+from leap_finetune.utils.logging_utils import worker_process_setup_hook
 from leap_finetune.utils.logging_utils import (
     get_ray_env_vars,
     print_next_steps_panel,
@@ -50,37 +52,58 @@ def ray_trainer(job_config: dict) -> None:
         ray_temp_dir = select_ray_temp_dir(os.path.expanduser("~/ray_temp"))
         spill_dir = select_object_spilling_dir(ray_temp_dir)
 
-        # Reduce Ray logging verbosity
-        ray_logger = logging.getLogger("ray")
-        ray_logger.setLevel(logging.ERROR)  # Only show errors, not INFO/WARNING
-
         runtime_env = RuntimeEnv(
             working_dir=str(RUNTIME_DIR),
             env_vars=get_ray_env_vars(ray_temp_dir),
+            worker_process_setup_hook=worker_process_setup_hook,
         )
+
+        # Calculate system memory for object store
+        object_store_mem = int(psutil.virtual_memory().total * 0.4)
 
         ray.init(
             address="local",
             runtime_env=runtime_env,
             _temp_dir=ray_temp_dir,
             object_spilling_directory=spill_dir,
+            object_store_memory=object_store_mem,
         )
 
-    if training_type == "sft":
-        train_loop = sft_run
-    elif training_type == "dpo":
-        train_loop = dpo_run
-    elif training_type == "vlm_sft":
-        train_loop = vlm_sft_run
-    else:
-        raise ValueError(f"Invalid training type: {training_type}")
+        # Also suppress on driver (must be after ray.init)
+        worker_process_setup_hook()
 
+        # Disable progress bar name truncation warning
+        ray.data.DataContext.get_current().enable_progress_bar_name_truncation = False
+
+    train_loop = TRAINING_LOOPS.get(training_type)
+    if train_loop is None:
+        raise ValueError(
+            f"Invalid training type: {training_type}. "
+            f"Available: {list(TRAINING_LOOPS.keys())}"
+        )
+
+    # Prepare datasets using Ray Data
+    dataset_config = job_config["dataset"]
+
+    if isinstance(dataset_config, DatasetLoader):
+        # New Ray Data path - distributed loading
+        train_ds, eval_ds = create_ray_datasets(dataset_config)
+        datasets = {"train": train_ds, "eval": eval_ds}
+    elif isinstance(dataset_config, tuple):
+        # Legacy path: pre-loaded (Dataset, Dataset) tuple (deprecate eventually)
+        train_hf, eval_hf = dataset_config
+        train_ds = ray.data.from_huggingface(train_hf)
+        eval_ds = ray.data.from_huggingface(eval_hf)
+        datasets = {"train": train_ds, "eval": eval_ds}
+    else:
+        raise ValueError(f"Invalid dataset type: {type(dataset_config)}")
+
+    # Training config
     train_loop_config = {
         "model_name": job_config["model_name"],
         "job_name": job_config.get("job_name", "leap-ft-run"),
         "train_config": job_config["training_config"],
         "peft_config": job_config["peft_config"],
-        "dataset": job_config["dataset"],
     }
 
     scale_config = ScalingConfig(
@@ -100,6 +123,7 @@ def ray_trainer(job_config: dict) -> None:
         scaling_config=scale_config,
         run_config=run_config,
         torch_config=TorchConfig(backend="nccl"),
+        datasets=datasets,  # Ray Data handles sharding
     )
 
     trainer.fit()

@@ -66,7 +66,6 @@ DEFAULT_DPO_CONFIG = {
     "logging_first_step": True,
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
-    "load_best_model_at_end": True,
     "ddp_find_unused_parameters": False,
     "deepspeed": DEEPSPEED_CONFIG,
 }

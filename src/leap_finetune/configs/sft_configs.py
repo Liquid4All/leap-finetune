@@ -84,7 +84,6 @@ DEFAULT_SFT_CONFIG = {
     "logging_first_step": True,  # Log at step 0 to see initial metrics
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
-    "load_best_model_at_end": True,
     "ddp_find_unused_parameters": False,
     "deepspeed": DEEPSPEED_CONFIG,
 }

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import torch
@@ -7,6 +8,8 @@ from transformers import (
     AutoProcessor,
     AutoModelForImageTextToText,
 )
+
+logger = logging.getLogger(__name__)
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -48,42 +51,40 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
 
 def load_vlm_model(
     model_name: str,
+    max_image_tokens: int | None = None,
 ) -> tuple[AutoModelForImageTextToText, AutoProcessor]:
-    """Load a VLM model from the Hugging Face Hub or from a local path"""
+    """Load a VLM model from the Hugging Face Hub or from a local path."""
+
+    processor_kwargs = {"trust_remote_code": True}
+    if max_image_tokens is not None:
+        processor_kwargs["max_image_tokens"] = max_image_tokens
 
     # Check if model_name is a local path
     model_path = Path(model_name)
     if model_path.exists() and model_path.is_dir():
-        # Load from local path (for checkpoints)
-        print(f"Loading model from local path: {model_name}")
+        logger.info(f"Loading VLM from local path: {model_name}")
 
         model = AutoModelForImageTextToText.from_pretrained(
             model_path,
             dtype=torch.bfloat16,
             trust_remote_code=True,
         )
-
-        processor = AutoProcessor.from_pretrained(
-            model_path,
-            trust_remote_code=True,
-            max_image_tokens=256,
-        )
+        processor = AutoProcessor.from_pretrained(model_path, **processor_kwargs)
 
     else:
-        # Load from Hugging Face
         model_id = f"LiquidAI/{model_name}"
-        print(f"Loading model from Hub: {model_id}")
+        logger.info(f"Loading VLM from Hub: {model_id}")
 
         model = AutoModelForImageTextToText.from_pretrained(
             model_id,
             dtype=torch.bfloat16,
             trust_remote_code=True,
         )
+        processor = AutoProcessor.from_pretrained(model_id, **processor_kwargs)
 
-        processor = AutoProcessor.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            max_image_tokens=256,
-        )
+    # Ensure padding is configured correctly
+    processor.tokenizer.padding_side = "right"
+    if processor.tokenizer.pad_token is None:
+        processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
     return model, processor

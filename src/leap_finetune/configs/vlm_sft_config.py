@@ -42,6 +42,7 @@ DEEPSPEED_CONFIG = {
 
 DEFAULT_VLM_SFT_CONFIG = {
     "training_type": "vlm_sft",
+    "max_image_tokens": None,  # None = native resolution; set int to cap vision tokens
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 3,  # 1 to 5 generally (post-training goes for 2-3)
     "per_device_train_batch_size": 4,  # adjust based on context length (post-training goes for 1-2 at 32k context length)
@@ -54,6 +55,9 @@ DEFAULT_VLM_SFT_CONFIG = {
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "gradient_checkpointing": True,
+    "remove_unused_columns": False,  # preserve pixel_values, spatial_shapes, pixel_attention_mask
+    "packing": False,  # packing breaks image-text alignment
+    "dataloader_drop_last": True,  # avoid batch size mismatches in DDP
     "dataset_kwargs": {"skip_prepare_dataset": True},
     "deepspeed": DEEPSPEED_CONFIG,
 }

@@ -1,4 +1,4 @@
-import os
+import logging
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
@@ -6,6 +6,8 @@ from typing import Any, Callable
 from rich.console import Console
 import pandas as pd
 from datasets import Dataset, load_dataset
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -154,12 +156,41 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
 
         return chosen != rejected
 
+    def is_valid_vlm_sft(row: dict) -> bool:
+        """Check if row has valid VLM SFT format with loadable images."""
+        messages = row.get("messages")
+        if not messages or not isinstance(messages, list) or len(messages) == 0:
+            return False
+
+        first = messages[0]
+        if not isinstance(first, dict) or "role" not in first or "content" not in first:
+            return False
+
+        # Import inside function body for Ray serialization compatibility
+        from leap_finetune.data_loaders.image_loader import is_image_loadable
+
+        for message in messages:
+            content = message.get("content", [])
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "image"
+                    and isinstance(item.get("image"), str)
+                ):
+                    if not is_image_loadable(item["image"]):
+                        return False
+        return True
+
     if dataset_type == "sft":
         return is_valid_sft
     elif dataset_type == "dpo":
         return is_valid_dpo
+    elif dataset_type == "vlm_sft":
+        return is_valid_vlm_sft
     else:
-        return lambda row: True  # VLM and others pass through
+        return lambda row: True
 
 
 def normalize_columns(dataset_type: str):
@@ -191,7 +222,7 @@ def normalize_columns(dataset_type: str):
                 row["prompt"] = ""
         return row
 
-    if dataset_type == "sft":
+    if dataset_type in ("sft", "vlm_sft"):
         return normalize_sft
     elif dataset_type == "dpo":
         return add_dpo_prompt
@@ -515,13 +546,15 @@ def validate_vlm_sft_format(dataset: Dataset) -> Dataset:
                                 f"Sample {idx}, message {msg_idx}, content {content_idx}: image must be path string, got {type(image_data)}"
                             )
 
-                    # Check if path exists (optional warning) - only for local paths
-                    if image_data.startswith(("http://", "https://")):
-                        # Skip validation for URLs - they'll be validated during actual loading
-                        pass
-                    elif not os.path.exists(image_data):
-                        print(
-                            f"⚠️  Warning: Local image path does not exist: {image_data}"
+                    # Actually try to load the image to verify it's valid
+                    from leap_finetune.data_loaders.image_loader import (
+                        is_image_loadable,
+                    )
+
+                    if not is_image_loadable(image_data):
+                        logger.warning(
+                            f"Sample {idx}, message {msg_idx}, content {content_idx}: "
+                            f"image not loadable: {image_data}"
                         )
 
                 else:
@@ -529,7 +562,7 @@ def validate_vlm_sft_format(dataset: Dataset) -> Dataset:
                         f"Sample {idx}, message {msg_idx}, content {content_idx}: unsupported content type '{content_type}', expected 'text' or 'image'"
                     )
 
-    print(
-        f"✅ Dataset validation passed! {len(dataset)} samples with expected VLM format"
+    logger.info(
+        f"VLM dataset validation passed: {len(dataset)} samples with expected format"
     )
     return dataset

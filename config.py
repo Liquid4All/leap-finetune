@@ -125,10 +125,10 @@ Args:
 """
 
 JOB_CONFIG = JobConfig(
-    job_name="my_job_name",
-    model_name="LFM2-1.2B",
-    training_type="sft",
-    dataset=example_sft_dataset,
-    training_config=TrainingConfig.MOE_SFT.override(**user_config),
-    peft_config=PeftConfig.DEFAULT_LORA,
+    job_name="test_run",
+    model_name="LFM2.5-VL-1.6B",
+    training_type="vlm_sft",
+    dataset=example_vlm_sft_dataset,
+    training_config=TrainingConfig.DEFAULT_VLM_SFT.override(**user_config),
+    peft_config=PeftConfig.DEFAULT_VLM_LORA,
 )

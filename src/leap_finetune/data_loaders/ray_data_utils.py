@@ -30,6 +30,10 @@ def create_ray_datasets(
         ds = loader.preprocess_fn(ds)
 
     # Filter invalid rows using Ray's native filter (pure Python, Ray handles Arrow)
+    if loader.dataset_type == "vlm_sft":
+        console.print(
+            "[dim]Filtering VLM samples (validating images across workers)...[/dim]"
+        )
     row_filter = get_row_filter(loader.dataset_type)
     ds = ds.filter(row_filter)
 

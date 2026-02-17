@@ -1,9 +1,8 @@
 import copy
 import logging
-import math
 
+import torch
 import ray.train
-from PIL import Image
 from trl import SFTConfig, SFTTrainer
 from ray.train.huggingface.transformers import prepare_trainer
 from ray.train import get_context
@@ -12,56 +11,57 @@ from leap_finetune.data_loaders.image_loader import load_image
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_vlm_model
-from leap_finetune.utils.logging_utils import setup_worker_logging
+from leap_finetune.utils.logging_utils import (
+    init_wandb_if_enabled,
+    setup_worker_logging,
+)
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
-from leap_finetune.utils.logging_utils import init_wandb_if_enabled
 
 logger = logging.getLogger(__name__)
 
 
-def smart_resize_for_training(
-    image: Image.Image,
-    max_tokens: int | None,
-    patch_size: int = 16,
-    patch_multiplier: int = 4,
-) -> Image.Image:
-    """Pre-shrink an image to fit within a vision token budget.
+def _find_template(seq, template):
+    """Yield start indices where template occurs in seq."""
+    tlen = len(template)
+    for i in range(len(seq) - tlen + 1):
+        if seq[i : i + tlen] == template:
+            yield i
 
-    When max_tokens is None, returns the image unchanged (native resolution).
-    Ensures output dimensions are multiples of patch_size and preserves aspect ratio.
+
+def create_collate_fn(processor):
+    """Create a collate function with assistant-only label masking.
+
+    Only assistant content + <|im_end|> contribute to loss (matching liquid-vlm).
+    Images are loaded as PIL and passed to the processor for resize/tiling.
+    Bad samples are skipped with a warning instead of crashing the batch.
     """
-    if max_tokens is None:
-        return image
+    tokenizer = processor.tokenizer
 
-    w, h = image.size
-    if w <= 0 or h <= 0:
-        return image.resize((224, 224), Image.LANCZOS)
+    # ChatML: <|im_start|>assistant\n{content}<|im_end|>\n
+    response_template_ids = tokenizer.encode(
+        "<|im_start|>assistant\n", add_special_tokens=False
+    )
+    end_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
 
-    effective_patch = patch_size * patch_multiplier
-    patches_w = math.ceil(w / effective_patch)
-    patches_h = math.ceil(h / effective_patch)
-    current_tokens = patches_w * patches_h
+    def _build_labels(input_ids):
+        """Mask everything except assistant content + <|im_end|> with -100."""
+        labels = torch.full_like(input_ids, -100)
+        batch_size, seq_len = input_ids.shape
 
-    if current_tokens <= max_tokens:
-        return image
+        for b in range(batch_size):
+            ids = input_ids[b].tolist()
+            for tmpl_start in _find_template(ids, response_template_ids):
+                content_start = tmpl_start + len(response_template_ids)
+                j = content_start
+                while j < seq_len and ids[j] != end_token_id:
+                    j += 1
+                # Unmask content + <|im_end|>
+                content_end = min(j + 1, seq_len)
+                labels[b, content_start:content_end] = input_ids[
+                    b, content_start:content_end
+                ]
 
-    # Scale down to fit within token budget
-    scale = math.sqrt(max_tokens / current_tokens)
-    new_w = max(effective_patch, int(w * scale))
-    new_h = max(effective_patch, int(h * scale))
-
-    # Snap to multiples of patch_size
-    new_w = (new_w // patch_size) * patch_size
-    new_h = (new_h // patch_size) * patch_size
-
-    if new_w <= 0 or new_h <= 0:
-        return image.resize((224, 224), Image.LANCZOS)
-
-    return image.resize((new_w, new_h), Image.LANCZOS)
-
-
-def create_collate_fn(processor, max_image_tokens: int | None = None):
-    """Create a collate function for VLM training with per-sample error handling."""
+        return labels
 
     def collate_fn(samples):
         valid_samples = []
@@ -79,7 +79,6 @@ def create_collate_fn(processor, max_image_tokens: int | None = None):
                                 content["image"], str
                             ):
                                 img = load_image(content["image"])
-                                img = smart_resize_for_training(img, max_image_tokens)
                                 content["image"] = img
                                 loaded_images.append(img)
                 valid_samples.append(sample_copy)
@@ -107,9 +106,7 @@ def create_collate_fn(processor, max_image_tokens: int | None = None):
                 return_tensors="pt",
                 padding=True,
             )
-            labels = batch["input_ids"].clone()
-            labels[labels == processor.tokenizer.pad_token_id] = -100
-            batch["labels"] = labels
+            batch["labels"] = _build_labels(batch["input_ids"])
             return batch
 
         finally:
@@ -136,21 +133,24 @@ def vlm_sft_run(training_config: dict) -> None:
     model_name = training_config.get("model_name", "")
     job_name = training_config.get("job_name", "leap-ft-run")
 
-    # Extract max_image_tokens before passing to SFTConfig
-    max_image_tokens = training_config.get("train_config", {}).get("max_image_tokens")
+    # Extract VLM-specific params
+    train_config = training_config.get("train_config", {})
+    max_image_tokens = train_config.get("max_image_tokens")
+    do_image_splitting = train_config.get("do_image_splitting", True)
 
     # Filter out non-SFTConfig parameters
-    excluded_keys = {"training_type", "wandb_logging", "max_image_tokens"}
+    excluded_keys = {
+        "training_type",
+        "wandb_logging",
+        "max_image_tokens",
+        "do_image_splitting",
+    }
     train_config_filtered = {
-        k: v
-        for k, v in training_config.get("train_config").items()
-        if k not in excluded_keys
+        k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
-    # Configure wandb reporting if enabled via config
-    wandb_logging = bool(
-        training_config.get("train_config", {}).get("wandb_logging", False)
-    )
+    # Configure wandb
+    wandb_logging = bool(train_config.get("wandb_logging", False))
     init_wandb_if_enabled(job_name, wandb_logging)
 
     # Build training args
@@ -161,18 +161,17 @@ def vlm_sft_run(training_config: dict) -> None:
     }
     training_args = SFTConfig(**config_kwargs)
 
-    # Load model
-    model, processor = load_vlm_model(model_name, max_image_tokens=max_image_tokens)
-
-    # === Model config safety ===
-    model.config.do_image_splitting = False
-    if hasattr(model.config, "max_tiles"):
-        model.config.max_tiles = 1
+    # Load model + processor
+    model, processor = load_vlm_model(
+        model_name,
+        max_image_tokens=max_image_tokens,
+        do_image_splitting=do_image_splitting,
+    )
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
 
-    collate_fn = create_collate_fn(processor, max_image_tokens=max_image_tokens)
+    collate_fn = create_collate_fn(processor)
 
     # Initialize trainer
     trainer = SFTTrainer(
@@ -204,7 +203,7 @@ def vlm_sft_run(training_config: dict) -> None:
                 "Training was successful - error occurred in post-training synchronization"
             )
         else:
-            raise e
+            raise
 
     # Save PEFT model if applicable
     if peft_config:

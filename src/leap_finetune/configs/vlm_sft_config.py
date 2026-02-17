@@ -42,7 +42,8 @@ DEEPSPEED_CONFIG = {
 
 DEFAULT_VLM_SFT_CONFIG = {
     "training_type": "vlm_sft",
-    "max_image_tokens": None,  # None = native resolution; set int to cap vision tokens
+    "max_image_tokens": None,  # None = processor default (256); set int to override
+    "do_image_splitting": True,  # split large images into tiles (matches liquid-vlm pretraining)
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 3,  # 1 to 5 generally (post-training goes for 2-3)
     "per_device_train_batch_size": 4,  # adjust based on context length (post-training goes for 1-2 at 32k context length)

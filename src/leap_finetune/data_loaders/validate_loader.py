@@ -157,30 +157,44 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
         return chosen != rejected
 
     def is_valid_vlm_sft(row: dict) -> bool:
-        """Check if row has valid VLM SFT format with loadable images."""
+        """Check if row has valid VLM SFT format with loadable images.
+
+        Validates every message for structure (role, content list, typed items)
+        and every image for loadability.
+        """
         messages = row.get("messages")
         if not messages or not isinstance(messages, list) or len(messages) == 0:
-            return False
-
-        first = messages[0]
-        if not isinstance(first, dict) or "role" not in first or "content" not in first:
             return False
 
         # Import inside function body for Ray serialization compatibility
         from leap_finetune.data_loaders.image_loader import is_image_loadable
 
         for message in messages:
-            content = message.get("content", [])
-            if not isinstance(content, list):
-                continue
+            if not isinstance(message, dict):
+                return False
+            if "role" not in message or "content" not in message:
+                return False
+
+            content = message["content"]
+            if not isinstance(content, list) or len(content) == 0:
+                return False
+
             for item in content:
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "image"
-                    and isinstance(item.get("image"), str)
-                ):
+                if not isinstance(item, dict) or "type" not in item:
+                    return False
+
+                item_type = item["type"]
+                if item_type == "image":
+                    if not isinstance(item.get("image"), str):
+                        return False
                     if not is_image_loadable(item["image"]):
                         return False
+                elif item_type == "text":
+                    if not isinstance(item.get("text"), str):
+                        return False
+                else:
+                    return False
+
         return True
 
     if dataset_type == "sft":
@@ -552,7 +566,7 @@ def validate_vlm_sft_format(dataset: Dataset) -> Dataset:
                     )
 
                     if not is_image_loadable(image_data):
-                        logger.warning(
+                        raise ValueError(
                             f"Sample {idx}, message {msg_idx}, content {content_idx}: "
                             f"image not loadable: {image_data}"
                         )

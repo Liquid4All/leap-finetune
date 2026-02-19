@@ -25,6 +25,12 @@ class DatasetLoader:
     # Applied before validation - use for custom filtering, transforms, joins, etc.
     preprocess_fn: Callable | None = field(default=None, repr=False)
 
+    def __post_init__(self):
+        if not (0 < self.test_size < 1):
+            raise ValueError(
+                f"test_size must be between 0 and 1 (exclusive), got {self.test_size}"
+            )
+
     def quick_validate(self) -> None:
         """Fast validation on ~10 samples. Raises ValueError on issues."""
         quick_validate_schema(

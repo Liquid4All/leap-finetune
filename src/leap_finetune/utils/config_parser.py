@@ -49,7 +49,7 @@ def generate_run_name(
 
     if learning_rate:
         lr_val = str(learning_rate)
-        lr_clean = lr_val.replace("-", "0")
+        lr_clean = lr_val.replace("e-", "em").replace("-", "")
         lr_str = f"lr{lr_clean}"
     else:
         lr_str = "lr_def"
@@ -84,9 +84,16 @@ def parse_job_config(config_input: str) -> JobConfig:
     dataset_path_env = os.getenv("DATASET_PATH")
     final_dataset_path = dataset_path_env if dataset_path_env else ds_config.get("path")
 
+    valid_types = {"sft", "dpo", "vlm_sft"}
+    ds_type = ds_config.get("type")
+    if ds_type not in valid_types:
+        raise ValueError(
+            f"Invalid dataset type: '{ds_type}'. Must be one of: {sorted(valid_types)}"
+        )
+
     dataset = DatasetLoader(
         dataset_path=final_dataset_path,
-        dataset_type=ds_config.get("type"),
+        dataset_type=ds_type,
         limit=ds_config.get("limit"),
         test_size=ds_config.get("test_size", 0.2),
         subset=ds_config.get("subset"),

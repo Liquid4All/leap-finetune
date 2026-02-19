@@ -20,16 +20,13 @@ class JobConfig:
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
 
     def __post_init__(self):
-        if isinstance(self.dataset, DatasetLoader):
-            self.dataset = self.dataset.load()
-
         self._validate_job_name()
         self._validate_training_config()
 
     def _validate_job_name(self):
         if not all(c.isalnum() or c in "-_" for c in self.job_name):
             raise ValueError(
-                "Only letters, numbers, hyphens, and underscores in job name"
+                f"Invalid job name '{self.job_name}': only letters, numbers, hyphens, and underscores allowed"
             )
 
     def _validate_training_config(self):
@@ -73,7 +70,7 @@ class JobConfig:
         peft_details = ""
         if peft_enabled:
             peft_value = self.peft_config.value
-            if hasattr(peft_value, "r"):
+            if hasattr(peft_value, "r") and hasattr(peft_value, "lora_alpha"):
                 peft_details = f" (r={peft_value.r}, alpha={peft_value.lora_alpha})"
 
         table = Table(show_header=False, box=None, padding=(0, 2))
@@ -104,7 +101,11 @@ class JobConfig:
         table.add_row("PEFT", peft_status)
 
         # Dataset info
-        if isinstance(self.dataset, tuple):
+        if isinstance(self.dataset, DatasetLoader):
+            table.add_row("Dataset Path", self.dataset.dataset_path)
+            if self.dataset.limit:
+                table.add_row("Dataset Limit", f"{self.dataset.limit:,}")
+        elif isinstance(self.dataset, tuple):
             table.add_row("Train Samples", f"{len(self.dataset[0]):,}")
             table.add_row("Test Samples", f"{len(self.dataset[1]):,}")
 

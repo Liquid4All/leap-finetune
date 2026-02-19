@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import torch
@@ -7,13 +8,24 @@ from transformers import (
     AutoProcessor,
     AutoModelForImageTextToText,
 )
+from transformers.utils import is_flash_attn_2_available
 
+logger = logging.getLogger(__name__)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def _get_attn_implementation() -> str:
+    if is_flash_attn_2_available():
+        return "flash_attention_2"
+    logger.warning("flash-attn not available, falling back to sdpa")
+    return "sdpa"
+
+
 def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """Load a model from the Hugging Face Hub or from a local path"""
+
+    attn_impl = _get_attn_implementation()
 
     # Check if model_name is a local path
     model_path = Path(model_name)
@@ -21,7 +33,11 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
         # Load from local path (for checkpoints)
         print(f"Loading model from local path: {model_name}")
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            dtype=torch.bfloat16,
+            attn_implementation=attn_impl,
+        )
         # Disable use_cache for training compatibility (gradient checkpointing requires this)
         model.config.use_cache = False
 
@@ -32,11 +48,21 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
         model_id = f"LiquidAI/{model_name}"
         print(f"Loading model from Hub: {model_id}")
 
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype=torch.bfloat16,
+            attn_implementation=attn_impl,
+        )
         # Disable use_cache for training compatibility (gradient checkpointing requires this)
         model.config.use_cache = False
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+    # Disable grouped_mm MoE dispatch added in transformers v5 — it batches all
+    # expert computations via grouped matmul which has higher peak memory. The
+    # eager path processes experts sequentially and fits within 80 GB/GPU.
+    if hasattr(model, "set_experts_implementation"):
+        model.set_experts_implementation("eager")
 
     print(f"Architecture: {model.config.architectures[0]}")
     print(f"Model type: {model.config.model_type}")
@@ -51,6 +77,8 @@ def load_vlm_model(
 ) -> tuple[AutoModelForImageTextToText, AutoProcessor]:
     """Load a VLM model from the Hugging Face Hub or from a local path"""
 
+    attn_impl = _get_attn_implementation()
+
     # Check if model_name is a local path
     model_path = Path(model_name)
     if model_path.exists() and model_path.is_dir():
@@ -60,6 +88,7 @@ def load_vlm_model(
         model = AutoModelForImageTextToText.from_pretrained(
             model_path,
             dtype=torch.bfloat16,
+            attn_implementation=attn_impl,
             trust_remote_code=True,
         )
 
@@ -77,6 +106,7 @@ def load_vlm_model(
         model = AutoModelForImageTextToText.from_pretrained(
             model_id,
             dtype=torch.bfloat16,
+            attn_implementation=attn_impl,
             trust_remote_code=True,
         )
 

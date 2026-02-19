@@ -1,0 +1,30 @@
+project_name: "my_sft_project"
+model_name: "LFM2-1.2B"
+training_type: "sft"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  limit: 1000
+  test_size: 0.2
+  subset: "all"
+
+training_config:
+  extends: "DEFAULT_SFT"
+  num_train_epochs: 3
+  per_device_train_batch_size: 2
+  learning_rate: 2e-5
+
+peft_config:
+  extends: "DEFAULT_LORA"
+  use_peft: true
+
+# SLURM configuration - will be used to generate SLURM script
+slurm:
+  job_name: "sft_training"
+  nodes: 1
+  ntasks_per_node: 1
+  gpus_per_task: 4
+  cpus_per_gpu: 14
+  output: "logs/OUT_%x.%j"
+  error: "logs/ERR_%x.%j"

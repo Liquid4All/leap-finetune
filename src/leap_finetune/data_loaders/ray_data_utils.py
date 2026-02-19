@@ -1,6 +1,11 @@
+import types
+
 import ray.data
+import torch
+import torch.distributed as dist
 from datasets import Dataset
 from rich.console import Console
+from torch.utils.data import DataLoader, RandomSampler
 
 from .dataset_loader import DatasetLoader
 from .validate_loader import get_row_filter, normalize_columns
@@ -68,6 +73,49 @@ def create_ray_datasets(
     )
 
     return train_ds, eval_ds
+
+
+def patch_train_dataloader(trainer) -> None:
+    """
+    Override get_train_dataloader to skip accelerator.prepare().
+
+    Ray Data already shards across workers (each gets 1/N of data).
+    Without this patch, accelerator.prepare() wraps the DataLoader with
+    BatchSamplerShard, splitting each shard by N again → 1/N² per worker.
+
+    TEMPORARY: proper fix is to run tokenization/packing as a Ray .map() step
+    so iter_torch_batches works directly with prepare_trainer.
+    """
+
+    def get_train_dataloader(self):
+        dataset = self.train_dataset
+        if hasattr(self, "_remove_unused_columns"):
+            dataset = self._remove_unused_columns(dataset, description="training")
+
+        # Sync packed dataset length across workers to prevent NCCL deadlocks.
+        # BFD packing produces slightly different row counts per shard.
+        # Without sync, workers finish at different steps and gradient
+        # all_reduce hangs waiting for the worker that finished early.
+        if dist.is_initialized():
+            local_len = torch.tensor(
+                len(dataset), dtype=torch.long, device=self.args.device
+            )
+            dist.all_reduce(local_len, op=dist.ReduceOp.MIN)
+            min_len = int(local_len.item())
+            if len(dataset) > min_len:
+                dataset = dataset.select(range(min_len))
+
+        return DataLoader(
+            dataset,
+            batch_size=self._train_batch_size,
+            sampler=RandomSampler(dataset),
+            collate_fn=self.data_collator,
+            drop_last=self.args.dataloader_drop_last,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+        )
+
+    trainer.get_train_dataloader = types.MethodType(get_train_dataloader, trainer)
 
 
 def ray_dataset_to_hf(ray_ds) -> Dataset:

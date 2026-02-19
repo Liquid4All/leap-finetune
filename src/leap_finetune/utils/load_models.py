@@ -58,9 +58,7 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    # Disable grouped_mm MoE dispatch added in transformers v5 — it batches all
-    # expert computations via grouped matmul which has higher peak memory. The
-    # eager path processes experts sequentially and fits within 80 GB/GPU.
+    # Enforce eager expert routing for MoE (transformers v5)
     if hasattr(model, "set_experts_implementation"):
         model.set_experts_implementation("eager")
 

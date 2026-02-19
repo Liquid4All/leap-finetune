@@ -28,9 +28,7 @@ def sft_run(training_config: dict) -> None:
     train_ds_ray = ray.train.get_dataset_shard("train")
     train_dataset = ray_dataset_to_hf(train_ds_ray)
 
-    # Use the full (non-sharded) eval dataset so all FSDP ranks get identical
-    # data and identical batch counts, preventing NCCL deadlocks from TRL's
-    # per-step gather_for_metrics calls during eval.
+    # Use the full (non-sharded) eval dataset
     eval_rows = training_config.get("eval_data", [])
     test_dataset = Dataset.from_list(eval_rows) if eval_rows else None
 
@@ -60,7 +58,6 @@ def sft_run(training_config: dict) -> None:
     init_wandb_if_enabled(job_name, wandb_logging)
 
     # Default eval batch size to train batch size to avoid OOM during eval
-    # (HF Trainer defaults eval batch size to 8 which is too large for long-context models)
     if "per_device_eval_batch_size" not in train_config_filtered:
         train_config_filtered["per_device_eval_batch_size"] = train_config_filtered.get(
             "per_device_train_batch_size", 1

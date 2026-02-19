@@ -28,9 +28,7 @@ def dpo_run(training_config: dict) -> None:
     train_ds_ray = ray.train.get_dataset_shard("train")
     train_dataset = ray_dataset_to_hf(train_ds_ray)
 
-    # Use the full (non-sharded) eval dataset so all FSDP ranks get identical
-    # data and identical batch counts, preventing NCCL deadlocks from TRL's
-    # per-step gather_for_metrics calls during eval.
+    # Use the full (non-sharded) eval dataset
     eval_rows = training_config.get("eval_data", [])
     test_dataset = Dataset.from_list(eval_rows) if eval_rows else None
 

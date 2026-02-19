@@ -92,10 +92,7 @@ def patch_train_dataloader(trainer) -> None:
         if hasattr(self, "_remove_unused_columns"):
             dataset = self._remove_unused_columns(dataset, description="training")
 
-        # Sync packed dataset length across workers to prevent NCCL deadlocks.
-        # BFD packing produces slightly different row counts per shard.
-        # Without sync, workers finish at different steps and gradient
-        # all_reduce hangs waiting for the worker that finished early.
+        # Sync packed dataset length across workers to prevent NCCL deadlocks
         if dist.is_initialized():
             local_len = torch.tensor(
                 len(dataset), dtype=torch.long, device=self.args.device

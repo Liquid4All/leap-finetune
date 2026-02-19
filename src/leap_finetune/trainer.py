@@ -98,10 +98,7 @@ def ray_trainer(job_config: dict) -> None:
     else:
         raise ValueError(f"Invalid dataset type: {type(dataset_config)}")
 
-    # Materialize eval data so every worker gets the identical copy.
-    # Ray's dataset sharding would give each worker a different-sized shard,
-    # which causes NCCL deadlocks during eval when FSDP ranks have uneven
-    # batch counts (TRL's SFTTrainer calls gather_for_metrics per eval step).
+    # Materialize eval data so every worker gets the identical copy
     eval_rows = eval_ds.take_all()
 
     # Training config

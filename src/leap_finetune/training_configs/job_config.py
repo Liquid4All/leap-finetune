@@ -1,27 +1,17 @@
 from dataclasses import dataclass
 from typing import Any, Literal
-from pathlib import Path
 
 from datasets import Dataset
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from leap_finetune.configs import PeftConfig, TrainingConfig
+from leap_finetune.training_configs import PeftConfig, TrainingConfig
 from leap_finetune.data_loaders.dataset_loader import DatasetLoader
-
-
-def is_job_name_unique(output_dir: str) -> bool:
-    """
-    Checks if a job with the given name exists for a given training type.
-    """
-    return not Path(output_dir).exists()
 
 
 @dataclass
 class JobConfig:
-    """Job configuration with validation"""
-
     job_name: str
     model_name: str = "LFM2-1.2B"
     training_type: Literal["sft", "dpo", "vlm_sft"] = "sft"
@@ -30,41 +20,30 @@ class JobConfig:
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
 
     def __post_init__(self):
-        self.training_config.value["output_dir"] = str(
-            Path(self.training_config.value.get("output_dir")) / self.job_name
-        )
+        if isinstance(self.dataset, DatasetLoader):
+            self.dataset = self.dataset.load()
+
         self._validate_job_name()
         self._validate_training_config()
 
     def _validate_job_name(self):
-        # Check for filesystem unsafe characters
         if not all(c.isalnum() or c in "-_" for c in self.job_name):
             raise ValueError(
                 "Only letters, numbers, hyphens, and underscores in job name"
             )
 
-        # Check if job dir already exists - warn but don't fail
-        # (Ray workers might import config after directory is created)
-        if not is_job_name_unique(self.training_config.value.get("output_dir")):
-            raise ValueError(
-                "Job output directory already exists\n"
-                "This might be from a previous run or concurrent Ray worker initialization."
-            )
-
     def _validate_training_config(self):
-        """Validate training config matches training type"""
-
         config_value = self.training_config.value
 
         if isinstance(config_value, dict):
             config_training_type = config_value.get("training_type")
             if config_training_type and config_training_type != self.training_type:
                 raise ValueError(
-                    f"Training config type '{config_training_type}' doesn't match job training type '{self.training_type}'"
+                    f"Training config type '{config_training_type}' doesn't match "
+                    f"job training type '{self.training_type}'"
                 )
 
-    def to_dict(self, dataset=None) -> dict[str, Any]:
-        """Convert to config dict for ray_trainer."""
+    def to_dict(self, dataset: tuple[Dataset, Dataset] | None = None) -> dict[str, Any]:
         dataset_to_use = dataset if dataset is not None else self.dataset
 
         return {
@@ -77,33 +56,55 @@ class JobConfig:
         }
 
     def print_config_summary(self):
-        """Print summary of current configuration"""
         console = Console()
-        output_dir = self.training_config.value.get("output_dir")
+
+        config_value = self.training_config.value
+        output_dir = config_value.get("output_dir")
+
+        learning_rate = config_value.get("learning_rate")
+        batch_size = config_value.get("per_device_train_batch_size")
+        num_epochs = config_value.get("num_train_epochs")
+        warmup_ratio = config_value.get("warmup_ratio")
+        warmup_steps = config_value.get("warmup_steps")
+        save_strategy = config_value.get("save_strategy", "no")
+        eval_strategy = config_value.get("eval_strategy", "no")
+
+        peft_enabled = self.peft_config and self.peft_config.value
+        peft_details = ""
+        if peft_enabled:
+            peft_value = self.peft_config.value
+            if hasattr(peft_value, "r"):
+                peft_details = f" (r={peft_value.r}, alpha={peft_value.lora_alpha})"
 
         table = Table(show_header=False, box=None, padding=(0, 2))
-        table.add_column("Property", style="bold cyan", min_width=15)
+        table.add_column("Property", style="bold cyan", min_width=18)
         table.add_column("Value", style="green")
 
         table.add_row("Model", self.model_name)
         table.add_row("Job Name", self.job_name)
         table.add_row("Training Type", self.training_type.upper())
         table.add_row("Output Directory", str(output_dir))
-        table.add_row(
-            "PEFT",
-            "✅ Enabled"
-            if self.peft_config and self.peft_config.value
-            else "❌ Disabled",
-        )
 
-        # Dataset info - handle both DatasetLoader and tuple
-        if isinstance(self.dataset, DatasetLoader):
-            table.add_row("Dataset", self.dataset.dataset_path)
-            if self.dataset.limit:
-                table.add_row("Limit", f"{self.dataset.limit:,} samples")
-            table.add_row("Test Size", f"{self.dataset.test_size:.0%}")
-        # Legacy path: pre-loaded (Dataset, Dataset) tuple (deprecate eventually)
-        elif isinstance(self.dataset, tuple):
+        if learning_rate is not None:
+            table.add_row("Learning Rate", f"{learning_rate:.2e}")
+        if batch_size is not None:
+            table.add_row("Batch Size", f"{batch_size}")
+        if num_epochs is not None:
+            table.add_row("Epochs", f"{num_epochs}")
+        if warmup_ratio is not None:
+            table.add_row("Warmup Ratio", f"{warmup_ratio:.2f}")
+        elif warmup_steps is not None:
+            table.add_row("Warmup Steps", f"{warmup_steps}")
+        if save_strategy != "no":
+            table.add_row("Save Strategy", save_strategy)
+        if eval_strategy != "no":
+            table.add_row("Eval Strategy", eval_strategy)
+
+        peft_status = f"Enabled{peft_details}" if peft_enabled else "Disabled"
+        table.add_row("PEFT", peft_status)
+
+        # Dataset info
+        if isinstance(self.dataset, tuple):
             table.add_row("Train Samples", f"{len(self.dataset[0]):,}")
             table.add_row("Test Samples", f"{len(self.dataset[1]):,}")
 

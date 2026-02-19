@@ -40,7 +40,7 @@ DEEPSPEED_CONFIG = {
 ########################
 
 
-DEFAULT_VLM_SFT_CONFIG = {
+DEFAULT_VLM_SFT = {
     "training_type": "vlm_sft",
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 3,  # 1 to 5 generally (post-training goes for 2-3)

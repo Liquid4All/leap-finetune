@@ -1,4 +1,4 @@
-from leap_finetune.utils.constants import SFT_OUTPUT_PATH
+from leap_finetune.utils.constants import DPO_OUTPUT_PATH
 
 
 ########################
@@ -15,15 +15,6 @@ DEEPSPEED_CONFIG = {
     "train_micro_batch_size_per_gpu": "auto",
     "gradient_clipping": "auto",
     "gradient_accumulation_steps": "auto",
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": "auto",  # Uses learning_rate from training config
-            "betas": "auto",  # DEFAULT: (0.9, 0.999)
-            "eps": "auto",  # DEFAULT: 1e-8
-            "weight_decay": "auto",  # DEFAULT: 0.01
-        },
-    },
     "bf16": {"enabled": "auto"},
     "activation_checkpointing": {
         "partition_activations": False,
@@ -45,16 +36,7 @@ MOE_DEEPSPEED_CONFIG = {
     "train_micro_batch_size_per_gpu": "auto",
     "gradient_clipping": "auto",
     "gradient_accumulation_steps": "auto",
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": "auto",  # Uses learning_rate from training config
-            "betas": "auto",  # DEFAULT: (0.9, 0.999)
-            "eps": "auto",  # DEFAULT: 1e-8
-            "weight_decay": "auto",  # DEFAULT: 0.01
-        },
-    },
-    "fp16": {"enabled": "auto"},
+    "bf16": {"enabled": "auto"},
     "activation_checkpointing": {
         "partition_activations": False,
         "cpu_checkpointing": False,
@@ -67,21 +49,21 @@ MOE_DEEPSPEED_CONFIG = {
 
 
 ########################
-#     SFT CONFIGS      #
+#     DPO CONFIGS      #
 ########################
 
 
-DEFAULT_SFT_CONFIG = {
-    "training_type": "sft",
-    "output_dir": SFT_OUTPUT_PATH,
-    "num_train_epochs": 3,  # 1 to 5 generally (post-training goes for 2-3)
-    "per_device_train_batch_size": 16,  # adjust based on context length (post-training goes for 1-2 at 32k context length)
-    "learning_rate": 5e-5,  # anything from 1e-5 to 5e-5 seems ok. "end_learning_rate" would be 1e-7, not easy to set up with out-of-the-box SFTConfig
+DEFAULT_DPO = {
+    "training_type": "dpo",
+    "output_dir": DPO_OUTPUT_PATH,
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 8,
+    "learning_rate": 1e-6,
     "lr_scheduler_type": "linear",
-    "warmup_steps": 100,
-    "warmup_ratio": 0.2,
-    "logging_steps": 10,  # Log training metrics every 10 steps
-    "logging_first_step": True,  # Log at step 0 to see initial metrics
+    "beta": 0.1,
+    "loss_type": "sigmoid",
+    "logging_steps": 10,
+    "logging_first_step": True,
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "ddp_find_unused_parameters": False,
@@ -90,22 +72,22 @@ DEFAULT_SFT_CONFIG = {
 
 
 ########################
-#   MOE SFT CONFIGS    #
+#   MOE DPO CONFIGS    #
 ########################
 
-# Base MoE SFT config - distributed strategy is applied automatically in runner
+# Base MoE DPO config - distributed strategy is applied automatically in runner
 # based on PEFT presence: DeepSpeed for LoRA, FSDP for full fine-tuning
-MOE_SFT_CONFIG = {
-    "training_type": "sft",
-    "output_dir": SFT_OUTPUT_PATH,
+MOE_DPO = {
+    "training_type": "dpo",
+    "output_dir": DPO_OUTPUT_PATH,
     "num_train_epochs": 2,  # MoE models typically need fewer epochs
-    "per_device_train_batch_size": 2,  # Reduced to save memory
-    "gradient_accumulation_steps": 1,  # Set to 1 to match Accelerate config for testing
-    "learning_rate": 5e-5,
+    "per_device_train_batch_size": 2,  # MoE models are larger, use smaller batch size
+    "learning_rate": 1e-6,
     "lr_scheduler_type": "linear",
-    "warmup_steps": 100,
-    "warmup_ratio": 0.2,
+    "beta": 0.1,
+    "loss_type": "sigmoid",
     "logging_steps": 10,
+    "logging_first_step": True,
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "load_best_model_at_end": True,

@@ -47,7 +47,6 @@ DEFAULT_VLM_SFT = {
     "per_device_train_batch_size": 4,  # adjust based on context length (post-training goes for 1-2 at 32k context length)
     "learning_rate": 5e-5,  # anything from 1e-5 to 5e-5 seems ok. "end_learning_rate" would be 1e-7, not easy to set up with out-of-the-box SFTConfig
     "lr_scheduler_type": "linear",
-    "warmup_steps": 100,
     "warmup_ratio": 0.2,
     "logging_steps": 10,
     "logging_first_step": True,

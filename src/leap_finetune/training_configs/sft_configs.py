@@ -78,7 +78,6 @@ DEFAULT_SFT = {
     "per_device_train_batch_size": 16,  # adjust based on context length (post-training goes for 1-2 at 32k context length)
     "learning_rate": 5e-5,  # anything from 1e-5 to 5e-5 seems ok. "end_learning_rate" would be 1e-7, not easy to set up with out-of-the-box SFTConfig
     "lr_scheduler_type": "linear",
-    "warmup_steps": 100,
     "warmup_ratio": 0.2,
     "logging_steps": 10,  # Log training metrics every 10 steps
     "logging_first_step": True,  # Log at step 0 to see initial metrics
@@ -103,7 +102,6 @@ MOE_SFT = {
     "gradient_accumulation_steps": 1,  # Set to 1 to match Accelerate config for testing
     "learning_rate": 5e-5,
     "lr_scheduler_type": "linear",
-    "warmup_steps": 100,
     "warmup_ratio": 0.2,
     "logging_steps": 10,
     "save_strategy": "epoch",

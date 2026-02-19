@@ -88,15 +88,21 @@ def ray_trainer(job_config: dict) -> None:
     if isinstance(dataset_config, DatasetLoader):
         # New Ray Data path - distributed loading
         train_ds, eval_ds = create_ray_datasets(dataset_config)
-        datasets = {"train": train_ds, "eval": eval_ds}
+        datasets = {"train": train_ds}
     elif isinstance(dataset_config, tuple):
         # Legacy path: pre-loaded (Dataset, Dataset) tuple (deprecate eventually)
         train_hf, eval_hf = dataset_config
         train_ds = ray.data.from_huggingface(train_hf)
         eval_ds = ray.data.from_huggingface(eval_hf)
-        datasets = {"train": train_ds, "eval": eval_ds}
+        datasets = {"train": train_ds}
     else:
         raise ValueError(f"Invalid dataset type: {type(dataset_config)}")
+
+    # Materialize eval data so every worker gets the identical copy.
+    # Ray's dataset sharding would give each worker a different-sized shard,
+    # which causes NCCL deadlocks during eval when FSDP ranks have uneven
+    # batch counts (TRL's SFTTrainer calls gather_for_metrics per eval step).
+    eval_rows = eval_ds.take_all()
 
     # Training config
     train_loop_config = {
@@ -104,6 +110,7 @@ def ray_trainer(job_config: dict) -> None:
         "job_name": job_config.get("job_name", "leap-ft-run"),
         "train_config": job_config["training_config"],
         "peft_config": job_config["peft_config"],
+        "eval_data": eval_rows,
     }
 
     scale_config = ScalingConfig(

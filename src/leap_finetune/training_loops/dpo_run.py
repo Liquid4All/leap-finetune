@@ -1,13 +1,17 @@
 from typing import cast
 
 import ray.train
+from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 from ray.train.huggingface.transformers import prepare_trainer
 from ray.train import get_context
 
 from leap_finetune.configs.distributed_configs import MOE_FSDP_CONFIG
-from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
+from leap_finetune.data_loaders.ray_data_utils import (
+    patch_train_dataloader,
+    ray_dataset_to_hf,
+)
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import init_wandb_if_enabled
@@ -20,13 +24,15 @@ def dpo_run(training_config: dict) -> None:
     """DPO training loop for Ray Train"""
     setup_worker_logging()
 
-    # Get sharded datasets for this worker
+    # Get sharded training data for this worker
     train_ds_ray = ray.train.get_dataset_shard("train")
-    eval_ds_ray = ray.train.get_dataset_shard("eval")
-
-    # Materialize to HuggingFace Datasets for TRL
     train_dataset = ray_dataset_to_hf(train_ds_ray)
-    test_dataset = ray_dataset_to_hf(eval_ds_ray)
+
+    # Use the full (non-sharded) eval dataset so all FSDP ranks get identical
+    # data and identical batch counts, preventing NCCL deadlocks from TRL's
+    # per-step gather_for_metrics calls during eval.
+    eval_rows = training_config.get("eval_data", [])
+    test_dataset = Dataset.from_list(eval_rows) if eval_rows else None
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -52,6 +58,12 @@ def dpo_run(training_config: dict) -> None:
         training_config.get("train_config", {}).get("wandb_logging", False)
     )
     init_wandb_if_enabled(job_name, wandb_logging)
+
+    # Default eval batch size to train batch size to avoid OOM during eval
+    if "per_device_eval_batch_size" not in train_config_filtered:
+        train_config_filtered["per_device_eval_batch_size"] = train_config_filtered.get(
+            "per_device_train_batch_size", 1
+        )
 
     # Build training args
     config_kwargs = {
@@ -83,6 +95,7 @@ def dpo_run(training_config: dict) -> None:
     # Add Ray checkpoint callback and prepare for distributed training
     trainer.add_callback(LeapCheckpointCallback())
     trainer = prepare_trainer(trainer)
+    patch_train_dataloader(trainer)
     try:
         trainer.train()
         print("✅ Training completed successfully")

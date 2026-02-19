@@ -167,13 +167,13 @@ Default base configs live in [`src/leap_finetune/training_configs/`](./src/leap_
 
 The `dataset.path` field in your YAML config accepts local files, HuggingFace Hub IDs, and cloud storage URIs:
 
-| Source | Example `path` |
-| --- | --- |
-| Local file | `/path/to/data.jsonl`, `/path/to/data.parquet` |
-| HuggingFace Hub | `HuggingFaceTB/smoltalk` |
-| S3 | `s3://bucket/path/to/data.parquet` |
-| GCS | `gs://bucket/path/to/data.parquet` |
-| Azure | `az://container/path/to/data.parquet` |
+| Source          | Example `path`                                 |
+| --------------- | ---------------------------------------------- |
+| Local file      | `/path/to/data.jsonl`, `/path/to/data.parquet` |
+| HuggingFace Hub | `HuggingFaceTB/smoltalk`                       |
+| S3              | `s3://bucket/path/to/data.parquet`             |
+| GCS             | `gs://bucket/path/to/data.parquet`             |
+| Azure           | `az://container/path/to/data.parquet`          |
 
 Cloud storage requires appropriate credentials (AWS, GCP, or Azure). Use `subset` for HuggingFace datasets with multiple configs, and `limit` to cap the number of samples for quick testing.
 

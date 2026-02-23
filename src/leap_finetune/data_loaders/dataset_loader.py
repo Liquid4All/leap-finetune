@@ -135,6 +135,9 @@ class DatasetLoader:
                 total_items += len(df)
                 progress.update(task, items=f"{total_items:,}")
 
+                if self.limit and total_items >= self.limit:
+                    break
+
         return ray.data.from_pandas_refs(refs)
 
     def _is_local_file(self, path: str) -> bool:

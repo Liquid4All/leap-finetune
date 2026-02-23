@@ -1,5 +1,7 @@
 import argparse
 import os
+import pathlib
+import subprocess
 import sys
 
 import yaml
@@ -27,8 +29,6 @@ def check_and_handle_slurm(config_path_arg: str) -> bool:
         slurm_config = config_dict.get("slurm")
         if not slurm_config:
             return False
-
-        import subprocess
 
         from leap_finetune.utils.slurm_generator import generate_slurm_script
 
@@ -94,8 +94,6 @@ def main() -> None:
             config_path_arg = sys.argv[1]
 
     if command == "slurm":
-        import pathlib
-
         from leap_finetune.utils.config_parser import resolve_config_path
         from leap_finetune.utils.slurm_generator import generate_slurm_script
 
@@ -126,21 +124,25 @@ def main() -> None:
         print("   or: leap-finetune slurm <path_to_config.yaml>")
         sys.exit(1)
 
-    # Now import heavy dependencies and run training
+    # Heavy imports deferred to here to keep slurm codepath fast
+    # (these transitively load torch, ray, peft, datasets, etc.)
+    from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+    from leap_finetune.trainer import ray_trainer
+    from leap_finetune.utils.config_parser import parse_job_config
     from leap_finetune.utils.logging_utils import setup_training_environment
 
     setup_training_environment()
 
-    from leap_finetune.trainer import ray_trainer  # noqa
-    from leap_finetune.utils.constants import LEAP_FINETUNE_DIR  # noqa
-
     print("Launching leap-finetune")
-
-    from leap_finetune.utils.config_parser import parse_job_config
 
     try:
         job_config = parse_job_config(config_path_arg)
         job_config.print_config_summary()
+
+        # Validate dataset schema before starting Ray (fast, ~10 samples)
+        if isinstance(job_config.dataset, DatasetLoader):
+            job_config.dataset.quick_validate()
+
         job_config_dict = job_config.to_dict()
     except FileNotFoundError:
         raise FileNotFoundError(f"Config file not found at: {config_path_arg}")

@@ -5,7 +5,7 @@ MHA_MODULES = ["q_proj", "k_proj", "v_proj", "out_proj"]
 CONV_MODULES = ["in_proj", "out_proj"]
 
 
-LFM2_LORA_DEFAULT_CONFIG = LoraConfig(
+DEFAULT_LORA = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     inference_mode=False,
     r=8,
@@ -14,7 +14,7 @@ LFM2_LORA_DEFAULT_CONFIG = LoraConfig(
     target_modules=GLU_MODULES + MHA_MODULES + CONV_MODULES,
 )
 
-LFM2_LORA_HIGH_R_CONFIG = LoraConfig(
+HIGH_R_LORA = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     inference_mode=False,
     r=16,
@@ -28,11 +28,21 @@ LFM_MODULES = ["q_proj", "k_proj", "v_proj", "out_proj", "in_proj"]
 VISION_TOWER_MODULES = ["fc1", "fc2"]
 MULTI_MODAL_PROJECTOR_MODULES = ["linear_1", "linear_2"]
 
-LFM2_VLM_LORA_CONFIG = LoraConfig(
+DEFAULT_VLM_LORA = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     inference_mode=False,
     r=8,
     lora_alpha=16,
+    lora_dropout=0.1,
+    bias="none",
+    target_modules=LFM_MODULES + VISION_TOWER_MODULES + MULTI_MODAL_PROJECTOR_MODULES,
+)
+
+MINIMAL_VLM_LORA = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    inference_mode=False,
+    r=4,
+    lora_alpha=8,
     lora_dropout=0.1,
     bias="none",
     target_modules=LFM_MODULES + VISION_TOWER_MODULES + MULTI_MODAL_PROJECTOR_MODULES,
@@ -43,7 +53,7 @@ LFM2_VLM_LORA_CONFIG = LoraConfig(
 #     MOE CONFIGS      #
 ########################
 
-LFM2_MOE_LORA_CONFIG = LoraConfig(
+MOE_LORA = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     inference_mode=False,
     r=8,
@@ -53,7 +63,7 @@ LFM2_MOE_LORA_CONFIG = LoraConfig(
     target_modules="all-linear",  # Target all linear layers in MoE architecture
 )
 
-LFM2_MOE_LORA_HIGH_R_CONFIG = LoraConfig(
+MOE_LORA_HIGH_R = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     inference_mode=False,
     r=16,

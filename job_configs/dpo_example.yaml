@@ -1,0 +1,20 @@
+project_name: "my_dpo_project"
+model_name: "LFM2-1.2B"
+training_type: "dpo"
+
+dataset:
+  path: "mlabonne/orpo-dpo-mix-40k"
+  type: "dpo"
+  limit: 1000
+  test_size: 0.2
+  subset: "default"
+
+training_config:
+  extends: "DEFAULT_DPO"
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  learning_rate: 1e-6
+
+peft_config:
+  extends: "DEFAULT_LORA"
+  use_peft: true

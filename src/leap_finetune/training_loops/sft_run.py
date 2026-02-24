@@ -4,13 +4,12 @@ import ray.train
 from transformers import PreTrainedTokenizerBase
 from trl import SFTConfig, SFTTrainer
 from ray.train.huggingface.transformers import prepare_trainer
-from ray.train import get_context
 
-from leap_finetune.configs.distributed_configs import MOE_FSDP_CONFIG
+from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_model
-from leap_finetune.utils.logging_utils import init_wandb_if_enabled
+from leap_finetune.utils.logging_utils import init_wandb_if_enabled, is_rank_zero
 from leap_finetune.utils.logging_utils import setup_worker_logging
 from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
@@ -36,8 +35,13 @@ def sft_run(training_config: dict) -> None:
     is_moe = is_moe_model_from_name(model_name)
     use_fsdp = is_moe and peft_config is None
 
+    # Extract run name template before filtering
+    run_name_template = training_config.get("train_config", {}).get(
+        "leap_run_name_template"
+    )
+
     # Filter out non-SFTConfig parameters
-    excluded_keys = {"training_type", "wandb_logging"}
+    excluded_keys = {"training_type", "wandb_logging", "leap_run_name_template"}
     if use_fsdp:
         excluded_keys.add("deepspeed")  # Remove deepspeed when using FSDP
 
@@ -80,8 +84,8 @@ def sft_run(training_config: dict) -> None:
         processing_class=cast(PreTrainedTokenizerBase, tokenizer),
     )
 
-    # Add Ray checkpoint callback and prepare for distributed training
-    trainer.add_callback(LeapCheckpointCallback())
+    # Add checkpoint callback (handles Ray reporting + rename) then prepare for distributed training
+    trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
     trainer = prepare_trainer(trainer)
     try:
         trainer.train()
@@ -102,8 +106,7 @@ def sft_run(training_config: dict) -> None:
             raise e
 
     # Save PEFT model if applicable
-    if peft_config:
-        ctx = get_context()
-        is_rank_zero = ctx is None or ctx.get_world_rank() == 0
-        if is_rank_zero:
-            merge_and_save_peft_model(model, tokenizer, training_args.output_dir)
+    if peft_config and is_rank_zero():
+        merge_and_save_peft_model(
+            model, tokenizer, training_args.output_dir, run_name_template
+        )

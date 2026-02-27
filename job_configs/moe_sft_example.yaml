@@ -1,0 +1,20 @@
+project_name: "my_moe_sft_project"
+model_name: "LFM2-8B-A1B"
+training_type: "sft"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  limit: 1000
+  test_size: 0.2
+  subset: "all"
+
+training_config:
+  extends: "MOE_SFT"
+  num_train_epochs: 2
+  per_device_train_batch_size: 2
+  learning_rate: 5e-5
+
+peft_config:
+  extends: "MOE_LORA"
+  use_peft: true

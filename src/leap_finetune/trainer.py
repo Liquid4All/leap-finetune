@@ -4,15 +4,16 @@ import psutil
 import ray
 import ray.data
 from accelerate.utils import set_seed
+from torch import cuda
 from ray.train import CheckpointConfig, RunConfig, ScalingConfig
 from ray.runtime_env import RuntimeEnv
 from ray.train.torch import TorchTrainer, TorchConfig
-from torch import cuda
 
 from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 from leap_finetune.data_loaders.ray_data_utils import create_ray_datasets
 from leap_finetune.training_loops import TRAINING_LOOPS
 from leap_finetune.utils.constants import RUNTIME_DIR
+from leap_finetune.utils.load_models import load_tokenizer
 from leap_finetune.utils.logging_utils import worker_process_setup_hook
 from leap_finetune.utils.logging_utils import (
     get_ray_env_vars,
@@ -36,13 +37,6 @@ def ray_trainer(job_config: dict) -> None:
     output_dir = job_config["training_config"]["output_dir"]
 
     set_seed(42)
-    num_gpus = cuda.device_count()
-
-    if not cuda.is_available():
-        raise ValueError("No GPU available for training")
-
-    ray_temp_dir = os.path.expanduser("~/ray_temp")
-    os.makedirs(ray_temp_dir, exist_ok=True)
 
     if not ray.is_initialized():
         # Force local init and avoid accidental cluster connects
@@ -84,31 +78,40 @@ def ray_trainer(job_config: dict) -> None:
 
     # Prepare datasets using Ray Data
     dataset_config = job_config["dataset"]
+    training_config = job_config["training_config"]
+
+    # Load tokenizer on driver for pre-tokenization (lightweight, no model weights)
+    tokenizer = load_tokenizer(job_config["model_name"])
 
     if isinstance(dataset_config, DatasetLoader):
-        # New Ray Data path - distributed loading
-        train_ds, eval_ds = create_ray_datasets(dataset_config)
-        datasets = {"train": train_ds}
+        # Pre-tokenize SFT and DPO on driver; VLM passes through
+        use_pretokenize = training_type in ("sft", "dpo")
+        train_ds, eval_ds = create_ray_datasets(
+            dataset_config,
+            tokenizer=tokenizer if use_pretokenize else None,
+            training_config=training_config if use_pretokenize else None,
+        )
+        datasets = {"train": train_ds, "eval": eval_ds}
     elif isinstance(dataset_config, tuple):
         # Legacy path: pre-loaded (Dataset, Dataset) tuple (deprecate eventually)
         train_hf, eval_hf = dataset_config
         train_ds = ray.data.from_huggingface(train_hf)
         eval_ds = ray.data.from_huggingface(eval_hf)
-        datasets = {"train": train_ds}
+        datasets = {"train": train_ds, "eval": eval_ds}
     else:
         raise ValueError(f"Invalid dataset type: {type(dataset_config)}")
-
-    # Materialize eval data so every worker gets the identical copy
-    eval_rows = eval_ds.take_all()
 
     # Training config
     train_loop_config = {
         "model_name": job_config["model_name"],
         "job_name": job_config.get("job_name", "leap-ft-run"),
-        "train_config": job_config["training_config"],
+        "train_config": training_config,
         "peft_config": job_config["peft_config"],
-        "eval_data": eval_rows,
     }
+
+    num_gpus = cuda.device_count()
+    if not cuda.is_available():
+        raise ValueError("No GPU available for training")
 
     scale_config = ScalingConfig(
         num_workers=num_gpus, use_gpu=True, resources_per_worker={"GPU": 1.0}
@@ -132,7 +135,7 @@ def ray_trainer(job_config: dict) -> None:
         scaling_config=scale_config,
         run_config=run_config,
         torch_config=TorchConfig(backend="nccl"),
-        datasets=datasets,  # Ray Data handles sharding
+        datasets=datasets,
     )
 
     trainer.fit()

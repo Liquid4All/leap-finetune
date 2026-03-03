@@ -1,48 +1,149 @@
-import types
+import hashlib
+import json
+import logging
 
 import ray.data
-import torch
-import torch.distributed as dist
 from datasets import Dataset
 from rich.console import Console
-from torch.utils.data import DataLoader, RandomSampler
+
+from leap_finetune.utils.constants import TOKENIZATION_CACHE_DIR
 
 from .dataset_loader import DatasetLoader
+from .tokenize_data import tokenize_and_pack_sft, tokenize_dpo_dataset
 from .validate_loader import get_row_filter, normalize_columns
+
+logger = logging.getLogger(__name__)
+
+
+# === Tokenization Cache ===
+
+
+def _build_cache_key(
+    loader: DatasetLoader,
+    shuffle_seed: int,
+    tokenizer_id: str,
+    training_config: dict,
+) -> tuple[str, dict]:
+    """Build a deterministic cache key from all parameters affecting tokenized output."""
+    dataset_type = loader.dataset_type
+
+    key = {
+        "dataset_path": loader.dataset_path,
+        "subset": loader.subset,
+        "split": loader.split,
+        "limit": loader.limit,
+        "test_size": loader.test_size,
+        "dataset_type": dataset_type,
+        "tokenizer": tokenizer_id,
+        "shuffle_seed": shuffle_seed,
+    }
+
+    if dataset_type == "sft":
+        key["max_length"] = training_config.get("max_length", 2048)
+        key["packing"] = training_config.get("packing", False)
+    elif dataset_type == "dpo":
+        key["max_prompt_length"] = training_config.get("max_prompt_length")
+        key["max_completion_length"] = training_config.get("max_completion_length")
+
+    canonical = json.dumps(key, sort_keys=True)
+    fingerprint = hashlib.sha256(canonical.encode()).hexdigest()[:16]
+    return fingerprint, key
+
+
+def _try_load_cache(
+    fingerprint: str,
+) -> tuple[ray.data.Dataset, ray.data.Dataset] | None:
+    """Load cached train/eval parquet if the cache directory exists."""
+    cache_dir = TOKENIZATION_CACHE_DIR / fingerprint
+    train_dir = cache_dir / "train"
+    eval_dir = cache_dir / "eval"
+
+    if not train_dir.exists() or not eval_dir.exists():
+        return None
+
+    try:
+        train_ds = ray.data.read_parquet(str(train_dir))
+        eval_ds = ray.data.read_parquet(str(eval_dir))
+        return train_ds, eval_ds
+    except Exception:
+        logger.warning("Failed to read tokenization cache, will re-tokenize")
+        return None
+
+
+def _save_cache(
+    fingerprint: str,
+    train_ds: ray.data.Dataset,
+    eval_ds: ray.data.Dataset,
+    key_dict: dict,
+) -> None:
+    """Write train/eval datasets as parquet into the cache directory."""
+    cache_dir = TOKENIZATION_CACHE_DIR / fingerprint
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    train_ds.write_parquet(str(cache_dir / "train"))
+    eval_ds.write_parquet(str(cache_dir / "eval"))
+
+    (cache_dir / "fingerprint.json").write_text(json.dumps(key_dict, indent=2))
 
 
 def create_ray_datasets(
     loader: DatasetLoader,
     shuffle_seed: int = 42,
+    tokenizer=None,
+    training_config: dict | None = None,
 ) -> tuple[ray.data.Dataset, ray.data.Dataset]:
     """
     Create validated, shuffled, split Ray Datasets from a DatasetLoader.
 
-    Pipeline: quick_validate → load → [preprocess] → filter → normalize → shuffle → split
+    Pipeline: quick_validate → load → [preprocess] → filter → normalize → shuffle → split → [tokenize/pack]
 
-    Uses Ray Data native operations (filter/map) - no pandas/arrow imports needed.
+    When tokenizer is provided, tokenization and optional packing happen
+    centrally before sharding, producing equal-length shards (±1 row).
+    Tokenized results are cached as Parquet for subsequent runs.
     """
     console = Console()
 
+    # === Check tokenization cache ===
+    use_pretokenize = tokenizer is not None and training_config is not None
+    can_cache = use_pretokenize and loader.preprocess_fn is None
+    fingerprint = None
+    key_dict = None
+
+    if can_cache:
+        fingerprint, key_dict = _build_cache_key(
+            loader, shuffle_seed, tokenizer.name_or_path, training_config
+        )
+        cached = _try_load_cache(fingerprint)
+        if cached is not None:
+            train_ds, eval_ds = cached
+            train_count = train_ds.count()
+            eval_count = eval_ds.count()
+            console.print(
+                f"[green]✓ Cache hit[/green] [dim]({fingerprint})[/dim]: "
+                f"{train_count + eval_count:,} samples "
+                f"(train: {train_count:,}, eval: {eval_count:,})"
+            )
+            return train_ds, eval_ds
+        logger.info(
+            "Tokenization cache miss (%s), will tokenize and cache", fingerprint
+        )
+
+    # === Full pipeline: load → filter → normalize → shuffle → split → tokenize ===
+
+    loader.quick_validate()
     ds = loader.to_ray_dataset()
 
-    # Apply user preprocessing if provided (before validation)
     if loader.preprocess_fn is not None:
         console.print("[dim]Applying preprocessing...[/dim]")
         ds = loader.preprocess_fn(ds)
 
-    # Filter invalid rows using Ray's native filter (pure Python, Ray handles Arrow)
     row_filter = get_row_filter(loader.dataset_type)
     ds = ds.filter(row_filter)
 
-    # Normalize column names
     normalizer = normalize_columns(loader.dataset_type)
     ds = ds.map(normalizer)
 
-    # Shuffle before split
     ds = ds.random_shuffle(seed=shuffle_seed)
-
-    # Materialize to get count
     total_count = ds.count()
 
     if total_count == 0:
@@ -51,7 +152,6 @@ def create_ray_datasets(
             f"the expected format for dataset_type='{loader.dataset_type}'"
         )
 
-    # Calculate split sizes
     eval_count = max(1, int(total_count * loader.test_size))
     train_count = total_count - eval_count
 
@@ -61,7 +161,6 @@ def create_ray_datasets(
             f"with test_size={loader.test_size}"
         )
 
-    # Split into train/eval
     train_ds, eval_ds = ds.split_at_indices([train_count])
 
     console.print(
@@ -69,47 +168,45 @@ def create_ray_datasets(
         f"(train: {train_count:,}, eval: {eval_count:,})"
     )
 
-    return train_ds, eval_ds
+    # === Pre-tokenize if tokenizer provided ===
+    if use_pretokenize:
+        dataset_type = loader.dataset_type
 
+        if dataset_type == "sft":
+            max_length = training_config.get("max_length", 2048)
+            packing = training_config.get("packing", False)
 
-def patch_train_dataloader(trainer) -> None:
-    """
-    Override get_train_dataloader to skip accelerator.prepare().
-
-    Ray Data already shards across workers (each gets 1/N of data).
-    Without this patch, accelerator.prepare() wraps the DataLoader with
-    BatchSamplerShard, splitting each shard by N again → 1/N² per worker.
-
-    TEMPORARY: proper fix is to run tokenization/packing as a Ray .map() step
-    so iter_torch_batches works directly with prepare_trainer.
-    """
-
-    def get_train_dataloader(self):
-        dataset = self.train_dataset
-        if hasattr(self, "_remove_unused_columns"):
-            dataset = self._remove_unused_columns(dataset, description="training")
-
-        # Sync packed dataset length across workers to prevent NCCL deadlocks
-        if dist.is_initialized():
-            local_len = torch.tensor(
-                len(dataset), dtype=torch.long, device=self.args.device
+            console.print(
+                f"[dim]Tokenizing SFT (max_length={max_length}, packing={packing})...[/dim]"
             )
-            dist.all_reduce(local_len, op=dist.ReduceOp.MIN)
-            min_len = int(local_len.item())
-            if len(dataset) > min_len:
-                dataset = dataset.select(range(min_len))
+            train_ds = tokenize_and_pack_sft(train_ds, tokenizer, max_length, packing)
+            eval_ds = tokenize_and_pack_sft(
+                eval_ds, tokenizer, max_length, packing=False
+            )
 
-        return DataLoader(
-            dataset,
-            batch_size=self._train_batch_size,
-            sampler=RandomSampler(dataset),
-            collate_fn=self.data_collator,
-            drop_last=self.args.dataloader_drop_last,
-            num_workers=self.args.dataloader_num_workers,
-            pin_memory=self.args.dataloader_pin_memory,
-        )
+        elif dataset_type == "dpo":
+            max_prompt_length = training_config.get("max_prompt_length")
+            max_completion_length = training_config.get("max_completion_length")
 
-    trainer.get_train_dataloader = types.MethodType(get_train_dataloader, trainer)
+            console.print("[dim]Tokenizing DPO...[/dim]")
+            train_ds = tokenize_dpo_dataset(
+                train_ds, tokenizer, max_prompt_length, max_completion_length
+            )
+            eval_ds = tokenize_dpo_dataset(
+                eval_ds, tokenizer, max_prompt_length, max_completion_length
+            )
+
+        # === Save to cache ===
+        if can_cache and fingerprint is not None:
+            try:
+                _save_cache(fingerprint, train_ds, eval_ds, key_dict)
+                console.print(f"[dim]Cached tokenized data ({fingerprint})[/dim]")
+            except Exception:
+                logger.warning(
+                    "Failed to write tokenization cache, continuing without cache"
+                )
+
+    return train_ds, eval_ds
 
 
 def ray_dataset_to_hf(ray_ds) -> Dataset:

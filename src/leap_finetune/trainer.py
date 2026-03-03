@@ -52,8 +52,8 @@ def ray_trainer(job_config: dict) -> None:
             worker_process_setup_hook=worker_process_setup_hook,
         )
 
-        # Calculate system memory for object store
-        object_store_mem = int(psutil.virtual_memory().total * 0.4)
+        # Object store: 40% of available memory (not total, to avoid OOM on shared nodes)
+        object_store_mem = int(psutil.virtual_memory().available * 0.4)
 
         ray.init(
             address="local",

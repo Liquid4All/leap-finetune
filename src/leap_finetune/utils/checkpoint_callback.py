@@ -56,8 +56,8 @@ class LeapCheckpointCallback(TrainerCallback):
             print(f"Checkpoint saved: {checkpoint_path}")
             print(f"   Metrics: {self.metrics}")
 
-            if self.on_checkpoint_saved:
-                self.on_checkpoint_saved(checkpoint_path, self.metrics.copy())
+            if self.run_name_template and _is_local_path(args.output_dir):
+                self._rename_checkpoint(args, state)
 
         # Report metrics only — HF Trainer already saved checkpoint to output_dir.
         # Passing checkpoint=None avoids Ray duplicating files into ray_logs/.

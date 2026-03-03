@@ -1,35 +1,39 @@
 from typing import cast
 
 import ray.train
-from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 from ray.train.huggingface.transformers import prepare_trainer
 
-from leap_finetune.configs.distributed_configs import MOE_FSDP_CONFIG
-from leap_finetune.data_loaders.ray_data_utils import (
-    patch_train_dataloader,
-    ray_dataset_to_hf,
-)
+from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
+from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_model
-from leap_finetune.utils.logging_utils import init_wandb_if_enabled, is_rank_zero
-from leap_finetune.utils.logging_utils import setup_worker_logging
+from leap_finetune.utils.logging_utils import (
+    init_wandb_if_enabled,
+    is_rank_zero,
+    setup_worker_logging,
+)
 from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 
 
+class PreTokenizedDPOTrainer(DPOTrainer):
+    """DPOTrainer that skips internal tokenization for pre-tokenized data."""
+
+    def _prepare_dataset(self, dataset, *args, **kwargs):
+        return dataset
+
+
 def dpo_run(training_config: dict) -> None:
-    """DPO training loop for Ray Train"""
+    """DPO training loop — pre-tokenized data + DPOTrainer."""
     setup_worker_logging()
 
-    # Get sharded training data for this worker
+    # Get pre-tokenized shards for this worker
     train_ds_ray = ray.train.get_dataset_shard("train")
+    eval_ds_ray = ray.train.get_dataset_shard("eval")
     train_dataset = ray_dataset_to_hf(train_ds_ray)
-
-    # Use the full (non-sharded) eval dataset
-    eval_rows = training_config.get("eval_data", [])
-    test_dataset = Dataset.from_list(eval_rows) if eval_rows else None
+    eval_dataset = ray_dataset_to_hf(eval_ds_ray)
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -47,7 +51,7 @@ def dpo_run(training_config: dict) -> None:
     # Filter out non-DPOConfig parameters
     excluded_keys = {"training_type", "wandb_logging", "leap_run_name_template"}
     if use_fsdp:
-        excluded_keys.add("deepspeed")  # Remove deepspeed when using FSDP
+        excluded_keys.add("deepspeed")
 
     train_config_filtered = {
         k: v
@@ -85,22 +89,25 @@ def dpo_run(training_config: dict) -> None:
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
 
-    # Initialize trainer
-    trainer = DPOTrainer(
+    # DPOTrainer.__init__ expects model.warnings_issued (set by HF Trainer),
+    # but some model architectures don't have it yet at init time
+    if not hasattr(model, "warnings_issued"):
+        model.warnings_issued = {}
+
+    # Pre-tokenized data — use subclass that skips _prepare_dataset
+    trainer = PreTokenizedDPOTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=test_dataset,
+        eval_dataset=eval_dataset,
         processing_class=cast(PreTrainedTokenizerBase, tokenizer),
     )
 
-    # Add checkpoint callback (handles Ray reporting + rename) then prepare for distributed training
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
     trainer = prepare_trainer(trainer)
-    patch_train_dataloader(trainer)
     try:
         trainer.train()
-        print("✅ Training completed successfully")
+        print("Training completed successfully")
     except RuntimeError as e:
         error_msg = str(e)
         if any(
@@ -108,10 +115,10 @@ def dpo_run(training_config: dict) -> None:
             for keyword in ["cuda error", "ecc error", "nccl", "collective", "timeout"]
         ):
             print(
-                f"⚠️  Training completed but hit distributed communication error during cleanup: {error_msg}"
+                f"Training completed but hit distributed communication error during cleanup: {error_msg}"
             )
             print(
-                "✅ Training was successful - error occurred in post-training synchronization"
+                "Training was successful - error occurred in post-training synchronization"
             )
         else:
             raise e

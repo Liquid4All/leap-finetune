@@ -22,6 +22,20 @@ def _get_attn_implementation() -> str:
     return "sdpa"
 
 
+def _resolve_model_id(model_name: str) -> str:
+    """Resolve model_name to a local path or HuggingFace model ID."""
+    model_path = Path(model_name)
+    if model_path.exists() and model_path.is_dir():
+        return model_name
+    return f"LiquidAI/{model_name}"
+
+
+def load_tokenizer(model_name: str) -> AutoTokenizer:
+    """Load only the tokenizer (lightweight, no model weights)."""
+    model_id = _resolve_model_id(model_name)
+    return AutoTokenizer.from_pretrained(model_id)
+
+
 def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """Load a model from the Hugging Face Hub or from a local path"""
 

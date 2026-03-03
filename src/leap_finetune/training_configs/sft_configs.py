@@ -1,5 +1,23 @@
 from leap_finetune.utils.constants import SFT_OUTPUT_PATH
 
+# Keys that exist in SFTConfig but not in TrainingArguments.
+# Must be filtered out when building TrainingArguments for plain Trainer.
+SFT_EXCLUDED_KEYS = {
+    "training_type",
+    "wandb_logging",
+    "packing",
+    "max_length",
+    "packing_strategy",
+    "eval_packing",
+    "padding_free",
+    "shuffle_dataset",
+    "dataset_text_field",
+    "dataset_kwargs",
+    "dataset_num_proc",
+    "completion_only_loss",
+    "assistant_only_loss",
+}
+
 
 ########################
 #   DEEPSPEED CONFIGS   #

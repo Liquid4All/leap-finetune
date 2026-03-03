@@ -3,11 +3,9 @@ import re
 import shutil
 
 from ray import train
-from ray.train import Checkpoint
 from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 
-from leap_finetune.utils.logging_utils import is_rank_zero
 
 _CLOUD_PREFIXES = ("s3://", "gs://", "az://", "abfs://", "abfss://", "hdfs://")
 
@@ -53,27 +51,17 @@ class LeapCheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> None:
-        checkpoint = None
-        checkpoint_path = None
-        rank_zero = is_rank_zero()
-
-        if rank_zero:
+        if train.get_context().get_world_rank() == 0:
             checkpoint_path = f"{args.output_dir}/checkpoint-{state.global_step}"
-            checkpoint = Checkpoint(path=checkpoint_path)
+            print(f"Checkpoint saved: {checkpoint_path}")
+            print(f"   Metrics: {self.metrics}")
 
-        # Report to Ray Train (all ranks must call this)
-        train.report(metrics=self.metrics.copy(), checkpoint=checkpoint)
-        self.metrics = {}
+            if self.on_checkpoint_saved:
+                self.on_checkpoint_saved(checkpoint_path, self.metrics.copy())
 
-        # === Rename + symlink (rank 0, local paths only) ===
-        if not rank_zero:
-            return
-        if not self.run_name_template:
-            return
-        if not _is_local_path(args.output_dir):
-            return
-
-        self._rename_checkpoint(args, state)
+        # Report metrics only — HF Trainer already saved checkpoint to output_dir.
+        # Passing checkpoint=None avoids Ray duplicating files into ray_logs/.
+        train.report(metrics=self.metrics.copy(), checkpoint=None)
 
     def _rename_checkpoint(self, args: TrainingArguments, state: TrainerState) -> None:
         output_path = pathlib.Path(args.output_dir)

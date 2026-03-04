@@ -105,7 +105,9 @@ def create_ray_datasets(
 
     # === Check tokenization cache ===
     use_pretokenize = tokenizer is not None and training_config is not None
-    can_cache = use_pretokenize and loader.preprocess_fn is None
+    can_cache = (
+        use_pretokenize and loader.cache_tokenization and loader.preprocess_fn is None
+    )
     fingerprint = None
     key_dict = None
 

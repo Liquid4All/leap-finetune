@@ -37,7 +37,12 @@ def _get_source_type(dataset_path: str) -> str:
             return "azure"
         return "cloud"
     elif Path(dataset_path).exists() or dataset_path.startswith(("./", "/", "~")):
+        p = Path(dataset_path)
         if path_lower.endswith(".parquet"):
+            return "parquet"
+        elif p.is_dir() and (
+            list(p.glob("*.parquet")) or list(p.glob("*.pq"))
+        ):
             return "parquet"
         else:
             return "jsonl"
@@ -108,15 +113,33 @@ def _load_sample_dataset(
                 return Dataset.from_list(rows)
 
         elif source_type in ("parquet", "jsonl"):
-            # Local file - use HuggingFace
-            path_lower = dataset_path.lower()
-            if path_lower.endswith(".parquet"):
-                file_type = "parquet"
+            # Local file or directory
+            p = Path(dataset_path)
+            if source_type == "parquet":
+                if p.is_dir():
+                    # Directory of parquets: read first shard
+                    parquet_files = sorted(p.glob("*.parquet")) + sorted(
+                        p.glob("*.pq")
+                    )
+                    if not parquet_files:
+                        raise ValueError(
+                            f"No parquet files found in directory: {dataset_path}"
+                        )
+                    pf = pq.ParquetFile(parquet_files[0])
+                    batch = next(pf.iter_batches(batch_size=num_samples))
+                    return Dataset.from_pandas(batch.to_pandas())
+                else:
+                    return load_dataset(
+                        "parquet",
+                        data_files=dataset_path,
+                        split=f"{split}[:{num_samples}]",
+                    )
             else:
-                file_type = "json"
-            return load_dataset(
-                file_type, data_files=dataset_path, split=f"{split}[:{num_samples}]"
-            )
+                return load_dataset(
+                    "json",
+                    data_files=dataset_path,
+                    split=f"{split}[:{num_samples}]",
+                )
 
         else:
             # HuggingFace Hub - use streaming then convert to Dataset

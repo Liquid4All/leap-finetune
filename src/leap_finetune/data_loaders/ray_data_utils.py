@@ -137,7 +137,7 @@ def create_ray_datasets(
 
     if loader.preprocess_fn is not None:
         console.print("[dim]Applying preprocessing...[/dim]")
-        ds = loader.preprocess_fn(ds)
+        ds = ds.map(loader.preprocess_fn)
 
     # Normalize column names/formats before filtering
     # (handles JSON string conversations, column renames, image_root prefix)

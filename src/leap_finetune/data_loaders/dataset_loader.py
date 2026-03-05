@@ -54,9 +54,16 @@ class DatasetLoader:
         path = self.dataset_path
 
         if self._is_local_file(path):
+            p = Path(path)
             if path.endswith((".parquet", ".pq")):
                 console.print(f"[dim]Reading parquet: {path}[/dim]")
                 ds = ray.data.read_parquet(path)
+            elif p.is_dir() and any(p.glob("*.parquet")):
+                parquet_files = sorted(str(f) for f in p.glob("*.parquet"))
+                console.print(
+                    f"[dim]Reading {len(parquet_files)} parquet shards from: {path}[/dim]"
+                )
+                ds = ray.data.read_parquet(parquet_files)
             else:
                 console.print(f"[dim]Reading JSONL: {path}[/dim]")
                 ds = ray.data.read_json(path)

@@ -61,12 +61,15 @@ def generate_slurm_script(
     for directive in additional_directives:
         script_content += f"#SBATCH {directive}\n"
 
+    setup_commands = slurm_config.get("setup_commands", [])
+    setup_block = "\n".join(setup_commands) + "\n" if setup_commands else ""
+
     script_content += f"""
 cd {project_root}
 
 source .venv/bin/activate
 
-# Set flag to prevent recursive SLURM submission
+{setup_block}# Set flag to prevent recursive SLURM submission
 export LEAP_FINETUNE_FROM_SLURM=1
 
 uv run leap-finetune {config_relative_path}

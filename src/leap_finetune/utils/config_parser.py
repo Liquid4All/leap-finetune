@@ -109,6 +109,13 @@ def parse_job_config(config_input: str) -> JobConfig:
         cache_dataset=ds_config.get("cache_dataset", False),
     )
 
+    # Set preprocess_fn if specified in YAML
+    preprocess_name = ds_config.get("preprocess")
+    if preprocess_name:
+        from leap_finetune.data_loaders.preprocess_fns import get_preprocess_fn
+
+        dataset.preprocess_fn = get_preprocess_fn(preprocess_name, ds_config)
+
     # === Training config with extends support ===
     train_config_dict = config_dict.get("training_config", {})
     training_type = config_dict.get("training_type", "sft")

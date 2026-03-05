@@ -43,6 +43,7 @@ class DatasetLoader:
             split=self.split,
             num_samples=10,
             image_root=self.image_root,
+            preprocess_fn=self.preprocess_fn,
         )
 
     def to_ray_dataset(self):

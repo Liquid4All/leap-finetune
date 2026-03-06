@@ -3,7 +3,7 @@ from typing import cast
 import ray.train
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
-from trl import DPOConfig, DPOTrainer as _BaseDPOTrainer
+from trl import DPOConfig, DPOTrainer
 from ray.train.huggingface.transformers import prepare_trainer
 
 from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
@@ -19,7 +19,7 @@ from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 
 
-class DPOTrainer(_BaseDPOTrainer):
+class LFMDPOTrainer(DPOTrainer):
     """DPOTrainer that skips internal tokenization and bypasses DistributedSampler.
 
     Ray already shards data across workers via get_dataset_shard(), so we return
@@ -117,7 +117,7 @@ def dpo_run(training_config: dict) -> None:
         model.warnings_issued = {}
 
     # Pre-tokenized data — use subclass that skips _prepare_dataset
-    trainer = DPOTrainer(
+    trainer = LFMDPOTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,

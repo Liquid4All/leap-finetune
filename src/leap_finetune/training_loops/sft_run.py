@@ -18,7 +18,7 @@ from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 
 
-class SFTTrainer(Trainer):
+class LFMSFTTrainer(Trainer):
     """Trainer that bypasses DistributedSampler since Ray already shards data."""
 
     def get_train_dataloader(self):
@@ -111,7 +111,7 @@ def sft_run(training_config: dict) -> None:
         padding_free=packing,
     )
 
-    trainer = SFTTrainer(
+    trainer = LFMSFTTrainer(
         model=model,
         processing_class=tokenizer,
         args=training_args,

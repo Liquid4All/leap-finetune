@@ -1,4 +1,5 @@
 import ray.train
+from torch.utils.data import DataLoader
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import Trainer, TrainingArguments
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
@@ -15,6 +16,27 @@ from leap_finetune.utils.logging_utils import (
 )
 from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
+
+
+class LFMSFTTrainer(Trainer):
+    """Trainer that bypasses DistributedSampler since Ray already shards data."""
+
+    def get_train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self._train_batch_size,
+            collate_fn=self.data_collator,
+            shuffle=True,
+        )
+
+    def get_eval_dataloader(self, eval_dataset=None):
+        if eval_dataset is None:
+            eval_dataset = self.eval_dataset
+        return DataLoader(
+            eval_dataset,
+            batch_size=self.args.per_device_eval_batch_size,
+            collate_fn=self.data_collator,
+        )
 
 
 def sft_run(training_config: dict) -> None:
@@ -89,7 +111,7 @@ def sft_run(training_config: dict) -> None:
         padding_free=packing,
     )
 
-    trainer = Trainer(
+    trainer = LFMSFTTrainer(
         model=model,
         processing_class=tokenizer,
         args=training_args,

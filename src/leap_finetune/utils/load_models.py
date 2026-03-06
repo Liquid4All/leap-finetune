@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import torch
@@ -7,36 +8,55 @@ from transformers import (
     AutoProcessor,
     AutoModelForImageTextToText,
 )
+from transformers.utils import is_flash_attn_2_available
 
+logger = logging.getLogger(__name__)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _get_attn_implementation() -> str:
+    if is_flash_attn_2_available():
+        return "flash_attention_2"
+    logger.warning("flash-attn not available, falling back to sdpa")
+    return "sdpa"
+
+
+def _resolve_model_id(model_name: str) -> str:
+    """Resolve model_name to a local path or HuggingFace model ID."""
+    model_path = Path(model_name)
+    if model_path.exists() and model_path.is_dir():
+        return model_name
+    return f"LiquidAI/{model_name}"
+
+
+def load_tokenizer(model_name: str) -> AutoTokenizer:
+    """Load only the tokenizer (lightweight, no model weights)."""
+    model_id = _resolve_model_id(model_name)
+    return AutoTokenizer.from_pretrained(model_id)
 
 
 def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """Load a model from the Hugging Face Hub or from a local path"""
 
-    # Check if model_name is a local path
-    model_path = Path(model_name)
-    if model_path.exists() and model_path.is_dir():
-        # Load from local path (for checkpoints)
-        print(f"Loading model from local path: {model_name}")
+    attn_impl = _get_attn_implementation()
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16)
-        # Disable use_cache for training compatibility (gradient checkpointing requires this)
-        model.config.use_cache = False
+    model_id = _resolve_model_id(model_name)
+    print(f"Loading model: {model_id}")
 
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        dtype=torch.bfloat16,
+        attn_implementation=attn_impl,
+    )
+    # Disable use_cache for training compatibility (gradient checkpointing requires this)
+    model.config.use_cache = False
 
-    else:
-        # Load from Hugging Face
-        model_id = f"LiquidAI/{model_name}"
-        print(f"Loading model from Hub: {model_id}")
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16)
-        # Disable use_cache for training compatibility (gradient checkpointing requires this)
-        model.config.use_cache = False
-
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+    # Enforce eager expert routing for MoE (transformers v5)
+    if hasattr(model, "set_experts_implementation"):
+        model.set_experts_implementation("eager")
 
     print(f"Architecture: {model.config.architectures[0]}")
     print(f"Model type: {model.config.model_type}")
@@ -51,6 +71,8 @@ def load_vlm_model(
 ) -> tuple[AutoModelForImageTextToText, AutoProcessor]:
     """Load a VLM model from the Hugging Face Hub or from a local path"""
 
+    attn_impl = _get_attn_implementation()
+
     # Check if model_name is a local path
     model_path = Path(model_name)
     if model_path.exists() and model_path.is_dir():
@@ -60,6 +82,7 @@ def load_vlm_model(
         model = AutoModelForImageTextToText.from_pretrained(
             model_path,
             dtype=torch.bfloat16,
+            attn_implementation=attn_impl,
             trust_remote_code=True,
         )
 
@@ -77,6 +100,7 @@ def load_vlm_model(
         model = AutoModelForImageTextToText.from_pretrained(
             model_id,
             dtype=torch.bfloat16,
+            attn_implementation=attn_impl,
             trust_remote_code=True,
         )
 

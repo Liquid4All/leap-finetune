@@ -13,7 +13,7 @@ def create_ray_datasets(
     """
     Create validated, shuffled, split Ray Datasets from a DatasetLoader.
 
-    Pipeline: quick_validate → load → [preprocess] → filter → normalize → shuffle → split
+    Pipeline: quick_validate → load → [preprocess] → normalize → filter → shuffle → split
 
     Uses Ray Data native operations (filter/map) - no pandas/arrow imports needed.
     """
@@ -26,6 +26,11 @@ def create_ray_datasets(
         console.print("[dim]Applying preprocessing...[/dim]")
         ds = loader.preprocess_fn(ds)
 
+    # Normalize column names/formats before filtering
+    # (handles JSON string conversations, column renames, image_root prefix)
+    normalizer = normalize_columns(loader.dataset_type, image_root=loader.image_root)
+    ds = ds.map(normalizer)
+
     # Filter invalid rows using Ray's native filter (pure Python, Ray handles Arrow)
     if loader.dataset_type == "vlm_sft":
         console.print(
@@ -33,10 +38,6 @@ def create_ray_datasets(
         )
     row_filter = get_row_filter(loader.dataset_type)
     ds = ds.filter(row_filter)
-
-    # Normalize column names
-    normalizer = normalize_columns(loader.dataset_type)
-    ds = ds.map(normalizer)
 
     # Shuffle before split
     ds = ds.random_shuffle(seed=shuffle_seed)

@@ -124,7 +124,6 @@ MOE_SFT = {
     "logging_steps": 10,
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
-    "load_best_model_at_end": True,
     "max_grad_norm": 1.0,
     "bf16": True,
     # Distributed strategy will be set automatically:

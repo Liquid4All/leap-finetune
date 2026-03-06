@@ -1,5 +1,5 @@
 import json
-import os
+import logging
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
@@ -9,6 +9,8 @@ import pandas as pd
 import pyarrow.parquet as pq
 from datasets import Dataset, load_dataset
 from rich.console import Console
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -49,12 +51,15 @@ def quick_validate_schema(
     subset: str | None = None,
     split: str = "train",
     num_samples: int = 10,
+    image_root: str | None = None,
 ) -> None:
     """
     Fast schema validation on small sample. Fails fast on obvious errors.
     Runs in main process before Ray starts.
 
     Uses the same thorough validation as full validation, just on fewer samples.
+    Applies normalization first (column renames, JSON parsing, image_root) so
+    raw dataset formats are accepted.
     """
     console = Console()
 
@@ -67,6 +72,10 @@ def quick_validate_schema(
 
     if len(sample_ds) == 0:
         raise ValueError(f"Dataset appears to be empty: {dataset_path}")
+
+    # Normalize before validation (handles JSON strings, column renames, image_root)
+    normalizer = normalize_columns(dataset_type, image_root=image_root)
+    sample_ds = sample_ds.map(normalizer)
 
     # Use the same validation as full validation
     validate_dataset_format(sample_ds, dataset_type)
@@ -137,7 +146,7 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
         """Check if row has valid SFT conversational format."""
         # Find the messages column
         messages = None
-        for col in ["messages", "conversations", "chat", "dialogue"]:
+        for col in ["messages", "conversation", "conversations", "chat", "dialogue"]:
             if col in row and row[col]:
                 messages = row[col]
                 break
@@ -158,26 +167,112 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
 
         return chosen != rejected
 
+    def is_valid_vlm_sft(row: dict) -> bool:
+        """Check if row has valid VLM SFT format with loadable images.
+
+        Validates every message for structure (role, content list, typed items)
+        and every image for loadability.
+        """
+        messages = row.get("messages")
+        if not messages or not isinstance(messages, list) or len(messages) == 0:
+            return False
+
+        # Import inside function body for Ray serialization compatibility
+        from leap_finetune.data_loaders.image_loader import is_image_loadable
+
+        for message in messages:
+            if not isinstance(message, dict):
+                return False
+            if "role" not in message or "content" not in message:
+                return False
+
+            content = message["content"]
+            if not isinstance(content, list) or len(content) == 0:
+                return False
+
+            for item in content:
+                if not isinstance(item, dict) or "type" not in item:
+                    return False
+
+                item_type = item["type"]
+                if item_type == "image":
+                    if not isinstance(item.get("image"), str):
+                        return False
+                    if not is_image_loadable(item["image"]):
+                        return False
+                elif item_type == "text":
+                    if not isinstance(item.get("text"), str):
+                        return False
+                else:
+                    return False
+
+        return True
+
     if dataset_type == "sft":
         return is_valid_sft
     elif dataset_type == "dpo":
         return is_valid_dpo
+    elif dataset_type == "vlm_sft":
+        return is_valid_vlm_sft
     else:
-        return lambda row: True  # VLM and others pass through
+        return lambda row: True
 
 
-def normalize_columns(dataset_type: str):
+def normalize_columns(dataset_type: str, image_root: str | None = None):
     """
-    Get a row transform function to normalize column names.
+    Get a row transform function to normalize column names and formats.
     For use with ray.data.map() if needed.
     """
 
+    # Column names that should be renamed to 'messages'
+    _CONVERSATION_ALIASES = ["conversation", "conversations", "chat", "dialogue"]
+
     def normalize_sft(row: dict) -> dict:
         # Rename conversation column to 'messages' if needed
-        for col in ["conversations", "chat", "dialogue"]:
+        for col in _CONVERSATION_ALIASES:
             if col in row and "messages" not in row:
                 row["messages"] = row.pop(col)
                 break
+        return row
+
+    def normalize_vlm_sft(row: dict) -> dict:
+        import json
+        import pathlib
+
+        # === 1. Find and rename conversation column ===
+        for col in _CONVERSATION_ALIASES:
+            if col in row and "messages" not in row:
+                row["messages"] = row.pop(col)
+                break
+
+        if "messages" not in row:
+            return row
+
+        # === 2. Parse JSON string if needed ===
+        messages = row["messages"]
+        if isinstance(messages, str):
+            messages = json.loads(messages)
+            row["messages"] = messages
+
+        if not isinstance(messages, list):
+            return row
+
+        # === 3. Prepend image_root to relative image paths ===
+        if image_root:
+            root = pathlib.PurePosixPath(image_root)
+            for message in messages:
+                content = message.get("content")
+                if not isinstance(content, list):
+                    continue
+                for item in content:
+                    if (
+                        isinstance(item, dict)
+                        and item.get("type") == "image"
+                        and isinstance(item.get("image"), str)
+                        and not pathlib.PurePosixPath(item["image"]).is_absolute()
+                    ):
+                        item["image"] = str(root / item["image"])
+
         return row
 
     def add_dpo_prompt(row: dict) -> dict:
@@ -195,7 +290,9 @@ def normalize_columns(dataset_type: str):
                 row["prompt"] = ""
         return row
 
-    if dataset_type == "sft":
+    if dataset_type == "vlm_sft":
+        return normalize_vlm_sft
+    elif dataset_type == "sft":
         return normalize_sft
     elif dataset_type == "dpo":
         return add_dpo_prompt
@@ -205,7 +302,7 @@ def normalize_columns(dataset_type: str):
 
 def _find_messages_column(batch: pd.DataFrame) -> str | None:
     """Find the conversational column in a batch."""
-    for col in ["messages", "conversations", "chat", "dialogue"]:
+    for col in ["messages", "conversation", "conversations", "chat", "dialogue"]:
         if col in batch.columns:
             return col
     for col in batch.columns:
@@ -327,7 +424,7 @@ def validate_sft_format(dataset: Dataset) -> Dataset:
 def _find_conversational_column(dataset: Dataset, columns: list) -> str | None:
     """Find the column containing conversational data."""
     # Check known column names first
-    for col in ["messages", "conversations", "chat", "dialogue"]:
+    for col in ["messages", "conversation", "conversations", "chat", "dialogue"]:
         if col in columns and len(dataset) > 0:
             if _is_valid_conversation(dataset[0][col]):
                 return col
@@ -519,13 +616,15 @@ def validate_vlm_sft_format(dataset: Dataset) -> Dataset:
                                 f"Sample {idx}, message {msg_idx}, content {content_idx}: image must be path string, got {type(image_data)}"
                             )
 
-                    # Check if path exists (optional warning) - only for local paths
-                    if image_data.startswith(("http://", "https://")):
-                        # Skip validation for URLs - they'll be validated during actual loading
-                        pass
-                    elif not os.path.exists(image_data):
-                        print(
-                            f"⚠️  Warning: Local image path does not exist: {image_data}"
+                    # Actually try to load the image to verify it's valid
+                    from leap_finetune.data_loaders.image_loader import (
+                        is_image_loadable,
+                    )
+
+                    if not is_image_loadable(image_data):
+                        raise ValueError(
+                            f"Sample {idx}, message {msg_idx}, content {content_idx}: "
+                            f"image not loadable: {image_data}"
                         )
 
                 else:
@@ -533,7 +632,7 @@ def validate_vlm_sft_format(dataset: Dataset) -> Dataset:
                         f"Sample {idx}, message {msg_idx}, content {content_idx}: unsupported content type '{content_type}', expected 'text' or 'image'"
                     )
 
-    print(
-        f"✅ Dataset validation passed! {len(dataset)} samples with expected VLM format"
+    logger.info(
+        f"VLM dataset validation passed: {len(dataset)} samples with expected format"
     )
     return dataset

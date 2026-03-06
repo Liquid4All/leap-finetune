@@ -24,6 +24,7 @@ dependencies = [
     "ray==2.48.0",
     "pyyaml>=6.0",
     "turm>=0.13.0",
+    "torchvision>=0.24.1",
 ]
 
 [project.scripts]

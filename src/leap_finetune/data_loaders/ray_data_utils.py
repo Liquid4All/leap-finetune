@@ -95,7 +95,7 @@ def create_ray_datasets(
     """
     Create validated, shuffled, split Ray Datasets from a DatasetLoader.
 
-    Pipeline: quick_validate → load → [preprocess] → filter → normalize → shuffle → split → [tokenize/pack]
+    Pipeline: quick_validate → load → [preprocess] → normalize → filter → shuffle → split → [tokenize/pack]
 
     When tokenizer is provided, tokenization and optional packing happen
     centrally before sharding, producing equal-length shards (±1 row).
@@ -139,11 +139,18 @@ def create_ray_datasets(
         console.print("[dim]Applying preprocessing...[/dim]")
         ds = loader.preprocess_fn(ds)
 
+    # Normalize column names/formats before filtering
+    # (handles JSON string conversations, column renames, image_root prefix)
+    normalizer = normalize_columns(loader.dataset_type, image_root=loader.image_root)
+    ds = ds.map(normalizer)
+
+    # Filter invalid rows using Ray's native filter (pure Python, Ray handles Arrow)
+    if loader.dataset_type == "vlm_sft":
+        console.print(
+            "[dim]Filtering VLM samples (validating images across workers)...[/dim]"
+        )
     row_filter = get_row_filter(loader.dataset_type)
     ds = ds.filter(row_filter)
-
-    normalizer = normalize_columns(loader.dataset_type)
-    ds = ds.map(normalizer)
 
     ds = ds.random_shuffle(seed=shuffle_seed)
     total_count = ds.count()

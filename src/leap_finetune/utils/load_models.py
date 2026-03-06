@@ -41,36 +41,18 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
 
     attn_impl = _get_attn_implementation()
 
-    # Check if model_name is a local path
-    model_path = Path(model_name)
-    if model_path.exists() and model_path.is_dir():
-        # Load from local path (for checkpoints)
-        print(f"Loading model from local path: {model_name}")
+    model_id = _resolve_model_id(model_name)
+    print(f"Loading model: {model_id}")
 
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            dtype=torch.bfloat16,
-            attn_implementation=attn_impl,
-        )
-        # Disable use_cache for training compatibility (gradient checkpointing requires this)
-        model.config.use_cache = False
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        dtype=torch.bfloat16,
+        attn_implementation=attn_impl,
+    )
+    # Disable use_cache for training compatibility (gradient checkpointing requires this)
+    model.config.use_cache = False
 
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    else:
-        # Load from Hugging Face
-        model_id = f"LiquidAI/{model_name}"
-        print(f"Loading model from Hub: {model_id}")
-
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            dtype=torch.bfloat16,
-            attn_implementation=attn_impl,
-        )
-        # Disable use_cache for training compatibility (gradient checkpointing requires this)
-        model.config.use_cache = False
-
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     # Enforce eager expert routing for MoE (transformers v5)
     if hasattr(model, "set_experts_implementation"):

@@ -105,7 +105,7 @@ def parse_job_config(config_input: str) -> JobConfig:
         limit=ds_config.get("limit"),
         test_size=ds_config.get("test_size", 0.2),
         subset=ds_config.get("subset"),
-        cache_tokenization=ds_config.get("cache_dataset", False),
+        cache_dataset=ds_config.get("cache_dataset", False),
     )
 
     # === Training config with extends support ===

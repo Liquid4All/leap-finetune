@@ -21,7 +21,7 @@ class DatasetLoader:
     split: str = "train"
     test_size: float = 0.2
     subset: str | None = None
-    cache_tokenization: bool = False
+    cache_dataset: bool = False
     # Optional preprocessing function: takes Ray Dataset, returns Ray Dataset
     # Applied before validation - use for custom filtering, transforms, joins, etc.
     preprocess_fn: Callable | None = field(default=None, repr=False)

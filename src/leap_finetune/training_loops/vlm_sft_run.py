@@ -196,9 +196,11 @@ def vlm_sft_run(training_config: dict) -> None:
     collate_fn = create_vlm_collate_fn(processor)
 
     # Initialize trainer with per-component LR multipliers
+    # processing_class ensures processor + tokenizer are saved in checkpoints
     trainer = VLMTrainer(
         lr_multipliers=lr_multipliers,
         model=model,
+        processing_class=processor,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

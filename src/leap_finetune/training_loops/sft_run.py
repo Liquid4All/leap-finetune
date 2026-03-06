@@ -91,6 +91,7 @@ def sft_run(training_config: dict) -> None:
 
     trainer = Trainer(
         model=model,
+        processing_class=tokenizer,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

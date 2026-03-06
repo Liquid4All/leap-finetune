@@ -136,7 +136,13 @@ def vlm_sft_run(training_config: dict) -> None:
     max_image_tokens = train_config.get("max_image_tokens")
     do_image_splitting = train_config.get("do_image_splitting", True)
     run_name_template = train_config.get("leap_run_name_template")
-    lr_multipliers = train_config.get("lr_multipliers", DEFAULT_LR_MULTIPLIERS)
+    lr_multipliers = dict(DEFAULT_LR_MULTIPLIERS)
+    if "lr_multipliers" in train_config:
+        lr_multipliers.update(train_config["lr_multipliers"])
+    if "vision_encoder_lr_multiplier" in train_config:
+        lr_multipliers["model.vision_tower"] = train_config[
+            "vision_encoder_lr_multiplier"
+        ]
 
     # Filter out non-TrainingArguments parameters
     excluded_keys = VLM_SFT_EXCLUDED_KEYS | {"leap_run_name_template"}

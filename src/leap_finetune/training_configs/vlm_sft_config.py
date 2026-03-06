@@ -45,6 +45,7 @@ VLM_SFT_EXCLUDED_KEYS = {
     "max_image_tokens",
     "do_image_splitting",
     "lr_multipliers",
+    "vision_encoder_lr_multiplier",
 }
 
 # Per-component LR multipliers (applied to base learning_rate).

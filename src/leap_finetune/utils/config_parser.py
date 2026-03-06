@@ -106,6 +106,7 @@ def parse_job_config(config_input: str) -> JobConfig:
         test_size=ds_config.get("test_size", 0.2),
         subset=ds_config.get("subset"),
         image_root=ds_config.get("image_root"),
+        cache_dataset=ds_config.get("cache_dataset", False),
     )
 
     # === Training config with extends support ===

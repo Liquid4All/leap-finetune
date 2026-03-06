@@ -14,3 +14,6 @@ RUNTIME_DIR = LEAP_FINETUNE_DIR / "src" / "leap_finetune"
 BASE_OUTPUT_PATH = LEAP_FINETUNE_DIR / "outputs"
 SFT_OUTPUT_PATH = BASE_OUTPUT_PATH / "sft"
 DPO_OUTPUT_PATH = BASE_OUTPUT_PATH / "dpo"
+
+# Tokenization cache
+TOKENIZATION_CACHE_DIR = LEAP_FINETUNE_DIR / ".cache" / "tokenized"

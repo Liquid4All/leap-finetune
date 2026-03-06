@@ -23,6 +23,7 @@ class DatasetLoader:
     subset: str | None = None
     # Prepended to relative image paths in VLM datasets (e.g. "/data/images")
     image_root: str | None = None
+    cache_dataset: bool = False
     # Optional preprocessing function: takes Ray Dataset, returns Ray Dataset
     # Applied before validation - use for custom filtering, transforms, joins, etc.
     preprocess_fn: Callable | None = field(default=None, repr=False)

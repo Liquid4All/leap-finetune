@@ -23,3 +23,6 @@ scripts/
 
 # Quick testing files
 *.ipynb
+
+# Tokenization cache
+.cache/

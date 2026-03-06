@@ -39,6 +39,23 @@ DEEPSPEED_CONFIG = {
 #     SFT CONFIGS      #
 ########################
 
+VLM_SFT_EXCLUDED_KEYS = {
+    "training_type",
+    "wandb_logging",
+    "max_image_tokens",
+    "do_image_splitting",
+    "lr_multipliers",
+}
+
+# Per-component LR multipliers (applied to base learning_rate).
+# Matches liquid-vlm convention: vision encoder trains slower to preserve pretrained features.
+# HF model prefixes: model.vision_tower, model.multi_modal_projector, model.language_model
+DEFAULT_LR_MULTIPLIERS = {
+    "model.vision_tower": 0.1,
+    "model.multi_modal_projector": 1.0,
+    "model.language_model": 1.0,
+}
+
 
 DEFAULT_VLM_SFT = {
     "training_type": "vlm_sft",
@@ -56,8 +73,7 @@ DEFAULT_VLM_SFT = {
     "eval_strategy": "epoch",
     "gradient_checkpointing": True,
     "remove_unused_columns": False,  # preserve pixel_values, spatial_shapes, pixel_attention_mask
-    "packing": False,  # packing breaks image-text alignment
     "dataloader_drop_last": True,  # avoid batch size mismatches in DDP
-    "dataset_kwargs": {"skip_prepare_dataset": True},
+    "lr_multipliers": DEFAULT_LR_MULTIPLIERS,
     "deepspeed": DEEPSPEED_CONFIG,
 }

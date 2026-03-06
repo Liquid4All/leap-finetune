@@ -1,13 +1,18 @@
-import copy
 import logging
+import math
 
 import torch
 import ray.train
-from trl import SFTConfig, SFTTrainer
+from torch.utils.data import DataLoader
+from transformers import Trainer, TrainingArguments
 from ray.train.huggingface.transformers import prepare_trainer
 
-from leap_finetune.data_loaders.image_loader import load_image
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
+from leap_finetune.data_loaders.tokenize_data import create_vlm_collate_fn
+from leap_finetune.training_configs.vlm_sft_config import (
+    DEFAULT_LR_MULTIPLIERS,
+    VLM_SFT_EXCLUDED_KEYS,
+)
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.logging_utils import (
@@ -20,102 +25,95 @@ from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_mo
 logger = logging.getLogger(__name__)
 
 
-def _find_template(seq, template):
-    """Yield start indices where template occurs in seq."""
-    tlen = len(template)
-    for i in range(len(seq) - tlen + 1):
-        if seq[i : i + tlen] == template:
-            yield i
+# === VLM Trainer with per-component learning rates ===
 
 
-def create_collate_fn(processor):
-    """Create a collate function with assistant-only label masking.
+class VLMTrainer(Trainer):
+    """Trainer subclass that applies per-component LR multipliers.
 
-    Only assistant content + <|im_end|> contribute to loss (matching liquid-vlm).
-    Images are loaded as PIL and passed to the processor for resize/tiling.
-    Bad samples are skipped with a warning instead of crashing the batch.
+    Mirrors liquid-vlm convention: vision encoder trains at a lower LR
+    to preserve pretrained features, while the projector and LLM backbone
+    train at the full base rate.
+
+    HF VLM param prefixes:
+        model.vision_tower          — vision encoder (e.g. SigLIP2)
+        model.multi_modal_projector — projector
+        model.language_model        — LLM backbone (e.g. LFM2)
     """
-    tokenizer = processor.tokenizer
 
-    # ChatML: <|im_start|>assistant\n{content}<|im_end|>\n
-    response_template_ids = tokenizer.encode(
-        "<|im_start|>assistant\n", add_special_tokens=False
-    )
-    end_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    def __init__(self, lr_multipliers: dict[str, float] | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.lr_multipliers = lr_multipliers or DEFAULT_LR_MULTIPLIERS
 
-    def _build_labels(input_ids):
-        """Mask everything except assistant content + <|im_end|> with -100."""
-        labels = torch.full_like(input_ids, -100)
-        batch_size, seq_len = input_ids.shape
+    def create_optimizer(self):
+        if self.optimizer is not None:
+            return self.optimizer
 
-        for b in range(batch_size):
-            ids = input_ids[b].tolist()
-            for tmpl_start in _find_template(ids, response_template_ids):
-                content_start = tmpl_start + len(response_template_ids)
-                j = content_start
-                while j < seq_len and ids[j] != end_token_id:
-                    j += 1
-                # Unmask content + <|im_end|>
-                content_end = min(j + 1, seq_len)
-                labels[b, content_start:content_end] = input_ids[
-                    b, content_start:content_end
-                ]
+        base_lr = self.args.learning_rate
+        weight_decay = self.args.weight_decay
 
-        return labels
+        # Group trainable params by matching prefix
+        grouped: dict[str, list] = {prefix: [] for prefix in self.lr_multipliers}
+        ungrouped: list = []
 
-    def collate_fn(samples):
-        valid_samples = []
-        all_loaded_images = []
-        skip_count = 0
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+            matched = False
+            for prefix in self.lr_multipliers:
+                if name.startswith(prefix):
+                    grouped[prefix].append(param)
+                    matched = True
+                    break
+            if not matched:
+                ungrouped.append(param)
 
-        for conversation in samples:
-            sample_copy = copy.deepcopy(conversation)
-            loaded_images = []
-            try:
-                for message in sample_copy:
-                    if message["role"] == "user":
-                        for content in message["content"]:
-                            if content["type"] == "image" and isinstance(
-                                content["image"], str
-                            ):
-                                img = load_image(content["image"])
-                                content["image"] = img
-                                loaded_images.append(img)
-                valid_samples.append(sample_copy)
-                all_loaded_images.extend(loaded_images)
-            except Exception as e:
-                skip_count += 1
-                logger.warning(f"Skipping sample in collate: {e}")
-                for img in loaded_images:
-                    if hasattr(img, "close"):
-                        img.close()
-
-        if skip_count > 0:
-            logger.info(f"Collate skipped {skip_count}/{len(samples)} samples")
-
-        if len(valid_samples) == 0:
-            raise RuntimeError(
-                f"Entire batch failed: all {len(samples)} samples had errors"
+        # Build optimizer param groups
+        optimizer_groups = []
+        for prefix, params in grouped.items():
+            if not params:
+                continue
+            mult = self.lr_multipliers[prefix]
+            optimizer_groups.append(
+                {"params": params, "lr": base_lr * mult, "weight_decay": weight_decay}
+            )
+            logger.info(
+                f"Param group '{prefix}': {len(params)} params, lr={base_lr * mult:.2e}"
             )
 
-        try:
-            batch = processor.apply_chat_template(
-                valid_samples,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-                padding=True,
+        if ungrouped:
+            optimizer_groups.append(
+                {"params": ungrouped, "lr": base_lr, "weight_decay": weight_decay}
             )
-            batch["labels"] = _build_labels(batch["input_ids"])
-            return batch
+            logger.info(
+                f"Param group 'ungrouped': {len(ungrouped)} params, lr={base_lr:.2e}"
+            )
 
-        finally:
-            for img in all_loaded_images:
-                if hasattr(img, "close"):
-                    img.close()
-            all_loaded_images.clear()
+        betas = (self.args.adam_beta1, self.args.adam_beta2)
+        self.optimizer = torch.optim.AdamW(optimizer_groups, betas=betas)
+        return self.optimizer
 
-    return collate_fn
+    def get_train_dataloader(self):
+        # Ray already shards across workers — return a raw DataLoader
+        # (bypasses Accelerate's DistributedSampler / IterableDatasetShard)
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self._train_batch_size,
+            collate_fn=self.data_collator,
+            shuffle=True,
+        )
+
+    def get_eval_dataloader(self, eval_dataset=None):
+        if eval_dataset is None:
+            eval_dataset = self.eval_dataset
+        return DataLoader(
+            eval_dataset,
+            batch_size=self.args.per_device_eval_batch_size,
+            collate_fn=self.data_collator,
+        )
+
+
+# === Training loop ===
 
 
 def vlm_sft_run(training_config: dict) -> None:
@@ -126,8 +124,8 @@ def vlm_sft_run(training_config: dict) -> None:
     train_ds_ray = ray.train.get_dataset_shard("train")
     eval_ds_ray = ray.train.get_dataset_shard("eval")
 
-    train_dataset = [sample["messages"] for sample in ray_dataset_to_hf(train_ds_ray)]
-    test_dataset = [sample["messages"] for sample in ray_dataset_to_hf(eval_ds_ray)]
+    train_dataset = ray_dataset_to_hf(train_ds_ray)
+    eval_dataset = ray_dataset_to_hf(eval_ds_ray)
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -138,15 +136,10 @@ def vlm_sft_run(training_config: dict) -> None:
     max_image_tokens = train_config.get("max_image_tokens")
     do_image_splitting = train_config.get("do_image_splitting", True)
     run_name_template = train_config.get("leap_run_name_template")
+    lr_multipliers = train_config.get("lr_multipliers", DEFAULT_LR_MULTIPLIERS)
 
-    # Filter out non-SFTConfig parameters
-    excluded_keys = {
-        "training_type",
-        "wandb_logging",
-        "max_image_tokens",
-        "do_image_splitting",
-        "leap_run_name_template",
-    }
+    # Filter out non-TrainingArguments parameters
+    excluded_keys = VLM_SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
     train_config_filtered = {
         k: v for k, v in train_config.items() if k not in excluded_keys
     }
@@ -155,13 +148,32 @@ def vlm_sft_run(training_config: dict) -> None:
     wandb_logging = bool(train_config.get("wandb_logging", False))
     init_wandb_if_enabled(job_name, wandb_logging)
 
-    # Build training args
+    # Compute max_steps from materialized dataset size
+    # (Trainer can't infer it from our bypassed DataLoader)
+    num_samples = len(train_dataset)
+    train_batch_size = train_config_filtered.get("per_device_train_batch_size", 4)
+    grad_accum = train_config_filtered.get("gradient_accumulation_steps", 1)
+    epochs = train_config_filtered.get("num_train_epochs", 3)
+    steps_per_epoch = math.ceil(num_samples / train_batch_size)
+    max_steps = steps_per_epoch * epochs // grad_accum
+
+    logger.info(
+        f"Computed max_steps={max_steps} "
+        f"(samples={num_samples}, batch={train_batch_size}, "
+        f"accum={grad_accum}, epochs={epochs})"
+    )
+
+    # Build training args — use max_steps instead of num_train_epochs
+    train_config_filtered.pop("num_train_epochs", None)
     config_kwargs = {
         "report_to": "wandb" if wandb_logging else "none",
         "run_name": job_name,
+        "per_device_eval_batch_size": train_batch_size,
+        "remove_unused_columns": False,
+        "max_steps": max_steps,
         **train_config_filtered,
     }
-    training_args = SFTConfig(**config_kwargs)
+    training_args = TrainingArguments(**config_kwargs)
 
     # Load model + processor
     model, processor = load_vlm_model(
@@ -173,16 +185,16 @@ def vlm_sft_run(training_config: dict) -> None:
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
 
-    collate_fn = create_collate_fn(processor)
+    collate_fn = create_vlm_collate_fn(processor)
 
-    # Initialize trainer
-    trainer = SFTTrainer(
+    # Initialize trainer with per-component LR multipliers
+    trainer = VLMTrainer(
+        lr_multipliers=lr_multipliers,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=test_dataset,
+        eval_dataset=eval_dataset,
         data_collator=collate_fn,
-        processing_class=processor,
     )
 
     # Add checkpoint callback (handles Ray reporting + rename) then prepare for distributed training

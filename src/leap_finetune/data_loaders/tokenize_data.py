@@ -4,7 +4,7 @@ import ray.data
 from datasets import Dataset, Features, Sequence, Value
 from rich.console import Console
 from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt
-from trl.data_utils import pack_dataset, truncate_dataset
+from trl.data_utils import pack_dataset
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -47,10 +47,8 @@ def tokenize_and_pack_sft(
 
     Pipeline:
       1. Distributed tokenization via ray_ds.map()
-      2. Materialize to HF Dataset
-      3. If packing: pack_dataset (BFD) → adds seq_lengths column
-         If not packing: truncate_dataset
-      4. Convert back to Ray Dataset
+      2. If packing: materialize to HF Dataset → pack_dataset (BFD) → back to Ray
+         If not packing: return directly (tokenizer already truncated)
     """
     # === 1. Distributed tokenization ===
     ds = ds.map(
@@ -58,24 +56,20 @@ def tokenize_and_pack_sft(
         fn_kwargs={"tokenizer": tokenizer, "max_length": max_length},
     )
 
-    # === 2. Materialize to HF Dataset for TRL utilities ===
-    # Explicit features ensure input_ids is a proper Arrow list column
-    # (Ray may serialize variable-length lists as pickled objects otherwise)
-    rows = list(ds.iter_rows())
-    features = Features({"input_ids": Sequence(Value("int64"))})
-    hf_ds = Dataset.from_list(rows, features=features)
-    console.print(f"[dim]Tokenized {len(hf_ds):,} rows[/dim]")
-
-    # === 3. Pack or truncate ===
+    # === 2. Pack or truncate ===
     if packing:
+        # Packing requires full materialization into an HF Dataset
+        rows = list(ds.iter_rows())
+        features = Features({"input_ids": Sequence(Value("int64"))})
+        hf_ds = Dataset.from_list(rows, features=features)
+        console.print(f"[dim]Tokenized {len(hf_ds):,} rows[/dim]")
         console.print(f"[dim]Packing sequences (BFD, max_length={max_length})...[/dim]")
         hf_ds = pack_dataset(hf_ds, seq_length=max_length, strategy="bfd")
         console.print(f"[dim]Packed into {len(hf_ds):,} rows[/dim]")
-    else:
-        hf_ds = truncate_dataset(hf_ds, max_length=max_length)
+        return ray.data.from_arrow(hf_ds.data.table)
 
-    # === 4. Convert back to Ray Dataset ===
-    return ray.data.from_arrow(hf_ds.data.table)
+    # Non-packing: tokenizer already truncated to max_length, just return
+    return ds
 
 
 # === DPO Tokenization ===

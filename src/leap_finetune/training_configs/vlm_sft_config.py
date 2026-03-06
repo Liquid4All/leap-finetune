@@ -14,15 +14,9 @@ DEEPSPEED_CONFIG = {
     "train_micro_batch_size_per_gpu": "auto",
     "gradient_clipping": "auto",
     "gradient_accumulation_steps": "auto",
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": "auto",  # Uses learning_rate from training config
-            "betas": "auto",  # DEFAULT: (0.9, 0.999)
-            "eps": "auto",  # DEFAULT: 1e-8
-            "weight_decay": "auto",  # DEFAULT: 0.01
-        },
-    },
+    # No "optimizer" block — VLMTrainer.create_optimizer() builds per-component LR
+    # param groups that DeepSpeed's FusedAdam would silently discard.
+    # torch.optim.AdamW(fused=True) provides the same CUDA-fused kernel.
     "bf16": {"enabled": "auto"},
     "activation_checkpointing": {
         "partition_activations": False,

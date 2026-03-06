@@ -90,7 +90,9 @@ class VLMTrainer(Trainer):
             )
 
         betas = (self.args.adam_beta1, self.args.adam_beta2)
-        self.optimizer = torch.optim.AdamW(optimizer_groups, betas=betas)
+        self.optimizer = torch.optim.AdamW(
+            optimizer_groups, betas=betas, fused=torch.cuda.is_available()
+        )
         return self.optimizer
 
     def get_train_dataloader(self):

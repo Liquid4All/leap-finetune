@@ -1,6 +1,7 @@
 from typing import cast
 
 import ray.train
+from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 from ray.train.huggingface.transformers import prepare_trainer
@@ -19,10 +20,31 @@ from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_mo
 
 
 class PreTokenizedDPOTrainer(DPOTrainer):
-    """DPOTrainer that skips internal tokenization for pre-tokenized data."""
+    """DPOTrainer that skips internal tokenization and bypasses DistributedSampler.
+
+    Ray already shards data across workers via get_dataset_shard(), so we return
+    plain DataLoaders to avoid double sharding by Accelerate's DistributedSampler.
+    """
 
     def _prepare_dataset(self, dataset, *args, **kwargs):
         return dataset
+
+    def get_train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self._train_batch_size,
+            collate_fn=self.data_collator,
+            shuffle=True,
+        )
+
+    def get_eval_dataloader(self, eval_dataset=None):
+        if eval_dataset is None:
+            eval_dataset = self.eval_dataset
+        return DataLoader(
+            eval_dataset,
+            batch_size=self.args.per_device_eval_batch_size,
+            collate_fn=self.data_collator,
+        )
 
 
 def dpo_run(training_config: dict) -> None:

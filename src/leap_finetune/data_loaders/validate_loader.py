@@ -1,11 +1,14 @@
+import json
 import logging
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
-from rich.console import Console
+import fsspec
 import pandas as pd
+import pyarrow.parquet as pq
 from datasets import Dataset, load_dataset
+from rich.console import Console
 
 logger = logging.getLogger(__name__)
 
@@ -84,17 +87,18 @@ def _load_sample_dataset(
         source_type = _get_source_type(dataset_path)
 
         if source_type in ("s3", "gcs", "azure", "cloud"):
-            # Cloud storage - use Ray Data to read samples
-            import ray.data
-
+            # Cloud storage - use fsspec + pyarrow (no Ray needed)
+            fs, path = fsspec.core.url_to_fs(dataset_path)
             path_lower = dataset_path.lower()
             if ".parquet" in path_lower or ".pq" in path_lower:
-                ray_ds = ray.data.read_parquet(dataset_path)
+                with fs.open(path, "rb") as f:
+                    pf = pq.ParquetFile(f)
+                    batch = next(pf.iter_batches(batch_size=num_samples))
+                return Dataset.from_pandas(batch.to_pandas())
             else:
-                ray_ds = ray.data.read_json(dataset_path)
-            # Take only num_samples
-            samples = list(ray_ds.limit(num_samples).iter_rows())
-            return Dataset.from_list(samples)
+                with fs.open(path, "r") as f:
+                    rows = [json.loads(line) for _, line in zip(range(num_samples), f)]
+                return Dataset.from_list(rows)
 
         elif source_type in ("parquet", "jsonl"):
             # Local file - use HuggingFace

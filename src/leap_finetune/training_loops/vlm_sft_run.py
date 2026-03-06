@@ -5,7 +5,6 @@ import torch
 import ray.train
 from trl import SFTConfig, SFTTrainer
 from ray.train.huggingface.transformers import prepare_trainer
-from ray.train import get_context
 
 from leap_finetune.data_loaders.image_loader import load_image
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
@@ -13,6 +12,7 @@ from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.logging_utils import (
     init_wandb_if_enabled,
+    is_rank_zero,
     setup_worker_logging,
 )
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
@@ -133,10 +133,11 @@ def vlm_sft_run(training_config: dict) -> None:
     model_name = training_config.get("model_name", "")
     job_name = training_config.get("job_name", "leap-ft-run")
 
-    # Extract VLM-specific params
+    # Extract VLM-specific params and run name template before filtering
     train_config = training_config.get("train_config", {})
     max_image_tokens = train_config.get("max_image_tokens")
     do_image_splitting = train_config.get("do_image_splitting", True)
+    run_name_template = train_config.get("leap_run_name_template")
 
     # Filter out non-SFTConfig parameters
     excluded_keys = {
@@ -144,6 +145,7 @@ def vlm_sft_run(training_config: dict) -> None:
         "wandb_logging",
         "max_image_tokens",
         "do_image_splitting",
+        "leap_run_name_template",
     }
     train_config_filtered = {
         k: v for k, v in train_config.items() if k not in excluded_keys
@@ -183,8 +185,8 @@ def vlm_sft_run(training_config: dict) -> None:
         processing_class=processor,
     )
 
-    # Add Ray checkpoint callback and prepare for distributed training
-    trainer.add_callback(LeapCheckpointCallback())
+    # Add checkpoint callback (handles Ray reporting + rename) then prepare for distributed training
+    trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
     trainer = prepare_trainer(trainer)
 
     try:
@@ -206,8 +208,7 @@ def vlm_sft_run(training_config: dict) -> None:
             raise
 
     # Save PEFT model if applicable
-    if peft_config:
-        ctx = get_context()
-        is_rank_zero = ctx is None or ctx.get_world_rank() == 0
-        if is_rank_zero:
-            merge_and_save_peft_model(model, processor, training_args.output_dir)
+    if peft_config and is_rank_zero():
+        merge_and_save_peft_model(
+            model, processor, training_args.output_dir, run_name_template
+        )

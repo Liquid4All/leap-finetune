@@ -17,5 +17,9 @@ src/*
 outputs/
 logs/
 
+# Tests and scripts
+tests/
+scripts/
+
 # Quick testing files
 *.ipynb

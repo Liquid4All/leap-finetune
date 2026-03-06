@@ -53,7 +53,7 @@ MOE_DEEPSPEED_CONFIG = {
 ########################
 
 
-DEFAULT_DPO_CONFIG = {
+DEFAULT_DPO = {
     "training_type": "dpo",
     "output_dir": DPO_OUTPUT_PATH,
     "num_train_epochs": 3,
@@ -77,7 +77,7 @@ DEFAULT_DPO_CONFIG = {
 
 # Base MoE DPO config - distributed strategy is applied automatically in runner
 # based on PEFT presence: DeepSpeed for LoRA, FSDP for full fine-tuning
-MOE_DPO_CONFIG = {
+MOE_DPO = {
     "training_type": "dpo",
     "output_dir": DPO_OUTPUT_PATH,
     "num_train_epochs": 2,  # MoE models typically need fewer epochs

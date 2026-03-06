@@ -19,6 +19,20 @@ def _is_ray_worker() -> bool:
     )
 
 
+def is_rank_zero() -> bool:
+    """Check if this is the main (rank 0) process for Ray Train.
+
+    Returns True if rank 0 or if not running in a Ray context (single process).
+    """
+    try:
+        from ray.train import get_context
+
+        ctx = get_context()
+        return ctx is None or ctx.get_world_rank() == 0
+    except Exception:
+        return True
+
+
 def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
     """Initialize wandb with project and run name if logging is enabled.
 
@@ -32,13 +46,9 @@ def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
         return
 
     try:
-        from ray.train import get_context
         import wandb
 
-        ctx = get_context()
-        is_rank_zero = ctx is None or ctx.get_world_rank() == 0
-
-        if is_rank_zero:
+        if is_rank_zero():
             project = os.environ.get("WANDB_PROJECT", "leap-finetune")
 
             wandb.init(
@@ -78,10 +88,7 @@ def setup_worker_logging() -> None:
     Must be called from within a Ray Train worker (not driver).
     Disables progress bars on non-rank-0 workers to avoid duplicate logs.
     """
-    import ray.train
-
-    rank = ray.train.get_context().get_world_rank()
-    if rank != 0:
+    if not is_rank_zero():
         import datasets
 
         datasets.disable_progress_bars()
@@ -136,24 +143,6 @@ def setup_training_environment() -> None:
                 pass
 
         BF16_Optimizer.destroy = _safe_ds_destroy
-
-        # Suppress Triton matmul autotune atexit callback errors
-
-        try:
-            from deepspeed.ops.transformer.inference.triton import matmul_ext
-
-            _orig_update = getattr(matmul_ext, "matmul_ext_update_autotune_table", None)
-            if _orig_update:
-
-                def _safe_update_autotune():
-                    try:
-                        _orig_update()
-                    except (PermissionError, OSError, FileNotFoundError):
-                        pass
-
-                matmul_ext.matmul_ext_update_autotune_table = _safe_update_autotune
-        except (ImportError, AttributeError):
-            pass
 
     except ImportError:
         pass  # Silent - deepspeed not required

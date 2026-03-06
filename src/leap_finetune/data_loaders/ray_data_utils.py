@@ -19,9 +19,6 @@ def create_ray_datasets(
     """
     console = Console()
 
-    # Quick schema validation on small sample before full load
-    loader.quick_validate()
-
     ds = loader.to_ray_dataset()
 
     # Apply user preprocessing if provided (before validation)

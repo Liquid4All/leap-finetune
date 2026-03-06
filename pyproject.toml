@@ -20,6 +20,8 @@ dependencies = [
     "liger-kernel>=0.6.2",
     "wandb>=0.22.3",
     "ray==2.48.0",
+    "pyyaml>=6.0",
+    "turm>=0.13.0",
 ]
 
 [project.scripts]
@@ -35,5 +37,6 @@ allow-direct-references = true
 [dependency-groups]
 dev = [
     "pre-commit>=4.2.0",
+    "pytest>=8.0",
     "ruff>=0.11.13",
 ]

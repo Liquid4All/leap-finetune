@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # === VLM Trainer with per-component learning rates ===
 
 
-class VLMTrainer(Trainer):
+class LFMVLMTrainer(Trainer):
     """Trainer subclass that applies per-component LR multipliers.
 
     Mirrors liquid-vlm convention: vision encoder trains at a lower LR
@@ -197,7 +197,7 @@ def vlm_sft_run(training_config: dict) -> None:
 
     # Initialize trainer with per-component LR multipliers
     # processing_class ensures processor + tokenizer are saved in checkpoints
-    trainer = VLMTrainer(
+    trainer = LFMVLMTrainer(
         lr_multipliers=lr_multipliers,
         model=model,
         processing_class=processor,

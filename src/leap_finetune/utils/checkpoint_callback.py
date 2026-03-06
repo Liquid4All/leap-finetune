@@ -62,6 +62,7 @@ class LeapCheckpointCallback(TrainerCallback):
         # Report metrics only — HF Trainer already saved checkpoint to output_dir.
         # Passing checkpoint=None avoids Ray duplicating files into ray_logs/.
         train.report(metrics=self.metrics.copy(), checkpoint=None)
+        self.metrics.clear()
 
     def _rename_checkpoint(self, args: TrainingArguments, state: TrainerState) -> None:
         output_path = pathlib.Path(args.output_dir)

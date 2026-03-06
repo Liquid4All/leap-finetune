@@ -38,6 +38,10 @@ def ray_trainer(job_config: dict) -> None:
 
     set_seed(42)
 
+    num_gpus = cuda.device_count()
+    if not cuda.is_available():
+        raise ValueError("No GPU available for training")
+
     if not ray.is_initialized():
         # Force local init and avoid accidental cluster connects
         for key in ("RAY_ADDRESS", "RAY_HEAD_IP", "RAY_HEAD_NODE_ADDRESS", "RAY_PORT"):
@@ -108,10 +112,6 @@ def ray_trainer(job_config: dict) -> None:
         "train_config": training_config,
         "peft_config": job_config["peft_config"],
     }
-
-    num_gpus = cuda.device_count()
-    if not cuda.is_available():
-        raise ValueError("No GPU available for training")
 
     scale_config = ScalingConfig(
         num_workers=num_gpus, use_gpu=True, resources_per_worker={"GPU": 1.0}

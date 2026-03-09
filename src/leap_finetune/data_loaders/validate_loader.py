@@ -57,15 +57,13 @@ def quick_validate_schema(
     split: str = "train",
     num_samples: int = 10,
     image_root: str | None = None,
-    preprocess_fn: Callable | None = None,
 ) -> None:
     """
     Fast schema validation on small sample. Fails fast on obvious errors.
     Runs in main process before Ray starts.
 
     Applies normalization first (column renames, JSON parsing, image_root) so
-    raw dataset formats are accepted. If preprocess_fn is provided, it is applied
-    after normalization before validation.
+    raw dataset formats are accepted.
     """
     console = Console()
 
@@ -82,10 +80,6 @@ def quick_validate_schema(
     # Normalize before validation (handles JSON strings, column renames, image_root)
     normalizer = normalize_columns(dataset_type, image_root=image_root)
     sample_ds = sample_ds.map(normalizer)
-
-    if preprocess_fn is not None:
-        rows = [preprocess_fn(dict(sample_ds[i])) for i in range(len(sample_ds))]
-        sample_ds = Dataset.from_list(rows)
 
     # Use the same validation as full validation
     validate_dataset_format(sample_ds, dataset_type)

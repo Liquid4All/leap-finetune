@@ -8,6 +8,7 @@ from ray.train.huggingface.transformers import prepare_trainer
 
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.tokenize_data import create_vlm_collate_fn
+from leap_finetune.evaluation import BenchmarkEvalCallback
 from leap_finetune.training_configs.vlm_sft_config import (
     DEFAULT_LR_MULTIPLIERS,
     VLM_SFT_EXCLUDED_KEYS,
@@ -191,6 +192,18 @@ def vlm_sft_run(training_config: dict) -> None:
     )
 
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
+
+    # Add benchmark evaluation callback if configured
+    benchmark_configs = training_config.get("benchmark_configs")
+    if benchmark_configs and benchmark_configs.get("benchmarks"):
+        trainer.add_callback(
+            BenchmarkEvalCallback(
+                processor=processor,
+                benchmark_configs=benchmark_configs["benchmarks"],
+                default_max_new_tokens=benchmark_configs.get("max_new_tokens", 128),
+            )
+        )
+
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer)
 

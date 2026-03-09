@@ -106,15 +106,17 @@ class BenchmarkEvalCallback(TrainerCallback):
         total_start = time.time()
 
         if rank == 0:
-            print(f"\n{'='*50}")
+            print(f"\n{'=' * 50}")
             print(f"Benchmark Evaluation (step {state.global_step})")
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
 
         with torch.no_grad():
             for bench_config in self.benchmark_configs:
                 name = bench_config["name"]
                 metric_type = bench_config["metric"]
-                max_new_tokens = bench_config.get("max_new_tokens", self.default_max_new_tokens)
+                max_new_tokens = bench_config.get(
+                    "max_new_tokens", self.default_max_new_tokens
+                )
                 match_mode = bench_config.get("match_mode", "contains")
 
                 samples = benchmarks.get(name, [])
@@ -132,12 +134,17 @@ class BenchmarkEvalCallback(TrainerCallback):
                     try:
                         if metric_type in LOGPROB_METRICS:
                             score = self._evaluate_logprob_sample(
-                                unwrapped, sample, device,
+                                unwrapped,
+                                sample,
+                                device,
                             )
                         else:
                             score, _ = self._evaluate_generation_sample(
-                                unwrapped, sample, metric_type,
-                                max_new_tokens, match_mode,
+                                unwrapped,
+                                sample,
+                                metric_type,
+                                max_new_tokens,
+                                match_mode,
                             )
                         my_total_score += score
                         my_count += 1
@@ -163,13 +170,15 @@ class BenchmarkEvalCallback(TrainerCallback):
                 all_results[f"benchmark/{name}/accuracy"] = accuracy
 
                 if rank == 0:
-                    print(f"  {name:<20s} {accuracy*100:6.2f}%  ({total_count} samples, {elapsed:.1f}s)")
+                    print(
+                        f"  {name:<20s} {accuracy * 100:6.2f}%  ({total_count} samples, {elapsed:.1f}s)"
+                    )
 
         total_elapsed = time.time() - total_start
         if rank == 0:
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
             print(f"Total benchmark eval time: {total_elapsed:.1f}s")
-            print(f"{'='*50}\n")
+            print(f"{'=' * 50}\n")
 
         self._log_to_wandb(all_results, state.global_step)
 
@@ -243,7 +252,9 @@ class BenchmarkEvalCallback(TrainerCallback):
         loaded_images = [load_image(p) for p in image_paths]
 
         try:
-            formatted_prompt = self._format_for_generation(prompt_messages, loaded_images)
+            formatted_prompt = self._format_for_generation(
+                prompt_messages, loaded_images
+            )
 
             # Tokenize prompt-only (with generation prompt) to get prompt length
             prompt_inputs = self.processor.apply_chat_template(
@@ -259,7 +270,10 @@ class BenchmarkEvalCallback(TrainerCallback):
             for option in options:
                 # Build full conversation: prompt + assistant answer with option text
                 full_conv = formatted_prompt + [
-                    {"role": "assistant", "content": [{"type": "text", "text": option.strip()}]}
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": option.strip()}],
+                    }
                 ]
 
                 # Let the processor handle all tokenization and image processing
@@ -269,7 +283,9 @@ class BenchmarkEvalCallback(TrainerCallback):
                     return_dict=True,
                     return_tensors="pt",
                 )
-                full_inputs = {k: v.to(device) for k, v in full_inputs.items() if v is not None}
+                full_inputs = {
+                    k: v.to(device) for k, v in full_inputs.items() if v is not None
+                }
 
                 with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                     outputs = model(**full_inputs)

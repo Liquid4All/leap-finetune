@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 
 from datasets import Dataset, load_dataset
 
@@ -24,9 +24,6 @@ class DatasetLoader:
     # Prepended to relative image paths in VLM datasets (e.g. "/data/images")
     image_root: str | None = None
     cache_dataset: bool = False
-    # Optional preprocessing function: takes Ray Dataset, returns Ray Dataset
-    # Applied before validation - use for custom filtering, transforms, joins, etc.
-    preprocess_fn: Callable | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if not (0 < self.test_size < 1):
@@ -43,7 +40,6 @@ class DatasetLoader:
             split=self.split,
             num_samples=10,
             image_root=self.image_root,
-            preprocess_fn=self.preprocess_fn,
         )
 
     def to_ray_dataset(self):

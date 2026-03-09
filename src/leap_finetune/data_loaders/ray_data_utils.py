@@ -95,7 +95,7 @@ def create_ray_datasets(
     """
     Create validated, shuffled, split Ray Datasets from a DatasetLoader.
 
-    Pipeline: quick_validate → load → [preprocess] → normalize → filter → shuffle → split → [tokenize/pack]
+    Pipeline: quick_validate → load → normalize → filter → shuffle → split → [tokenize/pack]
 
     When tokenizer is provided, tokenization and optional packing happen
     centrally before sharding, producing equal-length shards (±1 row).
@@ -106,7 +106,7 @@ def create_ray_datasets(
     # === Check tokenization cache ===
     use_pretokenize = tokenizer is not None and training_config is not None
     can_cache = (
-        use_pretokenize and loader.cache_dataset and loader.preprocess_fn is None
+        use_pretokenize and loader.cache_dataset
     )
     fingerprint = None
     key_dict = None
@@ -134,10 +134,6 @@ def create_ray_datasets(
 
     loader.quick_validate()
     ds = loader.to_ray_dataset()
-
-    if loader.preprocess_fn is not None:
-        console.print("[dim]Applying preprocessing...[/dim]")
-        ds = ds.map(loader.preprocess_fn)
 
     # Normalize column names/formats before filtering
     # (handles JSON string conversations, column renames, image_root prefix)

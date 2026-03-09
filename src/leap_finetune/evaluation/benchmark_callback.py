@@ -128,17 +128,28 @@ class BenchmarkEvalCallback(TrainerCallback):
                 my_total_score = 0.0
                 my_count = 0
 
+                logged_samples = 0
+                max_log_samples = 20
+
                 for sample in my_samples:
                     try:
                         if metric_type in LOGPROB_METRICS:
                             score = self._evaluate_logprob_sample(
                                 unwrapped, sample, device,
                             )
+                            if rank == 0 and logged_samples < max_log_samples:
+                                self._log_logprob_sample(sample, score, logged_samples)
+                                logged_samples += 1
                         else:
-                            score = self._evaluate_generation_sample(
+                            score, debug_info = self._evaluate_generation_sample(
                                 unwrapped, sample, metric_type,
                                 max_new_tokens, match_mode,
                             )
+                            if rank == 0 and logged_samples < max_log_samples:
+                                self._log_generation_sample(
+                                    name, sample, debug_info, score, logged_samples,
+                                )
+                                logged_samples += 1
                         my_total_score += score
                         my_count += 1
                     except Exception as e:
@@ -183,7 +194,7 @@ class BenchmarkEvalCallback(TrainerCallback):
         metric_type: str,
         max_new_tokens: int,
         match_mode: str,
-    ) -> float:
+    ) -> tuple[float, dict]:
         conversation = sample["conversation"]
         image_paths = sample.get("images", [])
 
@@ -218,9 +229,22 @@ class BenchmarkEvalCallback(TrainerCallback):
                 generated_ids, skip_special_tokens=True
             ).strip()
 
-            return compute_metric(
+            score = compute_metric(
                 metric_type, prediction, ground_truth, match_mode=match_mode
             )
+
+            debug_info = {
+                "prompt_text": self.processor.tokenizer.decode(
+                    inputs["input_ids"][0], skip_special_tokens=False
+                ),
+                "prompt_tokens": inputs["input_ids"][0][:50].tolist(),
+                "prompt_len": prompt_len,
+                "generated_tokens": generated_ids[:50].tolist(),
+                "prediction": prediction,
+                "ground_truth": ground_truth,
+            }
+
+            return score, debug_info
         finally:
             for img in loaded_images:
                 if hasattr(img, "close"):
@@ -325,6 +349,36 @@ class BenchmarkEvalCallback(TrainerCallback):
                 )
 
         return formatted
+
+    def _log_generation_sample(
+        self, bench_name: str, sample: dict, debug_info: dict, score: float, idx: int,
+    ):
+        sep = "-" * 60
+        print(f"\n{sep}")
+        print(f"[{bench_name}] Sample {idx} | score={score:.2f}")
+        print(f"{sep}")
+        print(f"IMAGES: {sample.get('images', [])}")
+        print(f"PROMPT ({debug_info['prompt_len']} tokens):")
+        # Show last 500 chars of prompt to see the actual question
+        prompt_text = debug_info["prompt_text"]
+        if len(prompt_text) > 500:
+            print(f"  ...{prompt_text[-500:]}")
+        else:
+            print(f"  {prompt_text}")
+        print(f"PROMPT TOKENS (first 50): {debug_info['prompt_tokens']}")
+        print(f"GENERATED TOKENS (first 50): {debug_info['generated_tokens']}")
+        print(f"PREDICTION: {debug_info['prediction']}")
+        print(f"GROUND TRUTH: {debug_info['ground_truth']}")
+        print(sep)
+
+    def _log_logprob_sample(self, sample: dict, score: float, idx: int):
+        sep = "-" * 60
+        print(f"\n{sep}")
+        print(f"[logprob] Sample {idx} | score={score:.2f}")
+        print(f"OPTIONS: {sample.get('options', [])}")
+        print(f"ANSWER_ID: {sample.get('answer_id')}")
+        print(f"CONVERSATION: {sample['conversation'][:-1]}")
+        print(sep)
 
     def _log_to_wandb(self, results: dict, step: int):
         if not is_rank_zero():

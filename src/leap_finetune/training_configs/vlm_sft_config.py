@@ -58,7 +58,9 @@ DEFAULT_VLM_SFT = {
     "do_image_splitting": True,  # split large images into tiles (matches liquid-vlm pretraining)
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 3,  # 1 to 5 generally (post-training goes for 2-3)
-    "per_device_train_batch_size": 4,  # adjust based on context length (post-training goes for 1-2 at 32k context length)
+    "per_device_train_batch_size": 1,
+    "per_device_eval_batch_size": 1,
+    "gradient_accumulation_steps": 8,
     "learning_rate": 5e-5,  # anything from 1e-5 to 5e-5 seems ok. "end_learning_rate" would be 1e-7, not easy to set up with out-of-the-box SFTConfig
     "lr_scheduler_type": "linear",
     "warmup_ratio": 0.2,
@@ -66,6 +68,7 @@ DEFAULT_VLM_SFT = {
     "logging_first_step": True,
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
+    "eval_on_start": True,
     "gradient_checkpointing": True,
     "remove_unused_columns": False,  # preserve pixel_values, spatial_shapes, pixel_attention_mask
     "dataloader_drop_last": True,  # avoid batch size mismatches in DDP

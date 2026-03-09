@@ -94,7 +94,9 @@ def _compute_iou(box_a: list[float], box_b: list[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def score_grounding_iou(prediction: str, ground_truth: str, iou_threshold: float = 0.5) -> float:
+def score_grounding_iou(
+    prediction: str, ground_truth: str, iou_threshold: float = 0.5
+) -> float:
     pred_bbox = _parse_bbox(prediction)
     gt_bbox = _parse_bbox(ground_truth)
 
@@ -105,8 +107,14 @@ def score_grounding_iou(prediction: str, ground_truth: str, iou_threshold: float
     return 1.0 if iou >= iou_threshold else 0.0
 
 
-def score_short_answer(prediction: str, ground_truth: str, match_mode: str = "contains") -> float:
-    if match_mode == "any_in_array" and ground_truth.startswith("[") and ground_truth.endswith("]"):
+def score_short_answer(
+    prediction: str, ground_truth: str, match_mode: str = "contains"
+) -> float:
+    if (
+        match_mode == "any_in_array"
+        and ground_truth.startswith("[")
+        and ground_truth.endswith("]")
+    ):
         # OCRBench/InfoVQA mode: treat as "any of these values is correct"
         # Lowercase and strip for array matching
         gt_clean = ground_truth.replace('""', '"')
@@ -180,10 +188,14 @@ _METRIC_KWARGS = {
 }
 
 
-def compute_metric(metric_type: str, prediction: str, ground_truth: str, **kwargs) -> float:
+def compute_metric(
+    metric_type: str, prediction: str, ground_truth: str, **kwargs
+) -> float:
     fn = _METRIC_DISPATCH.get(metric_type)
     if fn is None:
-        raise ValueError(f"Unknown metric: {metric_type}. Available: {list(_METRIC_DISPATCH.keys())}")
+        raise ValueError(
+            f"Unknown metric: {metric_type}. Available: {list(_METRIC_DISPATCH.keys())}"
+        )
     accepted = _METRIC_KWARGS.get(metric_type, set())
     filtered = {k: v for k, v in kwargs.items() if k in accepted}
     return fn(prediction, ground_truth, **filtered)

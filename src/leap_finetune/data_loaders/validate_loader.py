@@ -40,9 +40,7 @@ def _get_source_type(dataset_path: str) -> str:
         p = Path(dataset_path)
         if path_lower.endswith(".parquet"):
             return "parquet"
-        elif p.is_dir() and (
-            list(p.glob("*.parquet")) or list(p.glob("*.pq"))
-        ):
+        elif p.is_dir() and (list(p.glob("*.parquet")) or list(p.glob("*.pq"))):
             return "parquet"
         else:
             return "jsonl"
@@ -117,9 +115,7 @@ def _load_sample_dataset(
             if source_type == "parquet":
                 if p.is_dir():
                     # Directory of parquets: read first shard
-                    parquet_files = sorted(p.glob("*.parquet")) + sorted(
-                        p.glob("*.pq")
-                    )
+                    parquet_files = sorted(p.glob("*.parquet")) + sorted(p.glob("*.pq"))
                     if not parquet_files:
                         raise ValueError(
                             f"No parquet files found in directory: {dataset_path}"

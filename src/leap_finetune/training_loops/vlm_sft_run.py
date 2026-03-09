@@ -99,9 +99,10 @@ class LFMVLMTrainer(Trainer):
     def get_train_dataloader(self):
         # Ray already shards across workers — return a raw DataLoader
         # (bypasses Accelerate's DistributedSampler / IterableDatasetShard)
+        # Use per_device_train_batch_size directly, NOT self._train_batch_size
         return DataLoader(
             self.train_dataset,
-            batch_size=self._train_batch_size,
+            batch_size=self.args.per_device_train_batch_size,
             collate_fn=self.data_collator,
             shuffle=True,
         )

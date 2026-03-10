@@ -46,11 +46,15 @@ def generate_run_name(
         lora_str = "no_lora"
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    slurm_id = os.environ.get("SLURM_JOB_ID", "")
 
-    return (
+    name = (
         f"{safe_model_name}-{training_type}-{dataset_name}-{limit_str}"
         f"-{lr_str}-{warmup_str}-{lora_str}-{timestamp}"
     )
+    if slurm_id:
+        name += f"-j{slurm_id}"
+    return name
 
 
 def parse_job_config(config_input: str) -> JobConfig:

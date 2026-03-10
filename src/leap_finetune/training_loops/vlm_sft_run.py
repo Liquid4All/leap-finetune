@@ -45,13 +45,14 @@ class LFMVLMTrainer(Trainer):
     def __init__(self, lr_multipliers: dict[str, float] | None = None, **kwargs):
         super().__init__(**kwargs)
         self.lr_multipliers = lr_multipliers or DEFAULT_LR_MULTIPLIERS
+        self._optimizer_group_names: list[str] = []
 
     def create_optimizer(self):
         if self.optimizer is not None:
             return self.optimizer
 
         base_lr = self.args.learning_rate
-        weight_decay = self.args.weight_decay
+        weight_decay = float(self.args.weight_decay)
 
         # Group trainable params by matching prefix
         grouped: dict[str, list] = {prefix: [] for prefix in self.lr_multipliers}
@@ -69,8 +70,9 @@ class LFMVLMTrainer(Trainer):
             if not matched:
                 ungrouped.append(param)
 
-        # Build optimizer param groups
+        # Build optimizer param groups (order matches _optimizer_group_names)
         optimizer_groups = []
+        self._optimizer_group_names = []
         for prefix, params in grouped.items():
             if not params:
                 continue
@@ -78,6 +80,9 @@ class LFMVLMTrainer(Trainer):
             optimizer_groups.append(
                 {"params": params, "lr": base_lr * mult, "weight_decay": weight_decay}
             )
+            # Short name for wandb: "model.vision_tower" → "vision_tower"
+            short_name = prefix.removeprefix("model.")
+            self._optimizer_group_names.append(short_name)
             logger.info(
                 f"Param group '{prefix}': {len(params)} params, lr={base_lr * mult:.2e}"
             )
@@ -86,6 +91,7 @@ class LFMVLMTrainer(Trainer):
             optimizer_groups.append(
                 {"params": ungrouped, "lr": base_lr, "weight_decay": weight_decay}
             )
+            self._optimizer_group_names.append("ungrouped")
             logger.info(
                 f"Param group 'ungrouped': {len(ungrouped)} params, lr={base_lr:.2e}"
             )
@@ -95,6 +101,15 @@ class LFMVLMTrainer(Trainer):
             optimizer_groups, betas=betas, fused=torch.cuda.is_available()
         )
         return self.optimizer
+
+    def log(self, logs: dict[str, float], *args, **kwargs) -> None:
+        # Inject per-component LRs so wandb tracks each group separately
+        if self.optimizer is not None and "learning_rate" in logs:
+            for name, group in zip(
+                self._optimizer_group_names, self.optimizer.param_groups
+            ):
+                logs[f"lr/{name}"] = group["lr"]
+        super().log(logs, *args, **kwargs)
 
     def get_train_dataloader(self):
         # Ray already shards across workers — return a raw DataLoader

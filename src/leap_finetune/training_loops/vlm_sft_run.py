@@ -1,5 +1,6 @@
 import logging
 import math
+from pathlib import Path
 
 import torch
 import ray.train
@@ -9,7 +10,10 @@ from ray.train.huggingface.transformers import prepare_trainer
 
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.tokenize_data import create_vlm_collate_fn
-from leap_finetune.evaluation import BenchmarkEvalCallback
+from leap_finetune.evaluation import (
+    BenchmarkEvalCallback,
+    create_vlm_benchmarks_from_config,
+)
 from leap_finetune.training_configs.vlm_sft_config import (
     DEFAULT_LR_MULTIPLIERS,
     VLM_SFT_EXCLUDED_KEYS,
@@ -163,15 +167,31 @@ def vlm_sft_run(training_config: dict) -> None:
             "vision_encoder_lr_multiplier"
         ]
 
+    # Resolve resume checkpoint path
+    resume_from = train_config.get("resume_from_checkpoint")
+    output_dir = train_config.get("output_dir", "")
+    if resume_from == "latest":
+        latest = Path(output_dir) / "latest"
+        if latest.exists():
+            resume_from = str(latest.resolve())
+            logger.info(f"Resuming from latest checkpoint: {resume_from}")
+        else:
+            logger.warning(f"No 'latest' symlink in {output_dir}, starting fresh")
+            resume_from = None
+    elif resume_from:
+        logger.info(f"Resuming from checkpoint: {resume_from}")
+
     # Filter out non-TrainingArguments parameters
     excluded_keys = VLM_SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
     train_config_filtered = {
         k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
-    # Configure wandb
+    # Configure wandb (auto-resumes the previous run ID when resuming from checkpoint)
     wandb_logging = bool(train_config.get("wandb_logging", False))
-    init_wandb_if_enabled(job_name, wandb_logging)
+    init_wandb_if_enabled(
+        job_name, wandb_logging, output_dir=output_dir if output_dir else None
+    )
 
     # Compute max_steps from materialized dataset size
     # (Trainer can't infer it from our bypassed DataLoader)
@@ -230,18 +250,14 @@ def vlm_sft_run(training_config: dict) -> None:
     # Add benchmark evaluation callback if configured
     benchmark_configs = training_config.get("benchmark_configs")
     if benchmark_configs and benchmark_configs.get("benchmarks"):
-        trainer.add_callback(
-            BenchmarkEvalCallback(
-                processor=processor,
-                benchmark_configs=benchmark_configs["benchmarks"],
-                default_max_new_tokens=benchmark_configs.get("max_new_tokens", 128),
-            )
-        )
+        benchmarks = create_vlm_benchmarks_from_config(benchmark_configs, processor)
+        if benchmarks:
+            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
 
     trainer = prepare_trainer(trainer)
 
     try:
-        trainer.train()
+        trainer.train(resume_from_checkpoint=resume_from)
         logger.info("Training completed successfully")
     except RuntimeError as e:
         error_msg = str(e)

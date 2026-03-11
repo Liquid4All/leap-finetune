@@ -33,7 +33,12 @@ def is_rank_zero() -> bool:
         return True
 
 
-def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
+def init_wandb_if_enabled(
+    job_name: str,
+    wandb_logging: bool,
+    run_id: str | None = None,
+    output_dir: str | None = None,
+) -> None:
     """Initialize wandb with project and run name if logging is enabled.
 
     This must be called BEFORE creating the trainer to ensure training metrics are logged.
@@ -41,6 +46,8 @@ def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
     Args:
         job_name: Name for the wandb run (defaults to job_name from config)
         wandb_logging: Whether wandb logging is enabled
+        run_id: Optional wandb run ID to resume (auto-read from output_dir if not provided)
+        output_dir: Training output directory — used to persist/restore wandb run ID
     """
     if not wandb_logging:
         return
@@ -51,14 +58,24 @@ def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
         if is_rank_zero():
             project = os.environ.get("WANDB_PROJECT", "leap-finetune")
 
+            # Auto-read saved run ID from previous run if resuming
+            run_id_file = Path(output_dir) / ".wandb_run_id" if output_dir else None
+            if run_id is None and run_id_file and run_id_file.exists():
+                run_id = run_id_file.read_text().strip() or None
+
             wandb.init(
                 project=project,
                 name=job_name,
-                resume="allow",  # Allow resuming if run exists (replaces deprecated reinit=True)
+                id=run_id,
+                resume="allow",
                 settings=wandb.Settings(
-                    _disable_stats=False,  # Enable stats collection
+                    _disable_stats=False,
                 ),
             )
+
+            # Persist run ID so future resumes auto-detect it
+            if wandb.run and run_id_file:
+                run_id_file.write_text(wandb.run.id)
     except ImportError:
         pass
     except Exception as e:
@@ -168,7 +185,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
         "RAY_IGNORE_UNHANDLED_ERRORS": "1",
         # Reduce Ray logging verbosity
-        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver (reduce terminal noise)
+        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver
         "RAY_DEDUP_LOGS": "1",  # Keep deduplication enabled (shows ... for repeated messages)
         "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
     }
@@ -236,8 +253,8 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
     home_default = str(Path.home() / "ray_temp")
     candidates.extend(
         [
-            "/tmp/ray",
             home_default,
+            "/tmp/ray",
         ]
     )
 

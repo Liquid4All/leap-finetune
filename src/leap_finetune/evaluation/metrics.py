@@ -1,7 +1,11 @@
-"""Scoring functions for VLM benchmark evaluation.
+"""Scoring functions for benchmark evaluation.
 
-Supports: grounding_iou, short_answer, mcq_gen.
-logprob_zero_shot is handled directly in the callback (requires model forward pass).
+Built-in metrics: ``grounding_iou``, ``short_answer``, ``mcq_gen``.
+
+To add a new metric:
+  1. Define a function: ``(prediction: str, ground_truth: str, **kwargs) -> float``
+  2. Add it to ``_METRIC_DISPATCH`` below.
+  3. Add the metric name to ``GENERATION_METRICS`` or ``LOGPROB_METRICS`` in ``vlm_config.py``.
 """
 
 import ast
@@ -9,20 +13,122 @@ import json
 import re
 
 
-def _parse_bbox(text: str) -> list[float] | None:
-    """Parse bounding box [x1, y1, x2, y2] from various JSON formats.
+# -- Built-in scoring functions --
 
-    Handles:
-    - [x1, y1, x2, y2]
-    - [[x1, y1, x2, y2]]
-    - [{"label": str, "bbox": [x1, y1, x2, y2]}]
-    - {"bbox": [x1, y1, x2, y2]}
+
+def score_grounding_iou(
+    prediction: str, ground_truth: str, iou_threshold: float = 0.5, **_
+) -> float:
+    """1.0 if predicted bbox overlaps ground truth above threshold, else 0.0."""
+    pred_bbox = _parse_bbox(prediction)
+    gt_bbox = _parse_bbox(ground_truth)
+
+    if pred_bbox is None or gt_bbox is None:
+        return 0.0
+
+    return 1.0 if _compute_iou(pred_bbox, gt_bbox) >= iou_threshold else 0.0
+
+
+def score_short_answer(
+    prediction: str, ground_truth: str, match_mode: str = "contains", **_
+) -> float:
+    """1.0 if ground truth appears in the prediction (case-insensitive).
+
+    match_mode="any_in_array": ground truth is a JSON array — match if any element
+    appears in the prediction.
+    """
+    if (
+        match_mode == "any_in_array"
+        and ground_truth.startswith("[")
+        and ground_truth.endswith("]")
+    ):
+        gt_clean = ground_truth.replace('""', '"')
+        pred_lower = prediction.lower().strip().replace("\n", " ")
+        try:
+            gt_array = ast.literal_eval(gt_clean)
+        except (ValueError, SyntaxError):
+            gt_array = [ground_truth]
+
+        for gt_item in gt_array:
+            if str(gt_item).lower().strip().replace("\n", " ") in pred_lower:
+                return 1.0
+        return 0.0
+
+    return 1.0 if ground_truth.lower().strip() in prediction.lower().strip() else 0.0
+
+
+def score_mcq_gen(prediction: str, ground_truth: str, **_) -> float:
+    """1.0 if extracted MCQ letter matches ground truth."""
+    if prediction.strip() == ground_truth.strip():
+        return 1.0
+
+    gt_letter = _extract_mcq_answer(ground_truth)
+    pred_letter = _extract_mcq_answer(prediction)
+
+    if gt_letter is None or pred_letter is None:
+        return 0.0
+
+    return 1.0 if gt_letter == pred_letter else 0.0
+
+
+# -- Metric dispatch (add new metrics here) --
+
+_METRIC_DISPATCH: dict[str, callable] = {
+    "grounding_iou": score_grounding_iou,
+    "short_answer": score_short_answer,
+    "mcq_gen": score_mcq_gen,
+}
+
+
+def compute_metric(
+    metric_type: str, prediction: str, ground_truth: str, **kwargs
+) -> float:
+    """Look up and call the named scoring function."""
+    fn = _METRIC_DISPATCH.get(metric_type)
+    if fn is None:
+        raise ValueError(
+            f"Unknown metric: {metric_type!r}. "
+            f"Available: {sorted(_METRIC_DISPATCH)}"
+        )
+    return fn(prediction, ground_truth, **kwargs)
+
+
+# -- Internal helpers --
+
+_VALID_MCQ_LETTERS = set("abcdef")
+
+_MCQ_PATTERNS = [
+    r"\b([a-f])[\.\(\):, ]?",
+    r"(?:option |choice |answer: |the answer is )\s*([a-f])\b",
+    r"^([a-f])[:).]",
+    r"\b([a-f])[\.\s]*(?:is correct|is the answer|appears to be right)\b",
+]
+
+
+def _extract_mcq_answer(text: str) -> str | None:
+    """Extract a single MCQ letter (A-F) from free-form text."""
+    text = text.strip().lower()
+
+    if len(text) == 1 and text in _VALID_MCQ_LETTERS:
+        return text.upper()
+
+    for pattern in _MCQ_PATTERNS:
+        matches = re.findall(pattern, text)
+        valid = [m for m in matches if m in _VALID_MCQ_LETTERS]
+        if len(valid) == 1:
+            return valid[0].upper()
+    return None
+
+
+def _parse_bbox(text: str) -> list[float] | None:
+    """Parse bounding box [x1, y1, x2, y2] from JSON or Python literal formats.
+
+    Handles nested structures like [{"bbox": [...]}] and normalizes 0-1000 coords to 0-1.
     """
     if not isinstance(text, str):
         return None
 
     text = text.strip()
-
     json_match = re.search(r"(\[.*\]|\{.*\})", text, re.DOTALL)
     if json_match:
         text = json_match.group(1)
@@ -36,7 +142,6 @@ def _parse_bbox(text: str) -> list[float] | None:
             return None
 
     bbox = None
-
     if isinstance(data, list) and len(data) > 0:
         if isinstance(data[0], dict):
             for item in data:
@@ -58,20 +163,19 @@ def _parse_bbox(text: str) -> list[float] | None:
     except (ValueError, TypeError):
         return None
 
-    # Normalize from 0-1000 to 0-1 if needed
-    max_val = max(abs(c) for c in bbox)
-    if max_val > 1.5:
+    # Normalize 0-1000 coordinate space to 0-1
+    if max(abs(c) for c in bbox) > 1.5:
         bbox = [c / 1000.0 for c in bbox]
 
     return bbox
 
 
 def _compute_iou(box_a: list[float], box_b: list[float]) -> float:
-    """Compute IoU between two [x1, y1, x2, y2] boxes."""
+    """Compute intersection-over-union between two [x1, y1, x2, y2] boxes."""
     x1_a, y1_a, x2_a, y2_a = box_a
     x1_b, y1_b, x2_b, y2_b = box_b
 
-    # Handle inverted coords
+    # Handle inverted coordinates
     if x1_a > x2_a:
         x1_a, x2_a = x2_a, x1_a
     if y1_a > y2_a:
@@ -92,110 +196,3 @@ def _compute_iou(box_a: list[float], box_b: list[float]) -> float:
     union = area_a + area_b - inter
 
     return inter / union if union > 0 else 0.0
-
-
-def score_grounding_iou(
-    prediction: str, ground_truth: str, iou_threshold: float = 0.5
-) -> float:
-    pred_bbox = _parse_bbox(prediction)
-    gt_bbox = _parse_bbox(ground_truth)
-
-    if pred_bbox is None or gt_bbox is None:
-        return 0.0
-
-    iou = _compute_iou(pred_bbox, gt_bbox)
-    return 1.0 if iou >= iou_threshold else 0.0
-
-
-def score_short_answer(
-    prediction: str, ground_truth: str, match_mode: str = "contains"
-) -> float:
-    if (
-        match_mode == "any_in_array"
-        and ground_truth.startswith("[")
-        and ground_truth.endswith("]")
-    ):
-        # OCRBench/InfoVQA mode: treat as "any of these values is correct"
-        # Lowercase and strip for array matching
-        gt_clean = ground_truth.replace('""', '"')
-        pred_lower = prediction.lower().strip().replace("\n", " ")
-        try:
-            gt_array = ast.literal_eval(gt_clean)
-        except (ValueError, SyntaxError):
-            gt_array = [ground_truth]
-
-        for gt_item in gt_array:
-            gt_item = str(gt_item).lower().strip().replace("\n", " ")
-            if gt_item in pred_lower:
-                return 1.0
-        return 0.0
-
-    # Non-array path: case-insensitive substring match
-    return 1.0 if ground_truth.lower().strip() in prediction.lower().strip() else 0.0
-
-
-_VALID_MCQ_LETTERS = set("abcdef")
-
-# Patterns matching liquid-vlm's extract_mcq_answer priority order
-_MCQ_PATTERNS = [
-    r"\b([a-f])[\.\(\):, ]?",
-    r"(?:option |choice |answer: |the answer is )\s*([a-f])\b",
-    r"^([a-f])[:).]",
-    r"\b([a-f])[\.\s]*(?:is correct|is the answer|appears to be right)\b",
-]
-
-
-def _extract_mcq_answer(text: str) -> str | None:
-    text = text.strip().lower()
-
-    # Single letter shortcut
-    if len(text) == 1 and text in _VALID_MCQ_LETTERS:
-        return text.upper()
-
-    # Try each pattern; require exactly one unique match to avoid ambiguity
-    for pattern in _MCQ_PATTERNS:
-        matches = re.findall(pattern, text)
-        valid = [m for m in matches if m in _VALID_MCQ_LETTERS]
-        if len(valid) == 1:
-            return valid[0].upper()
-    return None
-
-
-def score_mcq_gen(prediction: str, ground_truth: str) -> float:
-    if prediction.strip() == ground_truth.strip():
-        return 1.0
-
-    gt_letter = _extract_mcq_answer(ground_truth)
-    pred_letter = _extract_mcq_answer(prediction)
-
-    if gt_letter is None or pred_letter is None:
-        return 0.0
-
-    return 1.0 if gt_letter == pred_letter else 0.0
-
-
-_METRIC_DISPATCH = {
-    "grounding_iou": score_grounding_iou,
-    "short_answer": score_short_answer,
-    "mcq_gen": score_mcq_gen,
-}
-
-
-_METRIC_KWARGS = {
-    "short_answer": {"match_mode"},
-    "grounding_iou": {"iou_threshold"},
-    "mcq_gen": set(),
-}
-
-
-def compute_metric(
-    metric_type: str, prediction: str, ground_truth: str, **kwargs
-) -> float:
-    fn = _METRIC_DISPATCH.get(metric_type)
-    if fn is None:
-        raise ValueError(
-            f"Unknown metric: {metric_type}. Available: {list(_METRIC_DISPATCH.keys())}"
-        )
-    accepted = _METRIC_KWARGS.get(metric_type, set())
-    filtered = {k: v for k, v in kwargs.items() if k in accepted}
-    return fn(prediction, ground_truth, **filtered)

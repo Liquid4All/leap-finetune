@@ -252,6 +252,28 @@ When training is done, you can bundle your output checkpoint with `leap-bundle` 
 
 > **Note**: VLM datasets commonly have images in a separate row and are referenced in the messages column. If your image URLs or Paths are in a separate column from your messages, you'll need to merge the images into the 'messages' section like above.
 
+## 🔄 Resuming Training
+
+If a run is interrupted (SLURM preemption, crash, etc.), you can resume from the last checkpoint with full optimizer state, LR schedule, and wandb continuity.
+
+Add `resume_from_checkpoint` to your `training_config`:
+
+```yaml
+training_config:
+  resume_from_checkpoint: "latest"   # resumes from the most recent checkpoint
+```
+
+This resolves the `latest` symlink in your output directory (e.g. `outputs/my_project/latest → checkpoint-step-16000`). To resume from a specific checkpoint instead:
+
+```yaml
+training_config:
+  resume_from_checkpoint: "/path/to/outputs/my_project/checkpoint-step-8000"
+```
+
+**What gets restored:** model weights, optimizer states, LR scheduler position, training step counter, and RNG states.
+
+**Wandb continuity:** The wandb run ID is saved to `<output_dir>/.wandb_run_id` automatically. On resume, it appends metrics to the same run.
+
 ## 🧪 Advanced Configuration
 
 Default base configs live in [`src/leap_finetune/training_configs/`](./src/leap_finetune/training_configs/) and are auto-discovered — new configs added to these files are immediately available via `extends` in YAML.

@@ -39,15 +39,17 @@ class RayDataLoaderMixin:
         )
 
 
-def run_training_safely(trainer):
+def run_training_safely(trainer, **kwargs):
     """Run trainer.train() with graceful handling of post-training CUDA/NCCL errors.
 
     Only suppresses distributed errors that occur *after* training made progress
     (global_step > 0), which indicates the error is from cleanup/teardown rather
     than a real training failure.
+
+    Any extra kwargs are forwarded to trainer.train() (e.g. resume_from_checkpoint).
     """
     try:
-        trainer.train()
+        trainer.train(**kwargs)
         logger.info("Training completed successfully")
     except RuntimeError as e:
         error_msg = str(e).lower()

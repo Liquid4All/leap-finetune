@@ -42,6 +42,7 @@ VLM_SFT_EXCLUDED_KEYS = {
     "do_image_splitting",
     "lr_multipliers",
     "vision_encoder_lr_multiplier",
+    "resume_from_checkpoint",
 }
 
 # Per-component LR multipliers (applied to base learning_rate).

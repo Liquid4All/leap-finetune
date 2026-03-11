@@ -180,7 +180,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
         "RAY_IGNORE_UNHANDLED_ERRORS": "1",
         # Reduce Ray logging verbosity
-        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver (reduce terminal noise)
+        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver
         "RAY_DEDUP_LOGS": "1",  # Keep deduplication enabled (shows ... for repeated messages)
         "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
     }
@@ -251,6 +251,7 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
         [
             f"/tmp/{user}/ray",
             home_default,
+            "/tmp/ray",
         ]
     )
 

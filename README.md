@@ -274,6 +274,27 @@ training_config:
 
 **Wandb continuity:** The wandb run ID is saved to `<output_dir>/.wandb_run_id` automatically. On resume, it appends metrics to the same run.
 
+## 📈 Evaluation Benchmarks
+
+Run benchmarks automatically during training at every `eval_steps`. Add a `benchmarks` section to your YAML config:
+
+```yaml
+benchmarks:
+  max_new_tokens: 128
+  benchmarks:
+    - name: "mmmu_val"
+      path: "/data/mmmu_val.jsonl"
+      metric: "short_answer"
+
+    - name: "imagenette"
+      path: "/data/imagenette_eval.jsonl"
+      metric: "logprob_zero_shot"
+```
+
+Benchmark data uses the **same format as training data** (HF messages schema). Available metrics: `short_answer`, `grounding_iou`, `mcq_gen`, `logprob_zero_shot`. Results are logged to wandb at `benchmark/{name}/score`.
+
+See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data format examples, YAML reference, and how to add custom metrics.
+
 ## 🧪 Advanced Configuration
 
 Default base configs live in [`src/leap_finetune/training_configs/`](./src/leap_finetune/training_configs/) and are auto-discovered — new configs added to these files are immediately available via `extends` in YAML.

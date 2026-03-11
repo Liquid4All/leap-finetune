@@ -58,8 +58,13 @@ def init_wandb_if_enabled(
         if is_rank_zero():
             project = os.environ.get("WANDB_PROJECT", "leap-finetune")
 
-            # Auto-read saved run ID from previous run if resuming
-            run_id_file = Path(output_dir) / ".wandb_run_id" if output_dir else None
+            # Auto-read saved run ID from previous run if resuming.
+            # Stored per job_name to avoid collisions between different runs.
+            run_id_file = (
+                Path(output_dir) / f".wandb_run_id_{job_name}"
+                if output_dir
+                else None
+            )
             if run_id is None and run_id_file and run_id_file.exists():
                 run_id = run_id_file.read_text().strip() or None
 

@@ -272,7 +272,7 @@ training_config:
 
 **What gets restored:** model weights, optimizer states, LR scheduler position, training step counter, and RNG states.
 
-**Wandb continuity:** The wandb run ID is saved to `<output_dir>/.wandb_run_id` automatically. On resume, it appends metrics to the same run.
+**Wandb continuity:** The wandb run ID is saved to `<output_dir>/.wandb_run_id_<job_name>` automatically. On resume, it appends metrics to the same run.
 
 ## 📈 Evaluation Benchmarks
 

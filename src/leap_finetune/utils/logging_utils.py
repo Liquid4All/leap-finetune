@@ -33,13 +33,21 @@ def is_rank_zero() -> bool:
         return True
 
 
-def init_tracker(job_name: str, tracker: str, space_id: str | None = None) -> None:
+def init_tracker(
+    job_name: str,
+    tracker: str,
+    space_id: str | None = None,
+    output_dir: str | None = None,
+    resume_from_checkpoint: str | None = None,
+) -> None:
     """Initialize experiment tracker. Must be called BEFORE creating the trainer.
 
     Args:
         job_name: Name for the run
         tracker: "wandb", "trackio", or "none"
         space_id: HF Space ID for trackio (required when tracker is "trackio")
+        output_dir: Training output directory — used to persist/restore wandb run ID
+        resume_from_checkpoint: If set, restore the saved wandb run ID for continuity
     """
     if tracker == "none":
         return
@@ -58,11 +66,24 @@ def init_tracker(job_name: str, tracker: str, space_id: str | None = None) -> No
         if is_rank_zero():
             project = os.environ.get("WANDB_PROJECT", "leap-finetune")
 
+            # Auto-read saved run ID from previous run if resuming.
+            # Stored per job_name to avoid collisions between different runs.
+            run_id = None
+            run_id_file = (
+                Path(output_dir) / f".wandb_run_id_{job_name}"
+                if output_dir
+                else None
+            )
+            if resume_from_checkpoint and run_id_file and run_id_file.exists():
+                run_id = run_id_file.read_text().strip() or None
+
             init_kwargs = {
                 "project": project,
                 "name": job_name,
                 "resume": "allow",
             }
+            if run_id:
+                init_kwargs["id"] = run_id
             if tracker == "wandb":
                 init_kwargs["settings"] = wandb.Settings(_disable_stats=False)
             if space_id:
@@ -71,6 +92,10 @@ def init_tracker(job_name: str, tracker: str, space_id: str | None = None) -> No
             run = wandb.init(**init_kwargs)
             if hasattr(run, "url") and run.url:
                 print(f"\nTracker URL: {run.url}")
+
+            # Persist run ID so resumed runs can continue logging to the same run
+            if wandb.run and run_id_file:
+                run_id_file.write_text(wandb.run.id)
     except ImportError:
         pass
     except Exception as e:

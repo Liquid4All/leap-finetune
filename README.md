@@ -88,7 +88,7 @@ uv run leap-finetune <path_to_config.yaml>
 
 It uses Ray Train + Accelerate for distributed training.
 
-Unless you overwrote `output_dir`, results will be stored in `outputs/training_type/job_name/`
+Unless you overwrote `output_dir`, results will be stored in `outputs/{project_name}/{run_name}/`. Each run gets its own directory with a unique name based on model, dataset, LR, and timestamp.
 
 ### Modal Support
 
@@ -263,16 +263,16 @@ training_config:
   resume_from_checkpoint: "latest"   # resumes from the most recent checkpoint
 ```
 
-This resolves the `latest` symlink in your output directory (e.g. `outputs/my_project/latest → checkpoint-step-16000`). To resume from a specific checkpoint instead:
+This finds the most recent run directory under `outputs/{project_name}/` and resumes from its latest checkpoint. To resume from a specific checkpoint instead:
 
 ```yaml
 training_config:
-  resume_from_checkpoint: "/path/to/outputs/my_project/checkpoint-step-8000"
+  resume_from_checkpoint: "/path/to/outputs/my_project/run_name/checkpoint-step-8000"
 ```
 
 **What gets restored:** model weights, optimizer states, LR scheduler position, training step counter, and RNG states.
 
-**Wandb continuity:** The wandb run ID is saved to `<output_dir>/.wandb_run_id_<job_name>` automatically. On resume, it appends metrics to the same run.
+**Wandb continuity:** The wandb run ID is saved to `<run_dir>/.wandb_run_id` automatically. On resume, it restores the same wandb run. Fresh runs always get a new wandb run.
 
 ## 📈 Evaluation Benchmarks
 

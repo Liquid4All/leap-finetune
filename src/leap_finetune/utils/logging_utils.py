@@ -321,8 +321,7 @@ def select_object_spilling_dir(ray_temp_dir: str | None = None) -> str:
     home = str(Path.home())
     candidates = [
         os.path.join(ray_temp_dir or home, "spill"),
-        "/tmp/ray_spill",  # Usually disk-based, survives reboots
-        f"{home}/ray_spill",  # Fallback on user's home filesystem
+        f"{home}/ray_spill",
     ]
     good = _paths_with_free_space(candidates, min_free_ratio=0.10)
     target = good[0] if good else candidates[-1]

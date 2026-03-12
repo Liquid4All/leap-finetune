@@ -195,9 +195,42 @@ def parse_job_config(config_input: str) -> JobConfig:
         lora_type="a",
     )
 
-    default_project_dir = f"./outputs/{project_name}"
-    project_dir = os.getenv("OUTPUT_DIR", default_project_dir)
-    final_output_dir = pathlib.Path(project_dir).resolve()
+    # Each run gets its own subdirectory: outputs/{project_name}/{run_name}/
+    # On resume, infer the original run directory from the checkpoint path.
+    resume_from = final_train_values.get("resume_from_checkpoint")
+    base_project_dir = os.getenv(
+        "OUTPUT_DIR", f"./outputs/{project_name}"
+    )
+
+    if resume_from and resume_from != "latest":
+        # Validate the checkpoint path exists
+        resume_path = pathlib.Path(resume_from).resolve()
+        if not resume_path.exists():
+            raise FileNotFoundError(
+                f"Checkpoint not found: {resume_from}"
+            )
+        # use parent of checkpoint as output dir
+        final_output_dir = resume_path.parent
+    elif resume_from == "latest":
+        # Find the most recent run directory that has a "latest" checkpoint symlink
+        project_path = pathlib.Path(base_project_dir).resolve()
+        run_dirs = [
+            d for d in project_path.iterdir()
+            if d.is_dir() and (d / "latest").exists()
+        ] if project_path.exists() else []
+        if run_dirs:
+            final_output_dir = max(run_dirs, key=lambda d: d.stat().st_mtime)
+            # Resolve "latest" to the actual checkpoint path 
+            latest_link = final_output_dir / "latest"
+            resume_from = str(latest_link.resolve())
+            final_training_config.value["resume_from_checkpoint"] = resume_from
+        else:
+            final_output_dir = project_path / run_name
+            # No checkpoint found — clear resume so training starts fresh
+            resume_from = None
+            final_training_config.value.pop("resume_from_checkpoint", None)
+    else:
+        final_output_dir = pathlib.Path(base_project_dir).resolve() / run_name
 
     try:
         final_output_dir.mkdir(parents=True, exist_ok=True)
@@ -205,7 +238,7 @@ def parse_job_config(config_input: str) -> JobConfig:
         print(
             f"Permission denied creating {final_output_dir}, falling back to local ./outputs"
         )
-        final_output_dir = pathlib.Path.cwd() / "outputs" / project_name
+        final_output_dir = pathlib.Path.cwd() / "outputs" / project_name / run_name
         final_output_dir.mkdir(parents=True, exist_ok=True)
 
     final_training_config.value["output_dir"] = str(final_output_dir)

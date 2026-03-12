@@ -102,6 +102,30 @@ def init_tracker(
         warnings.warn(f"Failed to initialize {tracker}: {e}", UserWarning)
 
 
+def finish_tracker(tracker: str) -> None:
+    """Cleanly finish the tracker run so it shows as 'Completed'.
+
+    Must only be called after all training steps have finished successfully.
+    Only acts on rank 0 (the process that owns the run).
+    """
+    if tracker == "none" or not is_rank_zero():
+        return
+    try:
+        if tracker == "trackio":
+            import trackio as wandb
+        else:
+            import wandb
+
+        if wandb.run is not None:
+            wandb.finish()
+    except Exception:
+        pass
+
+
+# Backward-compatible alias
+finish_wandb_if_enabled = finish_tracker
+
+
 def worker_process_setup_hook() -> None:
     """
     Configure logging on Ray worker processes.

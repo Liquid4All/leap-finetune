@@ -39,12 +39,76 @@ def load_benchmark_samples(
 
     samples = loader(path, limit)
 
-    # Reuse training pipeline normalization: column renames, JSON parsing, image_root
+    # 1. Normalize first, then change legacy formatted data to HF format
     normalize = normalize_columns("vlm_sft", image_root=image_root)
-    samples = [normalize(s) for s in samples]
+    samples = [_convert_legacy_to_hf_format(normalize(s), image_root) for s in samples]
 
     logger.info("Loaded %d samples from %s (format=%s)", len(samples), path, format)
     return samples
+
+
+def _convert_legacy_to_hf_format(
+    sample: dict, image_root: str | None = None
+) -> dict:
+    """Convert flat string content + separate ``images`` field to structured HF format.
+
+    Handles legacy data where content is a plain string with ``<image>`` placeholders
+    and images are in a separate top-level list::
+
+        {"messages": [{"role": "user", "content": "<image>Q"}], "images": ["/path.jpg"]}
+
+    Converts to::
+
+        {"messages": [{"role": "user", "content": [
+            {"type": "image", "image": "/path.jpg"},
+            {"type": "text", "text": "Q"}
+        ]}]}
+
+    Prepends ``image_root`` to relative image paths during conversion.
+    Already-structured content (list of dicts) is left unchanged.
+    """
+    messages = sample.get("messages")
+    if not messages or not isinstance(messages, list):
+        return sample
+
+    # If first message content is already a list, assume structured format
+    if isinstance(messages[0].get("content"), list):
+        return sample
+
+    images = sample.get("images", [])
+    # Prepend image_root to relative paths in the legacy images list
+    if image_root:
+        from pathlib import PurePosixPath
+
+        images = [
+            str(PurePosixPath(image_root) / p)
+            if not PurePosixPath(p).is_absolute()
+            else p
+            for p in images
+        ]
+
+    image_idx = 0
+
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, str):
+            continue
+
+        if "<image>" in content:
+            parts = []
+            for i, text_part in enumerate(content.split("<image>")):
+                if i > 0 and image_idx < len(images):
+                    parts.append({"type": "image", "image": images[image_idx]})
+                    image_idx += 1
+                if text_part.strip():
+                    parts.append({"type": "text", "text": text_part.strip()})
+            msg["content"] = parts
+        else:
+            msg["content"] = [{"type": "text", "text": content}]
+
+    # Images are now inline — remove the separate field
+    sample.pop("images", None)
+    return sample
 
 
 def _detect_format(path: str) -> str:

@@ -54,9 +54,9 @@ def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    # Enforce eager expert routing for MoE (transformers v5)
+    # Use grouped_mm expert routing for MoE (requires torch>=2.9.0)
     if hasattr(model, "set_experts_implementation"):
-        model.set_experts_implementation("eager")
+        model.set_experts_implementation("grouped_mm")
 
     print(f"Architecture: {model.config.architectures[0]}")
     print(f"Model type: {model.config.model_type}")

@@ -14,7 +14,7 @@ from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 class JobConfig:
     job_name: str
     model_name: str = "LFM2-1.2B"
-    training_type: Literal["sft", "dpo", "vlm_sft"] = "sft"
+    training_type: Literal["sft", "dpo", "vlm_sft", "moe_sft", "moe_dpo"] = "sft"
     dataset: DatasetLoader | tuple[Dataset, Dataset] | None = None
     training_config: TrainingConfig = TrainingConfig.DEFAULT_SFT
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
@@ -35,10 +35,17 @@ class JobConfig:
         if isinstance(config_value, dict):
             config_training_type = config_value.get("training_type")
             if config_training_type and config_training_type != self.training_type:
-                raise ValueError(
-                    f"Training config type '{config_training_type}' doesn't match "
-                    f"job training type '{self.training_type}'"
-                )
+                # Allow MoE training types to use base SFT/DPO configs
+                compatible = {
+                    "moe_sft": ("sft", "moe_sft"),
+                    "moe_dpo": ("dpo", "moe_dpo"),
+                }
+                allowed = compatible.get(self.training_type, (self.training_type,))
+                if config_training_type not in allowed:
+                    raise ValueError(
+                        f"Training config type '{config_training_type}' doesn't match "
+                        f"job training type '{self.training_type}'"
+                    )
 
     def to_dict(self, dataset: tuple[Dataset, Dataset] | None = None) -> dict[str, Any]:
         dataset_to_use = dataset if dataset is not None else self.dataset

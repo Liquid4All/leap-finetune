@@ -21,6 +21,7 @@ from leap_finetune.utils.logging_utils import (
     select_ray_temp_dir,
     select_object_spilling_dir,
 )
+from leap_finetune.utils.model_utils import is_moe_model_from_name
 
 
 #################################
@@ -34,6 +35,11 @@ def ray_trainer(job_config: dict) -> None:
     """
 
     training_type = job_config["training_type"]
+
+    # Auto-route MoE models to dedicated training loops
+    if training_type in ("sft", "dpo") and is_moe_model_from_name(job_config["model_name"]):
+        training_type = f"moe_{training_type}"
+
     output_dir = job_config["training_config"]["output_dir"]
 
     set_seed(42)
@@ -89,7 +95,7 @@ def ray_trainer(job_config: dict) -> None:
 
     if isinstance(dataset_config, DatasetLoader):
         # Pre-tokenize SFT and DPO on driver; VLM passes through
-        use_pretokenize = training_type in ("sft", "dpo")
+        use_pretokenize = training_type in ("sft", "dpo", "moe_sft", "moe_dpo")
         train_ds, eval_ds = create_ray_datasets(
             dataset_config,
             tokenizer=tokenizer if use_pretokenize else None,

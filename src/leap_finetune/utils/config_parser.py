@@ -92,7 +92,7 @@ def parse_job_config(config_input: str) -> JobConfig:
     dataset_path_env = os.getenv("DATASET_PATH")
     final_dataset_path = dataset_path_env if dataset_path_env else ds_config.get("path")
 
-    valid_types = {"sft", "dpo", "vlm_sft"}
+    valid_types = {"sft", "dpo", "vlm_sft", "moe_sft", "moe_dpo"}
     ds_type = ds_config.get("type")
     if ds_type not in valid_types:
         raise ValueError(
@@ -130,6 +130,8 @@ def parse_job_config(config_input: str) -> JobConfig:
             "sft": "DEFAULT_SFT",
             "dpo": "DEFAULT_DPO",
             "vlm_sft": "DEFAULT_VLM_SFT",
+            "moe_sft": "MOE_SFT",
+            "moe_dpo": "MOE_DPO",
         }
         if training_type not in training_type_to_config:
             raise ValueError(f"Unknown training type: {training_type}")

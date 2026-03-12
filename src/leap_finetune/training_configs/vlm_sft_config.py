@@ -46,8 +46,7 @@ VLM_SFT_EXCLUDED_KEYS = {
 }
 
 # Per-component LR multipliers (applied to base learning_rate).
-# Matches liquid-vlm convention: vision encoder trains slower to preserve pretrained features.
-# HF model prefixes: model.vision_tower, model.multi_modal_projector, model.language_model
+# Vision encoder trains at a lower LR to preserve pretrained features.
 DEFAULT_LR_MULTIPLIERS = {
     "model.vision_tower": 0.1,
     "model.multi_modal_projector": 1.0,
@@ -58,13 +57,13 @@ DEFAULT_LR_MULTIPLIERS = {
 DEFAULT_VLM_SFT = {
     "training_type": "vlm_sft",
     "max_image_tokens": None,  # None = processor default (256); set int to override
-    "do_image_splitting": True,  # split large images into tiles (matches liquid-vlm pretraining)
+    "do_image_splitting": True, # for VLMs, split large images into multiple tiles
     "output_dir": SFT_OUTPUT_PATH,
-    "num_train_epochs": 3,  # 1 to 5 generally (post-training goes for 2-3)
-    "per_device_train_batch_size": 1,
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 1, 
     "per_device_eval_batch_size": 1,
     "gradient_accumulation_steps": 8,
-    "learning_rate": 5e-5,  # anything from 1e-5 to 5e-5 seems ok. "end_learning_rate" would be 1e-7, not easy to set up with out-of-the-box SFTConfig
+    "learning_rate": 5e-5,
     "lr_scheduler_type": "linear",
     "warmup_ratio": 0.2,
     "logging_steps": 10,

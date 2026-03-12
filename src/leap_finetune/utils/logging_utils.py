@@ -99,8 +99,6 @@ def init_tracker(
     except ImportError:
         pass
     except Exception as e:
-        import warnings
-
         warnings.warn(f"Failed to initialize {tracker}: {e}", UserWarning)
 
 

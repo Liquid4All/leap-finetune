@@ -9,7 +9,7 @@ so benchmark data uses one unified schema::
 
 import json
 import logging
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from leap_finetune.data_loaders.validate_loader import normalize_columns
 
@@ -78,8 +78,6 @@ def _convert_legacy_to_hf_format(
     images = sample.get("images", [])
     # Prepend image_root to relative paths in the legacy images list
     if image_root:
-        from pathlib import PurePosixPath
-
         images = [
             str(PurePosixPath(image_root) / p)
             if not PurePosixPath(p).is_absolute()
@@ -145,13 +143,12 @@ def _load_json(path: str, limit: int | None) -> list[dict]:
 
 
 def _load_parquet(path: str, limit: int | None) -> list[dict]:
-    import glob as glob_mod
-
+    import glob
     import pandas as pd
 
     p = Path(path)
     if p.is_dir():
-        files = sorted(glob_mod.glob(str(p / "*.parquet")))
+        files = sorted(glob.glob(str(p / "*.parquet")))
         df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
     else:
         df = pd.read_parquet(path)

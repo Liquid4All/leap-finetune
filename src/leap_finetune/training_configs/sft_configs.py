@@ -95,13 +95,13 @@ MOE_DEEPSPEED_CONFIG = {
 DEFAULT_SFT = {
     "training_type": "sft",
     "output_dir": SFT_OUTPUT_PATH,
-    "num_train_epochs": 3,  # 1 to 5 generally (post-training goes for 2-3)
-    "per_device_train_batch_size": 16,  # adjust based on context length (post-training goes for 1-2 at 32k context length)
-    "learning_rate": 5e-5,  # anything from 1e-5 to 5e-5 seems ok. "end_learning_rate" would be 1e-7, not easy to set up with out-of-the-box SFTConfig
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 16,
+    "learning_rate": 5e-5,
     "lr_scheduler_type": "linear",
     "warmup_ratio": 0.2,
-    "logging_steps": 10,  # Log training metrics every 10 steps
-    "logging_first_step": True,  # Log at step 0 to see initial metrics
+    "logging_steps": 10,
+    "logging_first_step": True,
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "ddp_find_unused_parameters": False,

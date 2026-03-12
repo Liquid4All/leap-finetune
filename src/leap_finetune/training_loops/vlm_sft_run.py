@@ -35,14 +35,8 @@ logger = logging.getLogger(__name__)
 class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
     """VLM Trainer with per-component LR multipliers and Ray data integration.
 
-    Mirrors liquid-vlm convention: vision encoder trains at a lower LR
-    to preserve pretrained features, while the projector and LLM backbone
-    train at the full base rate.
-
-    HF VLM param prefixes:
-        model.vision_tower          — vision encoder (e.g. SigLIP2)
-        model.multi_modal_projector — projector
-        model.language_model        — LLM backbone (e.g. LFM2)
+    Vision encoder trains at a lower LR to preserve pretrained features,
+    while the projector and LLM backbone train at the base rate.
     """
 
     def __init__(self, lr_multipliers: dict[str, float] | None = None, **kwargs):
@@ -144,8 +138,7 @@ def vlm_sft_run(training_config: dict) -> None:
             "vision_encoder_lr_multiplier"
         ]
 
-    # Resume checkpoint (already resolved by config_parser —
-    # "latest" → absolute path, or cleared if no checkpoint found)
+    # Resume path is already resolved by config_parser
     resume_from = train_config.get("resume_from_checkpoint")
     output_dir = train_config.get("output_dir", "")
     if resume_from:

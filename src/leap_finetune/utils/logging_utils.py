@@ -87,8 +87,6 @@ def init_wandb_if_enabled(
     except ImportError:
         pass
     except Exception as e:
-        import warnings
-
         warnings.warn(f"Failed to initialize wandb: {e}", UserWarning)
 
 

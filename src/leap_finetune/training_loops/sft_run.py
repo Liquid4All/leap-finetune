@@ -62,9 +62,7 @@ def sft_run(training_config: dict) -> None:
     is_moe = is_moe_model_from_name(model_name)
     use_fsdp = is_moe and peft_config is None
 
-    # Extract run name template and resume config before filtering
-    # (resume_from_checkpoint is already resolved by config_parser —
-    #  "latest" → absolute path, or cleared if no checkpoint found)
+    # Resume path is already resolved by config_parser
     train_config = training_config.get("train_config", {})
     run_name_template = train_config.get("leap_run_name_template")
     resume_from = train_config.get("resume_from_checkpoint")
@@ -145,14 +143,12 @@ def sft_run(training_config: dict) -> None:
             keyword in error_msg.lower()
             for keyword in ["cuda error", "ecc error", "nccl", "collective", "timeout"]
         ):
-            print(
-                f"Training completed but hit distributed communication error during cleanup: {error_msg}"
-            )
-            print(
-                "Training was successful - error occurred in post-training synchronization"
+            logger.warning(
+                "Training completed but hit distributed communication error during cleanup: %s",
+                error_msg,
             )
         else:
-            raise e
+            raise
 
     # Save PEFT model if applicable
     if peft_config and is_rank_zero():

@@ -33,7 +33,13 @@ def is_rank_zero() -> bool:
         return True
 
 
-def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
+def init_wandb_if_enabled(
+    job_name: str,
+    wandb_logging: bool,
+    run_id: str | None = None,
+    output_dir: str | None = None,
+    resume_from_checkpoint: str | None = None,
+) -> None:
     """Initialize wandb with project and run name if logging is enabled.
 
     This must be called BEFORE creating the trainer to ensure training metrics are logged.
@@ -41,6 +47,9 @@ def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
     Args:
         job_name: Name for the wandb run (defaults to job_name from config)
         wandb_logging: Whether wandb logging is enabled
+        run_id: Optional wandb run ID to resume
+        output_dir: Training output directory — used to persist wandb run ID
+        resume_from_checkpoint: If set, this is a resumed run — restore the saved wandb run ID
     """
     if not wandb_logging:
         return
@@ -51,20 +60,51 @@ def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
         if is_rank_zero():
             project = os.environ.get("WANDB_PROJECT", "leap-finetune")
 
+            # Only restore a saved wandb run ID when explicitly resuming from checkpoint.
+            # Fresh runs always get a new wandb run to avoid overwriting previous logs.
+            run_id_file = Path(output_dir) / ".wandb_run_id" if output_dir else None
+            if (
+                run_id is None
+                and resume_from_checkpoint
+                and run_id_file
+                and run_id_file.exists()
+            ):
+                run_id = run_id_file.read_text().strip() or None
+
             wandb.init(
                 project=project,
                 name=job_name,
-                resume="allow",  # Allow resuming if run exists (replaces deprecated reinit=True)
+                id=run_id,
+                resume="allow",
                 settings=wandb.Settings(
-                    _disable_stats=False,  # Enable stats collection
+                    _disable_stats=False,
                 ),
             )
+
+            # Persist run ID so resumed runs can continue logging to the same wandb run
+            if wandb.run and run_id_file:
+                run_id_file.write_text(wandb.run.id)
     except ImportError:
         pass
     except Exception as e:
-        import warnings
-
         warnings.warn(f"Failed to initialize wandb: {e}", UserWarning)
+
+
+def finish_wandb_if_enabled(wandb_logging: bool) -> None:
+    """Cleanly finish the wandb run so it shows as 'Completed' in the console.
+
+    Must only be called after all training steps have finished successfully.
+    Only acts on rank 0 (the process that owns the wandb run).
+    """
+    if not wandb_logging or not is_rank_zero():
+        return
+    try:
+        import wandb
+
+        if wandb.run is not None:
+            wandb.finish()
+    except Exception:
+        pass
 
 
 def worker_process_setup_hook() -> None:
@@ -168,7 +208,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
         "RAY_IGNORE_UNHANDLED_ERRORS": "1",
         # Reduce Ray logging verbosity
-        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver (reduce terminal noise)
+        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver
         "RAY_DEDUP_LOGS": "1",  # Keep deduplication enabled (shows ... for repeated messages)
         "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
     }
@@ -234,12 +274,7 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
     if preferred:
         candidates.append(preferred)
     home_default = str(Path.home() / "ray_temp")
-    candidates.extend(
-        [
-            "/tmp/ray",
-            home_default,
-        ]
-    )
+    candidates.append(home_default)
 
     best_path = home_default
     best_ratio = -1.0
@@ -282,8 +317,7 @@ def select_object_spilling_dir(ray_temp_dir: str | None = None) -> str:
     home = str(Path.home())
     candidates = [
         os.path.join(ray_temp_dir or home, "spill"),
-        "/tmp/ray_spill",  # Usually disk-based, survives reboots
-        f"{home}/ray_spill",  # Fallback on user's home filesystem
+        f"{home}/ray_spill",
     ]
     good = _paths_with_free_space(candidates, min_free_ratio=0.10)
     target = good[0] if good else candidates[-1]

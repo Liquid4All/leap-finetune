@@ -9,6 +9,10 @@ from ray.train.huggingface.transformers import prepare_trainer
 
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.tokenize_data import create_vlm_collate_fn
+from leap_finetune.evaluation import (
+    BenchmarkEvalCallback,
+    create_vlm_benchmarks_from_config,
+)
 from leap_finetune.training_configs.vlm_sft_config import (
     DEFAULT_LR_MULTIPLIERS,
     VLM_SFT_EXCLUDED_KEYS,
@@ -16,6 +20,7 @@ from leap_finetune.training_configs.vlm_sft_config import (
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.logging_utils import (
+    finish_wandb_if_enabled,
     init_wandb_if_enabled,
     is_rank_zero,
     setup_worker_logging,
@@ -25,32 +30,24 @@ from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_mo
 logger = logging.getLogger(__name__)
 
 
-# === VLM Trainer with per-component learning rates ===
-
-
 class LFMVLMTrainer(Trainer):
     """Trainer subclass that applies per-component LR multipliers.
 
-    Mirrors liquid-vlm convention: vision encoder trains at a lower LR
-    to preserve pretrained features, while the projector and LLM backbone
-    train at the full base rate.
-
-    HF VLM param prefixes:
-        model.vision_tower          — vision encoder (e.g. SigLIP2)
-        model.multi_modal_projector — projector
-        model.language_model        — LLM backbone (e.g. LFM2)
+    Vision encoder trains at a lower LR to preserve pretrained features,
+    while the projector and LLM backbone train at the base rate.
     """
 
     def __init__(self, lr_multipliers: dict[str, float] | None = None, **kwargs):
         super().__init__(**kwargs)
         self.lr_multipliers = lr_multipliers or DEFAULT_LR_MULTIPLIERS
+        self._optimizer_group_names: list[str] = []
 
     def create_optimizer(self):
         if self.optimizer is not None:
             return self.optimizer
 
         base_lr = self.args.learning_rate
-        weight_decay = self.args.weight_decay
+        weight_decay = float(self.args.weight_decay)
 
         # Group trainable params by matching prefix
         grouped: dict[str, list] = {prefix: [] for prefix in self.lr_multipliers}
@@ -68,8 +65,9 @@ class LFMVLMTrainer(Trainer):
             if not matched:
                 ungrouped.append(param)
 
-        # Build optimizer param groups
+        # Build optimizer param groups (order matches _optimizer_group_names)
         optimizer_groups = []
+        self._optimizer_group_names = []
         for prefix, params in grouped.items():
             if not params:
                 continue
@@ -77,6 +75,8 @@ class LFMVLMTrainer(Trainer):
             optimizer_groups.append(
                 {"params": params, "lr": base_lr * mult, "weight_decay": weight_decay}
             )
+            short_name = prefix.removeprefix("model.")
+            self._optimizer_group_names.append(short_name)
             logger.info(
                 f"Param group '{prefix}': {len(params)} params, lr={base_lr * mult:.2e}"
             )
@@ -85,6 +85,7 @@ class LFMVLMTrainer(Trainer):
             optimizer_groups.append(
                 {"params": ungrouped, "lr": base_lr, "weight_decay": weight_decay}
             )
+            self._optimizer_group_names.append("ungrouped")
             logger.info(
                 f"Param group 'ungrouped': {len(ungrouped)} params, lr={base_lr:.2e}"
             )
@@ -95,12 +96,22 @@ class LFMVLMTrainer(Trainer):
         )
         return self.optimizer
 
+    def log(self, logs: dict[str, float], *args, **kwargs) -> None:
+        # Inject per-component LRs so wandb tracks each group separately
+        if self.optimizer is not None and "learning_rate" in logs:
+            for name, group in zip(
+                self._optimizer_group_names, self.optimizer.param_groups
+            ):
+                logs[f"lr/{name}"] = group["lr"]
+        super().log(logs, *args, **kwargs)
+
     def get_train_dataloader(self):
         # Ray already shards across workers — return a raw DataLoader
         # (bypasses Accelerate's DistributedSampler / IterableDatasetShard)
+        # Use per_device_train_batch_size directly, NOT self._train_batch_size
         return DataLoader(
             self.train_dataset,
-            batch_size=self._train_batch_size,
+            batch_size=self.args.per_device_train_batch_size,
             collate_fn=self.data_collator,
             shuffle=True,
         )
@@ -146,15 +157,26 @@ def vlm_sft_run(training_config: dict) -> None:
             "vision_encoder_lr_multiplier"
         ]
 
+    # Resume path is already resolved by config_parser
+    resume_from = train_config.get("resume_from_checkpoint")
+    output_dir = train_config.get("output_dir", "")
+    if resume_from:
+        logger.info(f"Resuming from checkpoint: {resume_from}")
+
     # Filter out non-TrainingArguments parameters
     excluded_keys = VLM_SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
     train_config_filtered = {
         k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
-    # Configure wandb
+    # Configure wandb (only restores previous run ID when resuming from checkpoint)
     wandb_logging = bool(train_config.get("wandb_logging", False))
-    init_wandb_if_enabled(job_name, wandb_logging)
+    init_wandb_if_enabled(
+        job_name,
+        wandb_logging,
+        output_dir=output_dir if output_dir else None,
+        resume_from_checkpoint=resume_from,
+    )
 
     # Compute max_steps from materialized dataset size
     # (Trainer can't infer it from our bypassed DataLoader)
@@ -209,10 +231,18 @@ def vlm_sft_run(training_config: dict) -> None:
 
     # Add checkpoint callback (handles Ray reporting + rename) then prepare for distributed training
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
+
+    # Add benchmark evaluation callback if configured
+    benchmark_configs = training_config.get("benchmark_configs")
+    if benchmark_configs and benchmark_configs.get("benchmarks"):
+        benchmarks = create_vlm_benchmarks_from_config(benchmark_configs, processor)
+        if benchmarks:
+            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
+
     trainer = prepare_trainer(trainer)
 
     try:
-        trainer.train()
+        trainer.train(resume_from_checkpoint=resume_from)
         logger.info("Training completed successfully")
     except RuntimeError as e:
         error_msg = str(e)
@@ -234,3 +264,5 @@ def vlm_sft_run(training_config: dict) -> None:
         merge_and_save_peft_model(
             model, processor, training_args.output_dir, run_name_template
         )
+
+    finish_wandb_if_enabled(wandb_logging)

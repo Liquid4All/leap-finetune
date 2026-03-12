@@ -74,11 +74,15 @@ def generate_run_name(
         lora_str = "no_lora"
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    slurm_id = os.environ.get("SLURM_JOB_ID", "")
 
-    return (
+    name = (
         f"{safe_model_name}-{training_type}-{dataset_name}-{limit_str}"
         f"-{lr_str}-{warmup_str}-{lora_str}-{timestamp}"
     )
+    if slurm_id:
+        name += f"-j{slurm_id}"
+    return name
 
 
 def parse_job_config(config_input: str) -> JobConfig:
@@ -138,11 +142,12 @@ def parse_job_config(config_input: str) -> JobConfig:
         base_config_map = {member.name: member for member in TrainingConfig}
         base_train_config = base_config_map[config_name]
 
-    # Ensure learning_rate is float
-    if "learning_rate" in train_config_dict:
-        lr_val = train_config_dict["learning_rate"]
-        if isinstance(lr_val, str):
-            train_config_dict["learning_rate"] = float(lr_val)
+    # Ensure numeric fields are proper floats
+    for float_key in ("learning_rate", "weight_decay"):
+        if float_key in train_config_dict:
+            val = train_config_dict[float_key]
+            if isinstance(val, str):
+                train_config_dict[float_key] = float(val)
 
     # Merge base config with YAML overrides
     final_training_config = base_train_config.override(**train_config_dict)
@@ -219,9 +224,43 @@ def parse_job_config(config_input: str) -> JobConfig:
         lora_type="a",
     )
 
-    default_project_dir = f"./outputs/{project_name}"
-    project_dir = os.getenv("OUTPUT_DIR", default_project_dir)
-    final_output_dir = pathlib.Path(project_dir).resolve()
+    # Each run gets its own subdirectory: outputs/{project_name}/{run_name}/
+    # On resume, infer the original run directory from the checkpoint path.
+    resume_from = final_train_values.get("resume_from_checkpoint")
+    base_project_dir = os.getenv("OUTPUT_DIR", f"./outputs/{project_name}")
+
+    if resume_from and resume_from != "latest":
+        # Validate the checkpoint path exists
+        resume_path = pathlib.Path(resume_from).resolve()
+        if not resume_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {resume_from}")
+        # use parent of checkpoint as output dir
+        final_output_dir = resume_path.parent
+    elif resume_from == "latest":
+        # Find the most recent run directory that has a "latest" checkpoint symlink
+        project_path = pathlib.Path(base_project_dir).resolve()
+        run_dirs = (
+            [
+                d
+                for d in project_path.iterdir()
+                if d.is_dir() and (d / "latest").exists()
+            ]
+            if project_path.exists()
+            else []
+        )
+        if run_dirs:
+            final_output_dir = max(run_dirs, key=lambda d: d.stat().st_mtime)
+            # Resolve "latest" to the actual checkpoint path
+            latest_link = final_output_dir / "latest"
+            resume_from = str(latest_link.resolve())
+            final_training_config.value["resume_from_checkpoint"] = resume_from
+        else:
+            final_output_dir = project_path / run_name
+            # No checkpoint found — clear resume so training starts fresh
+            resume_from = None
+            final_training_config.value.pop("resume_from_checkpoint", None)
+    else:
+        final_output_dir = pathlib.Path(base_project_dir).resolve() / run_name
 
     try:
         final_output_dir.mkdir(parents=True, exist_ok=True)
@@ -229,11 +268,14 @@ def parse_job_config(config_input: str) -> JobConfig:
         print(
             f"Permission denied creating {final_output_dir}, falling back to local ./outputs"
         )
-        final_output_dir = pathlib.Path.cwd() / "outputs" / project_name
+        final_output_dir = pathlib.Path.cwd() / "outputs" / project_name / run_name
         final_output_dir.mkdir(parents=True, exist_ok=True)
 
     final_training_config.value["output_dir"] = str(final_output_dir)
     final_training_config.value["leap_run_name_template"] = run_name
+
+    # === Benchmark evaluation config ===
+    benchmark_configs = config_dict.get("benchmarks")
 
     return JobConfig(
         job_name=project_name,
@@ -242,4 +284,5 @@ def parse_job_config(config_input: str) -> JobConfig:
         dataset=dataset,
         training_config=final_training_config,
         peft_config=peft_config,
+        benchmark_configs=benchmark_configs,
     )

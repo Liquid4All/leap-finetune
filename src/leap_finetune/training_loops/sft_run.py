@@ -1,3 +1,5 @@
+import logging
+
 import ray.train
 from torch.utils.data import DataLoader
 from ray.train.huggingface.transformers import prepare_trainer
@@ -16,6 +18,8 @@ from leap_finetune.utils.logging_utils import (
 )
 from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
+
+logger = logging.getLogger(__name__)
 
 
 class LFMSFTTrainer(Trainer):
@@ -58,10 +62,15 @@ def sft_run(training_config: dict) -> None:
     is_moe = is_moe_model_from_name(model_name)
     use_fsdp = is_moe and peft_config is None
 
-    # Extract run name template before filtering
-    run_name_template = training_config.get("train_config", {}).get(
-        "leap_run_name_template"
-    )
+    # Extract run name template and resume config before filtering
+    # (resume_from_checkpoint is already resolved by config_parser —
+    #  "latest" → absolute path, or cleared if no checkpoint found)
+    train_config = training_config.get("train_config", {})
+    run_name_template = train_config.get("leap_run_name_template")
+    resume_from = train_config.get("resume_from_checkpoint")
+    output_dir = train_config.get("output_dir", "")
+    if resume_from:
+        logger.info(f"Resuming from checkpoint: {resume_from}")
 
     # Filter out SFT-specific keys that don't belong in TrainingArguments
     excluded_keys = SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
@@ -70,15 +79,18 @@ def sft_run(training_config: dict) -> None:
 
     train_config_filtered = {
         k: v
-        for k, v in training_config.get("train_config").items()
+        for k, v in train_config.items()
         if k not in excluded_keys
     }
 
-    # Configure wandb reporting if enabled via config
-    wandb_logging = bool(
-        training_config.get("train_config", {}).get("wandb_logging", False)
+    # Configure wandb (only restores previous run ID when resuming from checkpoint)
+    wandb_logging = bool(train_config.get("wandb_logging", False))
+    init_wandb_if_enabled(
+        job_name,
+        wandb_logging,
+        output_dir=output_dir if output_dir else None,
+        resume_from_checkpoint=resume_from,
     )
-    init_wandb_if_enabled(job_name, wandb_logging)
 
     # Default eval batch size to train batch size to avoid OOM during eval
     if "per_device_eval_batch_size" not in train_config_filtered:
@@ -125,8 +137,8 @@ def sft_run(training_config: dict) -> None:
     trainer = prepare_trainer(trainer)
 
     try:
-        trainer.train()
-        print("Training completed successfully")
+        trainer.train(resume_from_checkpoint=resume_from)
+        logger.info("Training completed successfully")
     except RuntimeError as e:
         error_msg = str(e)
         if any(

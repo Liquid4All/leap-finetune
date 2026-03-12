@@ -1,6 +1,5 @@
 import logging
 import math
-from pathlib import Path
 
 import torch
 import ray.train
@@ -84,7 +83,6 @@ class LFMVLMTrainer(Trainer):
             optimizer_groups.append(
                 {"params": params, "lr": base_lr * mult, "weight_decay": weight_decay}
             )
-            # Short name for wandb: "model.vision_tower" → "vision_tower"
             short_name = prefix.removeprefix("model.")
             self._optimizer_group_names.append(short_name)
             logger.info(
@@ -167,18 +165,11 @@ def vlm_sft_run(training_config: dict) -> None:
             "vision_encoder_lr_multiplier"
         ]
 
-    # Resolve resume checkpoint path
+    # Resume checkpoint (already resolved by config_parser —
+    # "latest" → absolute path, or cleared if no checkpoint found)
     resume_from = train_config.get("resume_from_checkpoint")
     output_dir = train_config.get("output_dir", "")
-    if resume_from == "latest":
-        latest = Path(output_dir) / "latest"
-        if latest.exists():
-            resume_from = str(latest.resolve())
-            logger.info(f"Resuming from latest checkpoint: {resume_from}")
-        else:
-            logger.warning(f"No 'latest' symlink in {output_dir}, starting fresh")
-            resume_from = None
-    elif resume_from:
+    if resume_from:
         logger.info(f"Resuming from checkpoint: {resume_from}")
 
     # Filter out non-TrainingArguments parameters
@@ -187,10 +178,13 @@ def vlm_sft_run(training_config: dict) -> None:
         k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
-    # Configure wandb (auto-resumes the previous run ID when resuming from checkpoint)
+    # Configure wandb (only restores previous run ID when resuming from checkpoint)
     wandb_logging = bool(train_config.get("wandb_logging", False))
     init_wandb_if_enabled(
-        job_name, wandb_logging, output_dir=output_dir if output_dir else None
+        job_name,
+        wandb_logging,
+        output_dir=output_dir if output_dir else None,
+        resume_from_checkpoint=resume_from,
     )
 
     # Compute max_steps from materialized dataset size

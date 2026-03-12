@@ -16,6 +16,7 @@ SFT_EXCLUDED_KEYS = {
     "dataset_num_proc",
     "completion_only_loss",
     "assistant_only_loss",
+    "resume_from_checkpoint",
 }
 
 

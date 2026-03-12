@@ -142,11 +142,12 @@ def parse_job_config(config_input: str) -> JobConfig:
         base_config_map = {member.name: member for member in TrainingConfig}
         base_train_config = base_config_map[config_name]
 
-    # Ensure learning_rate is float
-    if "learning_rate" in train_config_dict:
-        lr_val = train_config_dict["learning_rate"]
-        if isinstance(lr_val, str):
-            train_config_dict["learning_rate"] = float(lr_val)
+    # Ensure numeric fields are proper floats
+    for float_key in ("learning_rate", "weight_decay"):
+        if float_key in train_config_dict:
+            val = train_config_dict[float_key]
+            if isinstance(val, str):
+                train_config_dict[float_key] = float(val)
 
     # Merge base config with YAML overrides
     final_training_config = base_train_config.override(**train_config_dict)

@@ -1,10 +1,12 @@
 # Evaluation Benchmarks
 
-Run benchmarks automatically during training at every `eval_steps`. Results are logged to wandb and printed to stdout. No code changes needed — configure everything in YAML.
+Run benchmarks automatically during training at every `eval_steps`. Works with all training types: **SFT**, **DPO**, and **VLM SFT**. Results are logged to wandb and printed to stdout. No code changes needed — configure everything in YAML.
 
 ## Quick Setup
 
-Add a `benchmarks` section to your job config:
+Add a `benchmarks` section to your job config.
+
+### VLM (vision-language) benchmarks
 
 ```yaml
 training_config:
@@ -25,7 +27,26 @@ benchmarks:
       metric: "logprob_zero_shot"
 ```
 
-That's it. The callback loads data once on the first eval step and caches it for all subsequent runs.
+### LLM (text-only) benchmarks
+
+```yaml
+training_config:
+  eval_strategy: "steps"
+  eval_steps: 2000
+
+benchmarks:
+  max_new_tokens: 128
+  benchmarks:
+    - name: "reading_comprehension"
+      path: "/data/reading_eval.jsonl"
+      metric: "short_answer"
+
+    - name: "phd_mcq"
+      path: "/data/phd_logprob.jsonl"
+      metric: "logprob_zero_shot"
+```
+
+The callback loads data once on the first eval step and caches it for all subsequent runs.
 
 ## Data Format
 
@@ -89,12 +110,12 @@ No assistant turn needed. The model scores each option by log-probability and pi
 
 ## Available Metrics
 
-| Metric              | Type       | Description                                                                                                               |
-| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `short_answer`      | generation | Case-insensitive substring match. Set `match_mode: "any_in_array"` if ground truth is a JSON array of acceptable answers. |
-| `grounding_iou`     | generation | Bounding-box IoU. Set `iou_threshold` (default 0.5).                                                                      |
-| `mcq_gen`           | generation | Extracts MCQ letter (A-F) from generated text and compares to ground truth.                                               |
-| `logprob_zero_shot` | logprob    | Zero-shot MCQ via per-option log-probability comparison. No generation needed.                                            |
+| Metric              | Type       | Supported | Description                                                                                                               |
+| ------------------- | ---------- | --------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `short_answer`      | generation | LLM, VLM  | Case-insensitive substring match. Set `match_mode: "any_in_array"` if ground truth is a JSON array of acceptable answers. |
+| `mcq_gen`           | generation | LLM, VLM  | Extracts MCQ letter (A-F) from generated text and compares to ground truth.                                               |
+| `grounding_iou`     | generation | VLM only  | Bounding-box IoU. Set `iou_threshold` (default 0.5).                                                                      |
+| `logprob_zero_shot` | logprob    | LLM, VLM  | Zero-shot MCQ via per-option log-probability comparison. No generation needed.                                            |
 
 ## YAML Reference
 
@@ -131,12 +152,14 @@ Per-benchmark fields:
    }
    ```
 
-3. Add the metric name to `GENERATION_METRICS` or `LOGPROB_METRICS` in `vlm_config.py`.
+3. Add the metric name to `GENERATION_METRICS` or `LOGPROB_METRICS` in the relevant config factory (`vlm_config.py` for VLM, `llm_config.py` for LLM).
 
 ## How It Works
 
 1. The trainer reads `benchmarks:` from your YAML config
-2. `create_vlm_benchmarks_from_config()` creates benchmark objects based on the `metric` field
+2. The appropriate factory creates benchmark objects based on training type:
+   - **VLM SFT**: `create_vlm_benchmarks_from_config()` — uses the VLM processor for image+text inputs
+   - **SFT / DPO**: `create_llm_benchmarks_from_config()` — uses the tokenizer for text-only inputs
 3. A `BenchmarkEvalCallback` is added to the HuggingFace Trainer
 4. At every `eval_steps`, the callback:
    - Loads and normalizes data on first run (cached for subsequent evals)

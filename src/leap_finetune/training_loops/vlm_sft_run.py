@@ -20,6 +20,7 @@ from leap_finetune.training_configs.vlm_sft_config import (
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.logging_utils import (
+    finish_wandb_if_enabled,
     init_wandb_if_enabled,
     is_rank_zero,
     setup_worker_logging,
@@ -263,3 +264,5 @@ def vlm_sft_run(training_config: dict) -> None:
         merge_and_save_peft_model(
             model, processor, training_args.output_dir, run_name_template
         )
+
+    finish_wandb_if_enabled(wandb_logging)

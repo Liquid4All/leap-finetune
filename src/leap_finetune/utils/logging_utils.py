@@ -90,6 +90,23 @@ def init_wandb_if_enabled(
         warnings.warn(f"Failed to initialize wandb: {e}", UserWarning)
 
 
+def finish_wandb_if_enabled(wandb_logging: bool) -> None:
+    """Cleanly finish the wandb run so it shows as 'Completed' in the console.
+
+    Must only be called after all training steps have finished successfully.
+    Only acts on rank 0 (the process that owns the wandb run).
+    """
+    if not wandb_logging or not is_rank_zero():
+        return
+    try:
+        import wandb
+
+        if wandb.run is not None:
+            wandb.finish()
+    except Exception:
+        pass
+
+
 def worker_process_setup_hook() -> None:
     """
     Configure logging on Ray worker processes.

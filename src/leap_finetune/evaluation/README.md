@@ -12,13 +12,13 @@ training_config:
   eval_steps: 2000
 
 benchmarks:
-  max_new_tokens: 128          # default for all generation benchmarks
-  image_root: "/data/images"   # optional, prepended to relative image paths
+  max_new_tokens: 128 # default for all generation benchmarks
+  image_root: "/data/images" # optional, prepended to relative image paths
   benchmarks:
     - name: "mmmu_val"
       path: "/data/mmmu_val.jsonl"
       metric: "short_answer"
-      max_new_tokens: 50       # override per benchmark
+      max_new_tokens: 50 # override per benchmark
 
     - name: "imagenette"
       path: "/data/imagenette_eval.jsonl"
@@ -31,7 +31,6 @@ That's it. The callback loads data once on the first eval step and caches it for
 
 Benchmark data uses the **same format as training data** (HF messages schema). Supported file formats: JSONL, JSON, Parquet, CSV.
 
-
 ### Generation benchmarks
 
 The last assistant turn is the ground truth. Everything before it is the prompt.
@@ -42,13 +41,13 @@ The last assistant turn is the ground truth. Everything before it is the prompt.
     {
       "role": "user",
       "content": [
-        {"type": "image", "image": "/path/to/img.jpg"},
-        {"type": "text", "text": "What is shown in this image?"}
+        { "type": "image", "image": "/path/to/img.jpg" },
+        { "type": "text", "text": "What is shown in this image?" }
       ]
     },
     {
       "role": "assistant",
-      "content": [{"type": "text", "text": "A dog sitting on a beach."}]
+      "content": [{ "type": "text", "text": "A dog sitting on a beach." }]
     }
   ]
 }
@@ -64,8 +63,8 @@ No assistant turn needed. The model scores each option by log-probability and pi
     {
       "role": "user",
       "content": [
-        {"type": "image", "image": "/path/to/img.jpg"},
-        {"type": "text", "text": "What animal is in this image?"}
+        { "type": "image", "image": "/path/to/img.jpg" },
+        { "type": "text", "text": "What animal is in this image?" }
       ]
     }
   ],
@@ -79,40 +78,44 @@ No assistant turn needed. The model scores each option by log-probability and pi
 ```json
 {
   "messages": [
-    {"role": "user", "content": [{"type": "text", "text": "Capital of France?"}]},
-    {"role": "assistant", "content": [{"type": "text", "text": "Paris"}]}
+    {
+      "role": "user",
+      "content": [{ "type": "text", "text": "Capital of France?" }]
+    },
+    { "role": "assistant", "content": [{ "type": "text", "text": "Paris" }] }
   ]
 }
 ```
 
 ## Available Metrics
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `short_answer` | generation | Case-insensitive substring match. Set `match_mode: "any_in_array"` if ground truth is a JSON array of acceptable answers. |
-| `grounding_iou` | generation | Bounding-box IoU. Set `iou_threshold` (default 0.5). |
-| `mcq_gen` | generation | Extracts MCQ letter (A-F) from generated text and compares to ground truth. |
-| `logprob_zero_shot` | logprob | Zero-shot MCQ via per-option log-probability comparison. No generation needed. |
+| Metric              | Type       | Description                                                                                                               |
+| ------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `short_answer`      | generation | Case-insensitive substring match. Set `match_mode: "any_in_array"` if ground truth is a JSON array of acceptable answers. |
+| `grounding_iou`     | generation | Bounding-box IoU. Set `iou_threshold` (default 0.5).                                                                      |
+| `mcq_gen`           | generation | Extracts MCQ letter (A-F) from generated text and compares to ground truth.                                               |
+| `logprob_zero_shot` | logprob    | Zero-shot MCQ via per-option log-probability comparison. No generation needed.                                            |
 
 ## YAML Reference
 
 Per-benchmark fields:
 
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `name` | yes | — | Benchmark name (used in wandb keys: `benchmark/{name}/score`) |
-| `path` | yes | — | Path to data file (JSONL, JSON, Parquet, CSV) |
-| `metric` | yes | — | One of the metrics above |
-| `max_new_tokens` | no | 128 | Max tokens to generate (generation metrics only) |
-| `match_mode` | no | `"contains"` | For `short_answer`: `"contains"` or `"any_in_array"` |
-| `iou_threshold` | no | 0.5 | For `grounding_iou` |
-| `limit` | no | all | Cap number of eval samples |
-| `format` | no | auto-detect | Force file format: `jsonl`, `json`, `parquet`, `csv` |
-| `image_root` | no | — | Prepend to relative image paths |
+| Field            | Required | Default      | Description                                                   |
+| ---------------- | -------- | ------------ | ------------------------------------------------------------- |
+| `name`           | yes      | —            | Benchmark name (used in wandb keys: `benchmark/{name}/score`) |
+| `path`           | yes      | —            | Path to data file (JSONL, JSON, Parquet, CSV)                 |
+| `metric`         | yes      | —            | One of the metrics above                                      |
+| `max_new_tokens` | no       | 128          | Max tokens to generate (generation metrics only)              |
+| `match_mode`     | no       | `"contains"` | For `short_answer`: `"contains"` or `"any_in_array"`          |
+| `iou_threshold`  | no       | 0.5          | For `grounding_iou`                                           |
+| `limit`          | no       | all          | Cap number of eval samples                                    |
+| `format`         | no       | auto-detect  | Force file format: `jsonl`, `json`, `parquet`, `csv`          |
+| `image_root`     | no       | —            | Prepend to relative image paths                               |
 
 ## Adding a New Metric
 
 1. Add a scoring function to `metrics.py`:
+
    ```python
    def score_my_metric(prediction: str, ground_truth: str, **_) -> float:
        # Return a float score for this sample
@@ -120,6 +123,7 @@ Per-benchmark fields:
    ```
 
 2. Register it in `_METRIC_DISPATCH` in the same file:
+
    ```python
    _METRIC_DISPATCH = {
        ...

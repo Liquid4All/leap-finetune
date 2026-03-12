@@ -75,9 +75,7 @@ def dpo_run(training_config: dict) -> None:
         excluded_keys.add("deepspeed")
 
     train_config_filtered = {
-        k: v
-        for k, v in train_config.items()
-        if k not in excluded_keys
+        k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
     # Configure experiment tracking

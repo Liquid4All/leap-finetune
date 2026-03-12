@@ -260,7 +260,7 @@ Add `resume_from_checkpoint` to your `training_config`:
 
 ```yaml
 training_config:
-  resume_from_checkpoint: "latest"   # resumes from the most recent checkpoint
+  resume_from_checkpoint: "latest" # resumes from the most recent checkpoint
 ```
 
 This finds the most recent run directory under `outputs/{project_name}/` and resumes from its latest checkpoint. To resume from a specific checkpoint instead:

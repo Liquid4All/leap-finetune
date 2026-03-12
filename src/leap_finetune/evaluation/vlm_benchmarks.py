@@ -88,7 +88,9 @@ class VLMGenerationBenchmark(Benchmark):
                 total_score += self._score_sample(model, sample, device)
             except Exception:
                 logger.warning(
-                    "[%s] Failed on sample %s", self.name, sample.get("id", count),
+                    "[%s] Failed on sample %s",
+                    self.name,
+                    sample.get("id", count),
                     exc_info=True,
                 )
             count += 1
@@ -168,7 +170,9 @@ class VLMLogprobBenchmark(Benchmark):
                 total_score += self._score_sample(model, sample, device)
             except Exception:
                 logger.warning(
-                    "[%s] Failed on sample %s", self.name, sample.get("id", count),
+                    "[%s] Failed on sample %s",
+                    self.name,
+                    sample.get("id", count),
                     exc_info=True,
                 )
             count += 1

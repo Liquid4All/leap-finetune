@@ -6,7 +6,6 @@ from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 from ray.train.huggingface.transformers import prepare_trainer
 
-from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_model
@@ -15,7 +14,6 @@ from leap_finetune.utils.logging_utils import (
     is_rank_zero,
     setup_worker_logging,
 )
-from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 
 
@@ -61,10 +59,6 @@ def dpo_run(training_config: dict) -> None:
     model_name = training_config.get("model_name", "")
     job_name = training_config.get("job_name", "leap-ft-run")
 
-    # Check for MoE model
-    is_moe = is_moe_model_from_name(model_name)
-    use_fsdp = is_moe and peft_config is None
-
     # Extract run name template before filtering
     run_name_template = training_config.get("train_config", {}).get(
         "leap_run_name_template"
@@ -72,8 +66,6 @@ def dpo_run(training_config: dict) -> None:
 
     # Filter out non-DPOConfig parameters
     excluded_keys = {"training_type", "wandb_logging", "leap_run_name_template"}
-    if use_fsdp:
-        excluded_keys.add("deepspeed")
 
     train_config_filtered = {
         k: v
@@ -99,10 +91,6 @@ def dpo_run(training_config: dict) -> None:
         "run_name": job_name,
         **train_config_filtered,
     }
-    if use_fsdp:
-        config_kwargs["fsdp"] = MOE_FSDP_CONFIG["fsdp"]
-        config_kwargs["fsdp_config"] = MOE_FSDP_CONFIG["fsdp_config"]
-
     training_args = DPOConfig(**config_kwargs)
 
     # Load model after config is created

@@ -1,0 +1,26 @@
+project_name: "moe_large_sft"
+model_name: "LFM2-24B-A2B"
+training_type: "moe_sft"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  limit: 1000
+  test_size: 0.2
+  subset: "all"
+
+training_config:
+  extends: "MOE_LARGE_SFT"
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 5e-5
+
+  moe_training:
+    aux_loss_coef: 0.01
+    z_loss_coef: 0.001
+    capacity_factor: null
+    token_drop_policy: "probs"
+    router_lr_ratio: 0.1
+
+peft_config:
+  use_peft: false

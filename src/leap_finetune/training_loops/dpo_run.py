@@ -78,14 +78,17 @@ def dpo_run(training_config: dict) -> None:
         logger.info(f"Resuming from checkpoint: {resume_from}")
 
     # Filter out non-DPOConfig parameters
-    excluded_keys = {"training_type", "wandb_logging", "leap_run_name_template", "resume_from_checkpoint"}
+    excluded_keys = {
+        "training_type",
+        "wandb_logging",
+        "leap_run_name_template",
+        "resume_from_checkpoint",
+    }
     if use_fsdp:
         excluded_keys.add("deepspeed")
 
     train_config_filtered = {
-        k: v
-        for k, v in train_config.items()
-        if k not in excluded_keys
+        k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
     # Configure wandb (only restores previous run ID when resuming from checkpoint)

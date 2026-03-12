@@ -76,9 +76,7 @@ def sft_run(training_config: dict) -> None:
         excluded_keys = excluded_keys | {"deepspeed"}
 
     train_config_filtered = {
-        k: v
-        for k, v in train_config.items()
-        if k not in excluded_keys
+        k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
     # Configure wandb (only restores previous run ID when resuming from checkpoint)

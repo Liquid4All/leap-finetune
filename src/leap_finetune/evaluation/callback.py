@@ -56,7 +56,9 @@ class BenchmarkEvalCallback(TrainerCallback):
         if rank == 0:
             logger.info(
                 "\n%s\nBenchmark Evaluation (step %d)\n%s",
-                "=" * 50, state.global_step, "=" * 50,
+                "=" * 50,
+                state.global_step,
+                "=" * 50,
             )
 
         with torch.no_grad():
@@ -90,14 +92,20 @@ class BenchmarkEvalCallback(TrainerCallback):
                     if rank == 0:
                         logger.info(
                             "  %-20s %-12s %8.4f  (%d samples, %.1fs)",
-                            benchmark.name, metric_name, avg, total_count, elapsed,
+                            benchmark.name,
+                            metric_name,
+                            avg,
+                            total_count,
+                            elapsed,
                         )
 
         total_elapsed = time.time() - total_start
         if rank == 0:
             logger.info(
                 "%s\nTotal benchmark eval time: %.1fs\n%s",
-                "=" * 50, total_elapsed, "=" * 50,
+                "=" * 50,
+                total_elapsed,
+                "=" * 50,
             )
 
         self._log_to_wandb(all_results)

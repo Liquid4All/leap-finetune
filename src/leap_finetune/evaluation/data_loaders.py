@@ -47,9 +47,7 @@ def load_benchmark_samples(
     return samples
 
 
-def _convert_legacy_to_hf_format(
-    sample: dict, image_root: str | None = None
-) -> dict:
+def _convert_legacy_to_hf_format(sample: dict, image_root: str | None = None) -> dict:
     """Convert flat string content + separate ``images`` field to structured HF format.
 
     Handles legacy data where content is a plain string with ``<image>`` placeholders

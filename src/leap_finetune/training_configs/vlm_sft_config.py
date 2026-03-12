@@ -55,10 +55,10 @@ DEFAULT_LR_MULTIPLIERS = {
 DEFAULT_VLM_SFT = {
     "training_type": "vlm_sft",
     "max_image_tokens": None,  # None = processor default (256); set int to override
-    "do_image_splitting": True, # for VLMs, split large images into multiple tiles
+    "do_image_splitting": True,  # for VLMs, split large images into multiple tiles
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 3,
-    "per_device_train_batch_size": 1, 
+    "per_device_train_batch_size": 1,
     "per_device_eval_batch_size": 1,
     "gradient_accumulation_steps": 8,
     "learning_rate": 5e-5,

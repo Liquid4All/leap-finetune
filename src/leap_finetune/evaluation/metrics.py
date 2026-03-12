@@ -87,8 +87,7 @@ def compute_metric(
     fn = _METRIC_DISPATCH.get(metric_type)
     if fn is None:
         raise ValueError(
-            f"Unknown metric: {metric_type!r}. "
-            f"Available: {sorted(_METRIC_DISPATCH)}"
+            f"Unknown metric: {metric_type!r}. Available: {sorted(_METRIC_DISPATCH)}"
         )
     return fn(prediction, ground_truth, **kwargs)
 

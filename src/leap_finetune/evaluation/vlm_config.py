@@ -64,22 +64,29 @@ def create_vlm_benchmarks_from_config(
         if metric in LOGPROB_METRICS:
             result.append(
                 VLMLogprobBenchmark(
-                    name=name, path=path, processor=processor,
-                    limit=bench.get("limit"), format=bench.get("format"),
+                    name=name,
+                    path=path,
+                    processor=processor,
+                    limit=bench.get("limit"),
+                    format=bench.get("format"),
                     image_root=bench.get("image_root", default_image_root),
                 )
             )
         elif metric in GENERATION_METRICS:
             result.append(
                 VLMGenerationBenchmark(
-                    name=name, path=path, processor=processor, **kwargs,
+                    name=name,
+                    path=path,
+                    processor=processor,
+                    **kwargs,
                 )
             )
         else:
             logger.warning(
-                "Unknown metric %r for benchmark %r. "
-                "Available: %s",
-                metric, name, sorted(GENERATION_METRICS | LOGPROB_METRICS),
+                "Unknown metric %r for benchmark %r. Available: %s",
+                metric,
+                name,
+                sorted(GENERATION_METRICS | LOGPROB_METRICS),
             )
 
     return result

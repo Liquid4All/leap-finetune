@@ -42,7 +42,7 @@ class TestTokenizationSFT:
         import ray
 
         if not ray.is_initialized():
-            ray.init(address="local", num_cpus=2)
+            ray.init(address="local", num_cpus=2, runtime_env={"working_dir": None})
         yield
         ray.shutdown()
 
@@ -70,17 +70,38 @@ class TestTokenizationSFT:
         )
         return train_ds, eval_ds
 
-    def test_sft_tokenization_columns(self, sft_datasets):
+    def test_sft_tokenization_content(self, sft_datasets, tokenizer):
         train_ds, _ = sft_datasets
         row = next(iter(train_ds.iter_rows()))
         assert "input_ids" in row
         assert isinstance(row["input_ids"], list)
+        assert len(row["input_ids"]) > 0, "input_ids is empty"
         assert all(isinstance(x, int) for x in row["input_ids"])
+
+        # All token IDs must be valid (within vocab range)
+        vocab_size = tokenizer.vocab_size
+        for token_id in row["input_ids"]:
+            assert 0 <= token_id < vocab_size, (
+                f"Token ID {token_id} out of vocab range [0, {vocab_size})"
+            )
 
     def test_sft_tokenization_max_length_respected(self, sft_datasets):
         train_ds, _ = sft_datasets
         for row in train_ds.iter_rows():
             assert len(row["input_ids"]) <= 128
+
+    def test_sft_train_eval_split(self, sft_datasets):
+        train_ds, eval_ds = sft_datasets
+        train_count = train_ds.count()
+        eval_count = eval_ds.count()
+        assert train_count > 0, "Train dataset is empty"
+        assert eval_count > 0, "Eval dataset is empty"
+        # test_size=0.2 → eval should be ~20% of total
+        total = train_count + eval_count
+        eval_ratio = eval_count / total
+        assert 0.1 < eval_ratio < 0.4, (
+            f"Eval ratio {eval_ratio:.2f} is outside expected range for test_size=0.2"
+        )
 
     def test_sft_packing_changes_row_count(self, ray_session, tokenizer):
         from leap_finetune.data_loaders.dataset_loader import DatasetLoader
@@ -95,16 +116,19 @@ class TestTokenizationSFT:
         train_unpacked, _ = create_ray_datasets(
             loader,
             tokenizer=tokenizer,
-            training_config={"max_length": 256, "packing": False},
+            training_config={"max_length": 2048, "packing": False},
         )
         train_packed, _ = create_ray_datasets(
             loader,
             tokenizer=tokenizer,
-            training_config={"max_length": 256, "packing": True},
+            training_config={"max_length": 2048, "packing": True},
         )
         unpacked_count = train_unpacked.count()
         packed_count = train_packed.count()
-        assert unpacked_count != packed_count
+        assert packed_count < unpacked_count, (
+            f"Packing should reduce row count by combining short samples, "
+            f"but got packed={packed_count} >= unpacked={unpacked_count}"
+        )
 
 
 # === DPO tokenization ===
@@ -116,7 +140,7 @@ class TestTokenizationDPO:
         import ray
 
         if not ray.is_initialized():
-            ray.init(address="local", num_cpus=2)
+            ray.init(address="local", num_cpus=2, runtime_env={"working_dir": None})
         yield
         ray.shutdown()
 
@@ -144,19 +168,44 @@ class TestTokenizationDPO:
         )
         return train_ds, eval_ds
 
-    def test_dpo_tokenization_columns(self, dpo_datasets):
+    def test_dpo_tokenization_content(self, dpo_datasets, tokenizer):
         train_ds, _ = dpo_datasets
         row = next(iter(train_ds.iter_rows()))
         assert "prompt_input_ids" in row
         assert "chosen_input_ids" in row
         assert "rejected_input_ids" in row
 
+        # All sequences must be non-empty
+        assert len(row["prompt_input_ids"]) > 0, "prompt_input_ids is empty"
+        assert len(row["chosen_input_ids"]) > 0, "chosen_input_ids is empty"
+        assert len(row["rejected_input_ids"]) > 0, "rejected_input_ids is empty"
+
+        # Chosen and rejected must differ (otherwise DPO is meaningless)
+        assert row["chosen_input_ids"] != row["rejected_input_ids"], (
+            "chosen and rejected have identical token IDs"
+        )
+
+        # All token IDs must be within vocab range
+        vocab_size = tokenizer.vocab_size
+        for name in ("prompt_input_ids", "chosen_input_ids", "rejected_input_ids"):
+            for token_id in row[name]:
+                assert 0 <= token_id < vocab_size, (
+                    f"{name} has token ID {token_id} out of vocab range [0, {vocab_size})"
+                )
+
     def test_dpo_eos_appended(self, dpo_datasets, tokenizer):
         train_ds, _ = dpo_datasets
         eos_id = tokenizer.eos_token_id
-        row = next(iter(train_ds.iter_rows()))
-        assert row["chosen_input_ids"][-1] == eos_id
-        assert row["rejected_input_ids"][-1] == eos_id
+        # Check multiple rows, not just the first
+        for i, row in enumerate(train_ds.iter_rows()):
+            assert row["chosen_input_ids"][-1] == eos_id, (
+                f"Row {i}: chosen missing EOS token"
+            )
+            assert row["rejected_input_ids"][-1] == eos_id, (
+                f"Row {i}: rejected missing EOS token"
+            )
+            if i >= 9:
+                break
 
 
 # === Sharding correctness ===
@@ -168,7 +217,7 @@ class TestShardingCorrectness:
         import ray
 
         if not ray.is_initialized():
-            ray.init(address="local", num_cpus=2)
+            ray.init(address="local", num_cpus=2, runtime_env={"working_dir": None})
         yield
         ray.shutdown()
 
@@ -197,14 +246,14 @@ class TestShardingCorrectness:
         return train_ds
 
     def test_no_duplicate_rows_across_shards(self, tokenized_train_ds):
-        shards = tokenized_train_ds.split(2)
+        shards = tokenized_train_ds.split(2, equal=True)
         shard_0_ids = [tuple(row["input_ids"]) for row in shards[0].iter_rows()]
         shard_1_ids = [tuple(row["input_ids"]) for row in shards[1].iter_rows()]
         overlap = set(shard_0_ids) & set(shard_1_ids)
         assert len(overlap) == 0, f"Found {len(overlap)} duplicate rows across shards"
 
     def test_shard_sizes_roughly_equal(self, tokenized_train_ds):
-        shards = tokenized_train_ds.split(2)
+        shards = tokenized_train_ds.split(2, equal=True)
         sizes = [shard.count() for shard in shards]
         assert abs(sizes[0] - sizes[1]) <= 1
 
@@ -214,11 +263,9 @@ class TestShardingCorrectness:
 
 class TestCustomTrainerDataLoaders:
     def test_lfm_sft_trainer_no_distributed_sampler(self):
-        from unittest.mock import MagicMock
-
         from datasets import Dataset
         from torch.utils.data import DistributedSampler
-        from transformers import TrainingArguments
+        from transformers import AutoConfig, AutoModelForCausalLM, TrainingArguments
 
         from leap_finetune.training_loops.sft_run import LFMSFTTrainer
 
@@ -229,10 +276,10 @@ class TestCustomTrainerDataLoaders:
             output_dir="/tmp/test_sft",
             per_device_train_batch_size=1,
             report_to="none",
-            no_cuda=True,
+            use_cpu=True,
         )
-        model = MagicMock()
-        model.config = MagicMock()
+        config = AutoConfig.from_pretrained("LiquidAI/LFM2-1.2B")
+        model = AutoModelForCausalLM.from_config(config)
         trainer = LFMSFTTrainer(
             model=model,
             args=args,

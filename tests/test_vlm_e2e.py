@@ -1,4 +1,4 @@
-import pathlib
+import re
 
 import pytest
 
@@ -6,7 +6,7 @@ from conftest import assert_training_result, requires_gpu, run_e2e_training
 
 pytestmark = pytest.mark.vlm
 
-FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
 
 
 # === VLM SFT with LoRA ===
@@ -14,9 +14,9 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
 class TestVLMLoRA:
     @requires_gpu
-    def test_training_completes_and_learns(self, tmp_path):
+    def test_training_completes_and_learns(self, e2e_output_dir):
         config_path = str(FIXTURES / "e2e_vlm_lora.yaml")
-        result = run_e2e_training(config_path, tmp_path)
+        result = run_e2e_training(config_path, e2e_output_dir)
         assert_training_result(result)
 
     @requires_gpu
@@ -29,7 +29,7 @@ class TestVLMLoRA:
         from leap_finetune.training_configs.vlm_sft_config import DEFAULT_LR_MULTIPLIERS
         from leap_finetune.utils.load_models import load_vlm_model
 
-        model, processor = load_vlm_model("LFM2-1.2B")
+        model, processor = load_vlm_model("LFM2-VL-1.6B")
         args = TrainingArguments(
             output_dir="/tmp/test_vlm_opt",
             learning_rate=1e-4,
@@ -69,14 +69,18 @@ class TestVLMLoRA:
 
 class TestVLMFull:
     @requires_gpu
-    def test_training_completes_and_learns(self, tmp_path):
+    def test_training_completes_learns_and_checkpoints(self, e2e_output_dir):
         config_path = str(FIXTURES / "e2e_vlm_full.yaml")
-        result = run_e2e_training(config_path, tmp_path)
+        result = run_e2e_training(config_path, e2e_output_dir)
         assert_training_result(result)
 
-    @requires_gpu
-    def test_checkpoint_exists(self, tmp_path):
-        config_path = str(FIXTURES / "e2e_vlm_full.yaml")
-        run_e2e_training(config_path, tmp_path)
-        checkpoint_dirs = list(tmp_path.rglob("checkpoint-*"))
-        assert len(checkpoint_dirs) > 0, "No checkpoint directories found"
+        checkpoint_dirs = list(e2e_output_dir.rglob("checkpoint-*"))
+        renamed_dirs = [
+            d
+            for d in e2e_output_dir.iterdir()
+            if d.is_dir() and re.search(r"-e\d+s\d+-", d.name)
+        ]
+        assert len(checkpoint_dirs) + len(renamed_dirs) > 0, (
+            f"No checkpoint directories found under {e2e_output_dir}. "
+            f"Contents: {[p.name for p in e2e_output_dir.iterdir()]}"
+        )

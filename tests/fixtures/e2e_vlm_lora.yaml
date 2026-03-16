@@ -1,5 +1,5 @@
 project_name: "e2e_vlm_lora"
-model_name: "LFM2-1.2B"
+model_name: "LFM2-VL-1.6B"
 training_type: "vlm_sft"
 
 dataset:

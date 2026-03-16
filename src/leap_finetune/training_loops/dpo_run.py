@@ -46,6 +46,13 @@ class LFMDPOTrainer(DPOTrainer):
             collate_fn=self.data_collator,
         )
 
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        # DPOTrainer.prediction_step skips _prepare_inputs, so tensors stay on
+        # CPU when using custom DataLoaders. Move them to device before the
+        # parent's prediction_step runs concatenated_forward → model().
+        inputs = self._prepare_inputs(inputs)
+        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+
 
 def dpo_run(training_config: dict) -> None:
     """DPO training loop — pre-tokenized data + DPOTrainer."""

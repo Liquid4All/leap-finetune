@@ -1,12 +1,25 @@
 import math
 import os
 import pathlib
+import shutil
 
 import pytest
 import torch
 import yaml
 
 from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
+
+# === Ray temp dir ===
+# On shared machines /tmp/ray may be owned by another user.
+# Use /tmp/$USER/ray to avoid permission conflicts.
+_RAY_TMPDIR = pathlib.Path(f"/tmp/{os.environ.get('USER', 'default')}/ray")
+_RAY_TMPDIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("RAY_TMPDIR", str(_RAY_TMPDIR))
+
+# === E2E test output dir ===
+# Use ~/test-results instead of /tmp to avoid filling the shared /tmp partition
+# with large model checkpoints (MoE FSDP checkpoints are ~27GB each).
+_TEST_RESULTS_DIR = pathlib.Path.home() / "test-results"
 
 
 # === CLI flag registration ===
@@ -104,6 +117,14 @@ def write_config_fn(tmp_path):
 # === E2E training helper ===
 
 
+@pytest.fixture
+def e2e_output_dir():
+    """Provide ~/test-results as output dir, cleaned up after each test."""
+    _TEST_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    yield _TEST_RESULTS_DIR
+    shutil.rmtree(_TEST_RESULTS_DIR, ignore_errors=True)
+
+
 def run_e2e_training(config_path: str, output_dir: pathlib.Path):
     """Parse config, override output_dir, run training, return Result."""
     os.environ["OUTPUT_DIR"] = str(output_dir)
@@ -118,13 +139,33 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
         os.environ.pop("OUTPUT_DIR", None)
 
 
-def assert_training_result(result):
-    """Common assertions for e2e training results."""
+def assert_training_result(result, max_eval_loss=5.0):
+    """Verify training completed, produced finite loss, and actually learned.
+
+    Args:
+        result: Ray Train Result object.
+        max_eval_loss: Upper bound on eval_loss. Random cross-entropy for
+            vocab=65536 is ~11.1, so anything above max_eval_loss indicates
+            the model didn't learn. Default 5.0 is generous for 1-epoch runs.
+    """
     assert result is not None, "Training returned no result"
     metrics = result.metrics
     assert metrics is not None, "No metrics in training result"
 
-    # Loss should be finite
-    if "eval_loss" in metrics:
-        eval_loss = metrics["eval_loss"]
-        assert math.isfinite(eval_loss), f"eval_loss is not finite: {eval_loss}"
+    # Training must have run at least 1 epoch
+    assert "epoch" in metrics, f"No epoch in metrics: {metrics}"
+
+    # eval_loss must exist, be finite, and show the model learned
+    assert "eval_loss" in metrics, f"No eval_loss in metrics: {metrics}"
+    eval_loss = metrics["eval_loss"]
+    assert math.isfinite(eval_loss), f"eval_loss is not finite: {eval_loss}"
+    assert eval_loss < max_eval_loss, (
+        f"eval_loss {eval_loss:.4f} >= {max_eval_loss} — model did not learn. "
+        f"Random baseline for vocab=65536 is ~11.1"
+    )
+
+    # train_loss should also be present and finite
+    if "train_loss" in metrics:
+        assert math.isfinite(metrics["train_loss"]), (
+            f"train_loss is not finite: {metrics['train_loss']}"
+        )

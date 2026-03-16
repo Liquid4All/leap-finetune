@@ -1,10 +1,10 @@
-import os
 import pathlib
 import tempfile
 
 import pytest
 import yaml
 from peft import LoraConfig
+from transformers import TrainingArguments
 
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.config_parser import (
@@ -150,26 +150,40 @@ class TestParseJobConfig:
         assert job.training_type == "sft"
         assert job.model_name == "LFM2-1.2B"
         assert job.job_name == "my_sft_project"
+        assert job.dataset.dataset_path == "HuggingFaceTB/smoltalk"
+        assert job.dataset.dataset_type == "sft"
+        assert "deepspeed" in job.training_config.value
+        assert "learning_rate" in job.training_config.value
 
     def test_parse_dpo_example(self, dpo_config_path):
         job = parse_job_config(dpo_config_path)
         assert job.training_type == "dpo"
         assert job.job_name == "my_dpo_project"
+        assert job.dataset.dataset_type == "dpo"
+        assert "beta" in job.training_config.value
+        assert "deepspeed" in job.training_config.value
 
     def test_parse_vlm_example(self, vlm_config_path):
         job = parse_job_config(vlm_config_path)
         assert job.training_type == "vlm_sft"
         assert job.job_name == "my_vlm_project"
+        assert job.dataset.dataset_type == "vlm_sft"
+        assert "deepspeed" in job.training_config.value
 
     def test_parse_moe_sft_example(self, moe_sft_config_path):
         job = parse_job_config(moe_sft_config_path)
         assert job.training_type == "sft"
         assert job.model_name == "LFM2-8B-A1B"
+        assert job.dataset.dataset_type == "sft"
+        # MoE uses stage-0 DeepSpeed
+        ds_config = job.training_config.value.get("deepspeed", {})
+        assert ds_config.get("zero_optimization", {}).get("stage") == 0
 
     def test_parse_moe_dpo_example(self, moe_dpo_config_path):
         job = parse_job_config(moe_dpo_config_path)
         assert job.training_type == "dpo"
         assert job.model_name == "LFM2-8B-A1B"
+        assert job.dataset.dataset_type == "dpo"
 
 
 # === Config extends/inheritance ===
@@ -379,28 +393,64 @@ class TestAllExampleConfigs:
     def job_configs_dir(self):
         return LEAP_FINETUNE_DIR / "job_configs"
 
-    @pytest.mark.parametrize(
-        "config_name",
-        [
-            "sft_example.yaml",
-            "dpo_example.yaml",
-            "vlm_sft_example.yaml",
-            "moe_sft_example.yaml",
-            "moe_dpo_example.yaml",
-            "sft_example_with_slurm.yaml",
-            "sft_with_lora_example.yaml",
-        ],
-    )
+    EXPECTED = {
+        "sft_example.yaml": {"type": "sft", "model": "LFM2-1.2B", "has_peft": True},
+        "dpo_example.yaml": {"type": "dpo", "model": "LFM2-1.2B", "has_peft": True},
+        "vlm_sft_example.yaml": {
+            "type": "vlm_sft",
+            "model": "LFM2-1.2B",
+            "has_peft": True,
+        },
+        "moe_sft_example.yaml": {
+            "type": "sft",
+            "model": "LFM2-8B-A1B",
+            "has_peft": True,
+        },
+        "moe_dpo_example.yaml": {
+            "type": "dpo",
+            "model": "LFM2-8B-A1B",
+            "has_peft": True,
+        },
+        "sft_example_with_slurm.yaml": {
+            "type": "sft",
+            "model": "LFM2-1.2B",
+            "has_peft": True,
+        },
+        "sft_with_lora_example.yaml": {
+            "type": "sft",
+            "model": "LFM2-1.2B",
+            "has_peft": True,
+        },
+    }
+
+    @pytest.mark.parametrize("config_name", list(EXPECTED.keys()))
     def test_parse_and_to_dict(self, job_configs_dir, config_name):
         config_path = str(job_configs_dir / config_name)
         job = parse_job_config(config_path)
+        expected = self.EXPECTED[config_name]
 
         d = job.to_dict()
         assert isinstance(d["training_config"], dict)
-        assert "output_dir" in d["training_config"]
-        assert "leap_run_name_template" in d["training_config"]
-        assert d["model_name"]
-        assert d["training_type"] in ("sft", "dpo", "vlm_sft")
+        assert d["training_type"] == expected["type"]
+        assert d["model_name"] == expected["model"]
+
+        # Dataset must be a DatasetLoader with the right type
+        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+
+        assert isinstance(d["dataset"], DatasetLoader)
+        assert d["dataset"].dataset_path, "dataset_path is empty"
+
+        # Training config must have core keys
+        tc = d["training_config"]
+        assert "output_dir" in tc
+        assert "learning_rate" in tc
+        assert isinstance(tc["learning_rate"], float)
+
+        # PEFT config presence
+        if expected["has_peft"]:
+            assert d["peft_config"] is not None, (
+                f"{config_name} should have peft_config"
+            )
 
 
 # === Output dir and env overrides ===
@@ -435,7 +485,7 @@ class TestOutputAndEnv:
         job = parse_job_config(write_config(config, tmp_path))
         assert job.training_config.value["output_dir"] == env_dir
 
-    def test_dataset_path_env_is_read(self, tmp_path, monkeypatch):
+    def test_dataset_path_env_override(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DATASET_PATH", "custom/override/dataset")
         config = {
             "project_name": "test_ds_override",
@@ -445,14 +495,21 @@ class TestOutputAndEnv:
             "training_config": {"extends": "DEFAULT_SFT"},
             "peft_config": {"use_peft": False},
         }
-        path = write_config(config, tmp_path)
-        config_path = resolve_config_path(path)
-        with open(config_path) as f:
-            config_dict = yaml.safe_load(f)
-        ds_config = config_dict.get("dataset", {})
-        dataset_path_env = os.getenv("DATASET_PATH")
-        final_path = dataset_path_env if dataset_path_env else ds_config.get("path")
-        assert final_path == "custom/override/dataset"
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.dataset.dataset_path == "custom/override/dataset"
+
+    def test_dataset_path_falls_back_to_yaml(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DATASET_PATH", raising=False)
+        config = {
+            "project_name": "test_ds_fallback",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.dataset.dataset_path == BASE_SFT_DATASET["path"]
 
 
 # === Run name in config ===
@@ -500,6 +557,72 @@ class TestCheckpointCallback:
     def test_create_with_template(self):
         cb = LeapCheckpointCallback(run_name_template="test-run-20250101")
         assert cb.run_name_template == "test-run-20250101"
+
+    def test_on_log_accumulates_metrics(self):
+        cb = LeapCheckpointCallback()
+        args = TrainingArguments(output_dir="/tmp/test", report_to="none")
+        state = type("State", (), {"epoch": 1, "global_step": 10})()
+        control = type("Control", (), {})()
+
+        cb.on_log(args, state, control, logs={"loss": 1.5, "lr": 1e-4})
+        assert cb.metrics == {"loss": 1.5, "lr": 1e-4}
+
+        # Later log overwrites earlier values
+        cb.on_log(args, state, control, logs={"loss": 0.8})
+        assert cb.metrics["loss"] == 0.8
+        assert cb.metrics["lr"] == 1e-4  # preserved
+
+    def test_on_log_ignores_none(self):
+        cb = LeapCheckpointCallback()
+        args = TrainingArguments(output_dir="/tmp/test", report_to="none")
+        state = type("State", (), {})()
+        control = type("Control", (), {})()
+
+        cb.on_log(args, state, control, logs=None)
+        assert cb.metrics == {}
+
+    def test_rename_checkpoint(self, tmp_path):
+        cb = LeapCheckpointCallback(
+            run_name_template="LFM2-sft-smoltalk-20250101_120000"
+        )
+        # Create a fake checkpoint dir
+        checkpoint_dir = tmp_path / "checkpoint-100"
+        checkpoint_dir.mkdir()
+        (checkpoint_dir / "model.safetensors").touch()
+
+        args = TrainingArguments(
+            output_dir=str(tmp_path), report_to="none", save_strategy="no"
+        )
+        state = type("State", (), {"epoch": 1.0, "global_step": 100})()
+
+        cb._rename_checkpoint(args, state)
+
+        # Original should be gone
+        assert not checkpoint_dir.exists()
+        # Renamed dir should exist with epoch/step pattern
+        renamed = list(tmp_path.glob("LFM2-sft-smoltalk-e1s100-*"))
+        assert len(renamed) == 1
+        assert (renamed[0] / "model.safetensors").exists()
+        # Latest symlink should point to it
+        latest = tmp_path / "latest"
+        assert latest.is_symlink()
+        assert latest.resolve() == renamed[0].resolve()
+
+    def test_rotate_checkpoints(self, tmp_path):
+        cb = LeapCheckpointCallback()
+        # Create 4 checkpoint dirs
+        for step in [10, 20, 30, 40]:
+            d = tmp_path / f"model-e1s{step}-20250101"
+            d.mkdir()
+            (d / "model.safetensors").touch()
+
+        cb._rotate_checkpoints(tmp_path, limit=2)
+
+        remaining = sorted(d.name for d in tmp_path.iterdir() if d.is_dir())
+        # Should keep the 2 newest (highest step): s30 and s40
+        assert len(remaining) == 2
+        assert "model-e1s30-20250101" in remaining
+        assert "model-e1s40-20250101" in remaining
 
 
 # === SLURM generation ===

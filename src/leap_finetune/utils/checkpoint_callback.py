@@ -43,6 +43,8 @@ class LeapCheckpointCallback(TrainerCallback):
     ) -> None:
         if logs:
             self.metrics.update(logs)
+            # Report every log step so metrics_dataframe has the full loss curve
+            train.report(metrics=self.metrics.copy(), checkpoint=None)
 
     def on_save(
         self,

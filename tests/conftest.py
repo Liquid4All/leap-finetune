@@ -140,7 +140,7 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
 
 
 def assert_training_result(result, max_eval_loss=5.0):
-    """Verify training completed, produced finite loss, and actually learned.
+    """Verify training completed, produced finite loss, and loss decreased.
 
     Args:
         result: Ray Train Result object.
@@ -163,6 +163,20 @@ def assert_training_result(result, max_eval_loss=5.0):
         f"eval_loss {eval_loss:.4f} >= {max_eval_loss} — model did not learn. "
         f"Random baseline for vocab=65536 is ~11.1"
     )
+
+    # Loss must trend downward over training (compare first quarter vs last quarter
+    # to smooth out per-batch noise)
+    df = result.metrics_dataframe
+    if df is not None and "loss" in df.columns:
+        losses = df["loss"].dropna()
+        if len(losses) >= 4:
+            q = max(1, len(losses) // 4)
+            early_avg = losses.iloc[:q].mean()
+            late_avg = losses.iloc[-q:].mean()
+            assert late_avg < early_avg, (
+                f"Loss did not trend down: "
+                f"first quarter avg={early_avg:.4f} → last quarter avg={late_avg:.4f}"
+            )
 
     # train_loss should also be present and finite
     if "train_loss" in metrics:

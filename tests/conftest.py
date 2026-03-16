@@ -165,18 +165,17 @@ def assert_training_result(result, max_eval_loss=5.0):
     )
 
     # Loss must trend downward over training (compare first quarter vs last quarter
-    # to smooth out per-batch noise)
-    df = result.metrics_dataframe
-    if df is not None and "loss" in df.columns:
-        losses = df["loss"].dropna()
-        if len(losses) >= 4:
-            q = max(1, len(losses) // 4)
-            early_avg = losses.iloc[:q].mean()
-            late_avg = losses.iloc[-q:].mean()
-            assert late_avg < early_avg, (
-                f"Loss did not trend down: "
-                f"first quarter avg={early_avg:.4f} → last quarter avg={late_avg:.4f}"
-            )
+    # to smooth out per-batch noise). loss_history is collected by
+    # LeapCheckpointCallback from every on_log call.
+    loss_history = metrics.get("loss_history", [])
+    if len(loss_history) >= 4:
+        q = max(1, len(loss_history) // 4)
+        early_avg = sum(loss_history[:q]) / q
+        late_avg = sum(loss_history[-q:]) / q
+        assert late_avg < early_avg, (
+            f"Loss did not trend down: "
+            f"first quarter avg={early_avg:.4f} → last quarter avg={late_avg:.4f}"
+        )
 
     # train_loss should also be present and finite
     if "train_loss" in metrics:

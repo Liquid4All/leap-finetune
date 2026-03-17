@@ -79,6 +79,36 @@ def job_configs_dir():
 
 
 @pytest.fixture
+def sft_config_path(job_configs_dir):
+    return str(job_configs_dir / "sft_example.yaml")
+
+
+@pytest.fixture
+def dpo_config_path(job_configs_dir):
+    return str(job_configs_dir / "dpo_example.yaml")
+
+
+@pytest.fixture
+def vlm_config_path(job_configs_dir):
+    return str(job_configs_dir / "vlm_sft_example.yaml")
+
+
+@pytest.fixture
+def moe_sft_config_path(job_configs_dir):
+    return str(job_configs_dir / "moe_sft_example.yaml")
+
+
+@pytest.fixture
+def moe_dpo_config_path(job_configs_dir):
+    return str(job_configs_dir / "moe_dpo_example.yaml")
+
+
+@pytest.fixture
+def slurm_config_path(job_configs_dir):
+    return str(job_configs_dir / "sft_example_with_slurm.yaml")
+
+
+@pytest.fixture
 def fixtures_dir():
     return pathlib.Path(__file__).parent / "fixtures"
 
@@ -97,6 +127,13 @@ BASE_DPO_DATASET = {
     "limit": 10,
     "test_size": 0.2,
     "subset": "default",
+}
+
+BASE_VLM_DATASET = {
+    "path": "alay2shah/example-vlm-sft-dataset",
+    "type": "vlm_sft",
+    "limit": 10,
+    "test_size": 0.2,
 }
 
 

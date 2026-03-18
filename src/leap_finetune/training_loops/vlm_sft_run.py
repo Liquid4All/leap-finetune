@@ -3,7 +3,6 @@ import math
 
 import torch
 import ray.train
-from torch.utils.data import DataLoader
 from transformers import Trainer, TrainingArguments
 from ray.train.huggingface.transformers import prepare_trainer
 
@@ -21,6 +20,7 @@ from leap_finetune.utils.logging_utils import (
     setup_worker_logging,
 )
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
+from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 # === VLM Trainer with per-component learning rates ===
 
 
-class LFMVLMTrainer(Trainer):
-    """Trainer subclass that applies per-component LR multipliers.
+class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
+    """VLM Trainer with per-component LR multipliers and Ray data integration.
 
     Mirrors liquid-vlm convention: vision encoder trains at a lower LR
     to preserve pretrained features, while the projector and LLM backbone
@@ -94,25 +94,6 @@ class LFMVLMTrainer(Trainer):
             optimizer_groups, betas=betas, fused=torch.cuda.is_available()
         )
         return self.optimizer
-
-    def get_train_dataloader(self):
-        # Ray already shards across workers — return a raw DataLoader
-        # (bypasses Accelerate's DistributedSampler / IterableDatasetShard)
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self._train_batch_size,
-            collate_fn=self.data_collator,
-            shuffle=True,
-        )
-
-    def get_eval_dataloader(self, eval_dataset=None):
-        if eval_dataset is None:
-            eval_dataset = self.eval_dataset
-        return DataLoader(
-            eval_dataset,
-            batch_size=self.args.per_device_eval_batch_size,
-            collate_fn=self.data_collator,
-        )
 
 
 # === Training loop ===
@@ -207,27 +188,9 @@ def vlm_sft_run(training_config: dict) -> None:
         data_collator=collate_fn,
     )
 
-    # Add checkpoint callback (handles Ray reporting + rename) then prepare for distributed training
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
     trainer = prepare_trainer(trainer)
-
-    try:
-        trainer.train()
-        logger.info("Training completed successfully")
-    except RuntimeError as e:
-        error_msg = str(e)
-        if any(
-            keyword in error_msg.lower()
-            for keyword in ["cuda error", "ecc error", "nccl", "collective", "timeout"]
-        ):
-            logger.warning(
-                f"Training completed but hit distributed communication error during cleanup: {error_msg}"
-            )
-            logger.info(
-                "Training was successful - error occurred in post-training synchronization"
-            )
-        else:
-            raise
+    run_training_safely(trainer)
 
     # Save PEFT model if applicable
     if peft_config and is_rank_zero():

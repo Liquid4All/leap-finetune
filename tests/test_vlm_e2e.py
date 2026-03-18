@@ -1,8 +1,11 @@
-import re
-
 import pytest
 
-from conftest import assert_training_result, requires_gpu, run_e2e_training
+from conftest import (
+    assert_checkpoints_exist,
+    assert_training_result,
+    requires_gpu,
+    run_e2e_training,
+)
 
 pytestmark = pytest.mark.vlm
 
@@ -74,13 +77,4 @@ class TestVLMFull:
         result = run_e2e_training(config_path, e2e_output_dir)
         assert_training_result(result)
 
-        checkpoint_dirs = list(e2e_output_dir.rglob("checkpoint-*"))
-        renamed_dirs = [
-            d
-            for d in e2e_output_dir.iterdir()
-            if d.is_dir() and re.search(r"-e\d+s\d+-", d.name)
-        ]
-        assert len(checkpoint_dirs) + len(renamed_dirs) > 0, (
-            f"No checkpoint directories found under {e2e_output_dir}. "
-            f"Contents: {[p.name for p in e2e_output_dir.iterdir()]}"
-        )
+        assert_checkpoints_exist(e2e_output_dir)

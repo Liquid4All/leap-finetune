@@ -195,23 +195,23 @@ peft_config:
 
 modal:
   app_name: "leap-finetune"
-  gpu: "H100:4"                        # 4x H100 — Ray creates one worker per GPU
-  timeout: 86400                        # 24 hours
-  output_volume: "leap-finetune-outputs"   # Modal Volume, created automatically
-  output_dir: "/outputs"               # mount point inside the container
+  gpu: "H100:4" # 4x H100 — Ray creates one worker per GPU
+  timeout: 86400 # 24 hours
+  output_volume: "leap-finetune-outputs" # Modal Volume, created automatically
+  output_dir: "/outputs" # mount point inside the container
   secrets:
-    - "huggingface-secret"             # must contain HF_TOKEN
+    - "huggingface-secret" # must contain HF_TOKEN
     # - "wandb-secret"                 # optional, must contain WANDB_API_KEY
 ```
 
 **GPU options:**
 
-| `gpu:` value | Hardware |
-|---|---|
-| `"H100"` | 1x H100 80GB |
-| `"H100:4"` | 4x H100 80GB |
-| `"H100:8"` | 8x H100 80GB |
-| `"A100-80GB:4"` | 4x A100 80GB |
+| `gpu:` value                | Hardware                      |
+| --------------------------- | ----------------------------- |
+| `"H100"`                    | 1x H100 80GB                  |
+| `"H100:4"`                  | 4x H100 80GB                  |
+| `"H100:8"`                  | 8x H100 80GB                  |
+| `"A100-80GB:4"`             | 4x A100 80GB                  |
 | `["H100:4", "A100-80GB:4"]` | H100 preferred, A100 fallback |
 
 ---

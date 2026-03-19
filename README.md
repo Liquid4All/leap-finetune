@@ -106,7 +106,7 @@ modal setup
 modal:
   gpu: "H100:4"
   secrets:
-    - "huggingface-secret"   # only needed for private/gated models
+    - "huggingface-secret" # only needed for private/gated models
 ```
 
 **Run:**

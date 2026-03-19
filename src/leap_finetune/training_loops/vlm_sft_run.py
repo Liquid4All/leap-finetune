@@ -237,7 +237,12 @@ def vlm_sft_run(training_config: dict) -> None:
     if benchmark_configs and benchmark_configs.get("benchmarks"):
         benchmarks = create_vlm_benchmarks_from_config(benchmark_configs, processor)
         if benchmarks:
-            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
+            trainer.add_callback(
+                BenchmarkEvalCallback(
+                    benchmarks,
+                    best_metric_config=benchmark_configs.get("best_checkpoint_metrics"),
+                )
+            )
 
     trainer = prepare_trainer(trainer)
 

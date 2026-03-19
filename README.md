@@ -1,4 +1,18 @@
-# leap-finetune
+<div align="center">
+  <img
+    src="./banner.png"
+    alt="leap-finetune"
+    style="width: 100%; max-width: 100%; height: auto; display: inline-block; margin-bottom: 0.5em; margin-top: 0.5em;"
+  />
+  <div style="display: flex; justify-content: center; gap: 0.5em;">
+    <a href="https://playground.liquid.ai/"><strong>Try LFM</strong></a> •
+    <a href="https://docs.liquid.ai/lfm"><strong>Documentation</strong></a> •
+    <a href="https://leap.liquid.ai/"><strong>LEAP</strong></a>
+  </div>
+  <br/>
+  <a href="https://discord.com/invite/liquid-ai"><img src="https://img.shields.io/discord/1385439864920739850?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Join Discord"></a>
+</div>
+</br>
 
 A minimal fine-tuning repo for LFM2, fully built on Open Source.
 

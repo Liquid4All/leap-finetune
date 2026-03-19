@@ -4,12 +4,11 @@ from torch.utils.data import DataLoader
 
 logger = logging.getLogger(__name__)
 
-_DISTRIBUTED_ERROR_KEYWORDS = (
+_DISTRIBUTED_CLEANUP_KEYWORDS = (
     "cuda error",
     "ecc error",
     "nccl",
     "collective",
-    "timeout",
 )
 
 
@@ -41,16 +40,25 @@ class RayDataLoaderMixin:
 
 
 def run_training_safely(trainer):
-    """Run trainer.train() with graceful handling of post-training CUDA/NCCL errors."""
+    """Run trainer.train() with graceful handling of post-training CUDA/NCCL errors.
+
+    Only suppresses distributed errors that occur *after* training made progress
+    (global_step > 0), which indicates the error is from cleanup/teardown rather
+    than a real training failure.
+    """
     try:
         trainer.train()
         logger.info("Training completed successfully")
     except RuntimeError as e:
-        error_msg = str(e)
-        if any(kw in error_msg.lower() for kw in _DISTRIBUTED_ERROR_KEYWORDS):
+        error_msg = str(e).lower()
+        trained = getattr(trainer.state, "global_step", 0) > 0
+        is_cleanup_error = trained and any(
+            kw in error_msg for kw in _DISTRIBUTED_CLEANUP_KEYWORDS
+        )
+        if is_cleanup_error:
             logger.warning(
                 "Training completed but hit distributed communication error "
-                f"during cleanup: {error_msg}"
+                f"during cleanup: {e}"
             )
         else:
             raise

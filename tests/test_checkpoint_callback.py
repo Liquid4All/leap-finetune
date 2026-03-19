@@ -16,9 +16,9 @@ class TestCheckpointCallback:
         cb = LeapCheckpointCallback(run_name_template="test-run-20250101")
         assert cb.run_name_template == "test-run-20250101"
 
-    def test_on_log_accumulates_metrics(self):
+    def test_on_log_accumulates_metrics(self, tmp_path):
         cb = LeapCheckpointCallback()
-        args = TrainingArguments(output_dir="/tmp/test", report_to="none")
+        args = TrainingArguments(output_dir=str(tmp_path), report_to="none")
         state = type("State", (), {"epoch": 1, "global_step": 10})()
         control = type("Control", (), {})()
 
@@ -30,9 +30,9 @@ class TestCheckpointCallback:
         assert cb.metrics["loss"] == 0.8
         assert cb.metrics["lr"] == 1e-4  # preserved
 
-    def test_on_log_ignores_none(self):
+    def test_on_log_ignores_none(self, tmp_path):
         cb = LeapCheckpointCallback()
-        args = TrainingArguments(output_dir="/tmp/test", report_to="none")
+        args = TrainingArguments(output_dir=str(tmp_path), report_to="none")
         state = type("State", (), {})()
         control = type("Control", (), {})()
 

@@ -4,10 +4,9 @@ A minimal fine-tuning repo for LFM2, fully built on Open Source.
 
 > **⚠️ Important**
 >
-> - **Hardware:** We tested this tool on H100 80GB GPU. Multi-GPU parallelization has been tested up to 8 such GPUs.
-> - **Operating system:** This tool currently supports Linux machines with the x86_64 architecture.
+> - **Hardware:** Local training requires GPUs (tested on H100 80GB, up to 8 GPUs). For remote training via Modal, any Mac or laptop works.
 > - **Python:** Make sure you are running Python >= 3.12.
-> - **Access token:** Make sure you are logged in on Hugging Face to access models and datasets.
+> - **Access token:** For private or gated models, make sure you are logged in on Hugging Face.
 
 For feature requests or if you have a different setup, reach out to [support@liquid.ai](mailto:support@liquid.ai) and tell us about your specific configuration.
 
@@ -90,6 +89,37 @@ To monitor your SLURM jobs in a TUI:
 ```bash
 uv run turm --me
 ```
+
+### Modal Support
+
+You can run training jobs on Modal's serverless GPUs directly from your Mac or laptop — no local GPU required.
+
+**One-time setup:**
+
+```bash
+modal setup
+```
+
+**Add a `modal:` section to any config:**
+
+```yaml
+modal:
+  gpu: "H100:4"
+  secrets:
+    - "huggingface-secret"   # only needed for private/gated models
+```
+
+**Run:**
+
+```bash
+uv run leap-finetune job_configs/sft_example_modal.yaml
+```
+
+The first run builds the container image (~5-10 min). After that, it's cached and starts instantly. Logs stream to your terminal in real-time.
+
+Set `detach: true` in the modal config to submit and disconnect. Monitor with `modal app logs leap-finetune`. Download checkpoints with `modal volume get leap-finetune-outputs /outputs ./local-outputs`.
+
+See [`job_configs/sft_example_modal.yaml`](./job_configs/sft_example_modal.yaml) for all available options.
 
 ### 3. (Optional) Experiment Tracking with Weights & Biases
 

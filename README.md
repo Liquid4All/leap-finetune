@@ -111,7 +111,8 @@ You can run training jobs on Modal's serverless GPUs directly from your Mac or l
 **One-time setup:**
 
 ```bash
-modal setup
+huggingface-cli login   # required — used for model downloads and trackio
+modal setup              # configure Modal credentials
 ```
 
 **Add a `modal:` section to any config:**
@@ -119,8 +120,10 @@ modal setup
 ```yaml
 modal:
   gpu: "H100:4"
-  secrets:
-    - "huggingface-secret" # only needed for private/gated models
+  timeout: 86400
+  output_volume: "leap-finetune"
+  output_dir: "/outputs"
+  detach: false
 ```
 
 **Run:**
@@ -129,18 +132,65 @@ modal:
 uv run leap-finetune job_configs/sft_example_modal.yaml
 ```
 
-The first run builds the container image (~5-10 min). After that, it's cached and starts instantly. Logs stream to your terminal in real-time.
+That's it. The CLI will:
+1. Build the container image (~5 min on first run, cached after that)
+2. Auto-create a `huggingface-secret` on Modal from your local HF token
+3. Stream build and training logs to your terminal in real-time
+4. Save checkpoints to a Modal Volume
 
-Set `detach: true` in the modal config to submit and disconnect. Monitor with `modal app logs leap-finetune`. Download checkpoints with `modal volume get leap-finetune-outputs /outputs ./local-outputs`.
+**Retrieving checkpoints:**
+
+```bash
+modal volume ls leap-finetune                                        # list saved checkpoints
+modal volume get leap-finetune <checkpoint-name> ./local-outputs     # download to local
+```
+
+**Detached mode:** Set `detach: true` in the modal config to submit and disconnect. Monitor with `modal app logs leap-finetune`.
 
 See [`job_configs/sft_example_modal.yaml`](./job_configs/sft_example_modal.yaml) for all available options.
 
-### 3. (Optional) Experiment Tracking with Weights & Biases
+### 3. (Optional) Experiment Tracking
 
-Set `wandb_logging: true` in your YAML config's `training_config` section. By default logs are saved locally to `./wandb/`. To sync to [wandb.ai](https://wandb.ai), set `WANDB_API_KEY`:
+Add `tracker` to your `training_config`:
+
+```yaml
+training_config:
+  tracker: "trackio" # or "wandb"
+```
+
+#### Trackio
+
+[Trackio](https://huggingface.co/blog/trackio) is a free experiment tracker that logs to a HuggingFace Space.
+
+```yaml
+training_config:
+  tracker: "trackio"
+  trackio_space_id: "username/my-dashboard"  # auto-created if it doesn't exist
+```
+
+Requires a HF token (via `huggingface-cli login`). On Modal, the token is auto-injected — no extra setup needed. View your dashboard at `https://huggingface.co/spaces/<trackio_space_id>`.
+
+#### Weights & Biases
+
+[Weights & Biases](https://wandb.ai) is a popular experiment tracking platform.
+
+```yaml
+training_config:
+  tracker: "wandb"
+```
+
+Set your API key locally with `export WANDB_API_KEY=your_key`. On Modal, add a secret:
 
 ```bash
-export WANDB_API_KEY=your_api_key
+modal secret create wandb-secret WANDB_API_KEY=your_key
+```
+
+Then add it to your Modal config:
+
+```yaml
+modal:
+  secrets:
+    - "wandb-secret"
 ```
 
 ### 4. Bundle Checkpoint for LEAP

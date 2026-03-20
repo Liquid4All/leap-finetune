@@ -11,7 +11,7 @@ from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
-    init_wandb_if_enabled,
+    init_tracker,
     is_rank_zero,
     setup_worker_logging,
 )
@@ -71,7 +71,13 @@ def dpo_run(training_config: dict) -> None:
     )
 
     # Filter out non-DPOConfig parameters
-    excluded_keys = {"training_type", "wandb_logging", "leap_run_name_template"}
+    excluded_keys = {
+        "training_type",
+        "wandb_logging",
+        "tracker",
+        "trackio_space_id",
+        "leap_run_name_template",
+    }
     if use_fsdp:
         excluded_keys.add("deepspeed")
 
@@ -81,11 +87,12 @@ def dpo_run(training_config: dict) -> None:
         if k not in excluded_keys
     }
 
-    # Configure wandb reporting if enabled via config
-    wandb_logging = bool(
-        training_config.get("train_config", {}).get("wandb_logging", False)
-    )
-    init_wandb_if_enabled(job_name, wandb_logging)
+    # Configure experiment tracking
+    train_cfg = training_config.get("train_config", {})
+    tracker = train_cfg.get("tracker", "none")
+    if tracker == "none" and train_cfg.get("wandb_logging", False):
+        tracker = "wandb"
+    init_tracker(job_name, tracker, train_cfg.get("trackio_space_id"))
 
     # Default eval batch size to train batch size to avoid OOM during eval
     if "per_device_eval_batch_size" not in train_config_filtered:
@@ -95,7 +102,7 @@ def dpo_run(training_config: dict) -> None:
 
     # Build training args
     config_kwargs = {
-        "report_to": "wandb" if wandb_logging else "none",
+        "report_to": tracker,
         "run_name": job_name,
         **train_config_filtered,
     }

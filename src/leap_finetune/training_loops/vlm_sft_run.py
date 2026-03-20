@@ -16,7 +16,7 @@ from leap_finetune.training_configs.vlm_sft_config import (
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.logging_utils import (
-    init_wandb_if_enabled,
+    init_tracker,
     is_rank_zero,
     setup_worker_logging,
 )
@@ -152,9 +152,11 @@ def vlm_sft_run(training_config: dict) -> None:
         k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
-    # Configure wandb
-    wandb_logging = bool(train_config.get("wandb_logging", False))
-    init_wandb_if_enabled(job_name, wandb_logging)
+    # Configure experiment tracking
+    tracker = train_config.get("tracker", "none")
+    if tracker == "none" and train_config.get("wandb_logging", False):
+        tracker = "wandb"
+    init_tracker(job_name, tracker, train_config.get("trackio_space_id"))
 
     # Compute max_steps from materialized dataset size
     # (Trainer can't infer it from our bypassed DataLoader)
@@ -174,7 +176,7 @@ def vlm_sft_run(training_config: dict) -> None:
     # Build training args — use max_steps instead of num_train_epochs
     train_config_filtered.pop("num_train_epochs", None)
     config_kwargs = {
-        "report_to": "wandb" if wandb_logging else "none",
+        "report_to": tracker,
         "run_name": job_name,
         "per_device_eval_batch_size": train_batch_size,
         "remove_unused_columns": False,

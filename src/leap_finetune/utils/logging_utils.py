@@ -33,38 +33,49 @@ def is_rank_zero() -> bool:
         return True
 
 
-def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
-    """Initialize wandb with project and run name if logging is enabled.
-
-    This must be called BEFORE creating the trainer to ensure training metrics are logged.
+def init_tracker(job_name: str, tracker: str, space_id: str | None = None) -> None:
+    """Initialize experiment tracker. Must be called BEFORE creating the trainer.
 
     Args:
-        job_name: Name for the wandb run (defaults to job_name from config)
-        wandb_logging: Whether wandb logging is enabled
+        job_name: Name for the run
+        tracker: "wandb", "trackio", or "none"
+        space_id: HF Space ID for trackio (required when tracker is "trackio")
     """
-    if not wandb_logging:
+    if tracker == "none":
         return
 
     try:
-        import wandb
+        if tracker == "trackio":
+            import trackio as wandb
+
+            if not space_id:
+                raise ValueError(
+                    "trackio requires 'trackio_space_id' in training_config"
+                )
+        else:
+            import wandb
 
         if is_rank_zero():
             project = os.environ.get("WANDB_PROJECT", "leap-finetune")
 
-            wandb.init(
-                project=project,
-                name=job_name,
-                resume="allow",  # Allow resuming if run exists (replaces deprecated reinit=True)
-                settings=wandb.Settings(
-                    _disable_stats=False,  # Enable stats collection
-                ),
-            )
+            init_kwargs = {
+                "project": project,
+                "name": job_name,
+                "resume": "allow",
+                "settings": wandb.Settings(_disable_stats=False),
+            }
+            if space_id:
+                init_kwargs["space_id"] = space_id
+
+            run = wandb.init(**init_kwargs)
+            if hasattr(run, "url") and run.url:
+                print(f"\nTracker URL: {run.url}")
     except ImportError:
         pass
     except Exception as e:
         import warnings
 
-        warnings.warn(f"Failed to initialize wandb: {e}", UserWarning)
+        warnings.warn(f"Failed to initialize {tracker}: {e}", UserWarning)
 
 
 def worker_process_setup_hook() -> None:

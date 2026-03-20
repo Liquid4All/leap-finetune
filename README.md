@@ -133,6 +133,7 @@ uv run leap-finetune job_configs/sft_example_modal.yaml
 ```
 
 That's it. The CLI will:
+
 1. Build the container image (~5 min on first run, cached after that)
 2. Auto-create a `huggingface-secret` on Modal from your local HF token
 3. Stream build and training logs to your terminal in real-time
@@ -165,7 +166,7 @@ training_config:
 ```yaml
 training_config:
   tracker: "trackio"
-  trackio_space_id: "username/my-dashboard"  # auto-created if it doesn't exist
+  trackio_space_id: "username/my-dashboard" # auto-created if it doesn't exist
 ```
 
 Requires a HF token (via `huggingface-cli login`). On Modal, the token is auto-injected — no extra setup needed. View your dashboard at `https://huggingface.co/spaces/<trackio_space_id>`.

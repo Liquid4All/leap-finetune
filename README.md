@@ -90,20 +90,6 @@ It uses Ray Train + Accelerate for distributed training.
 
 Unless you overwrote `output_dir`, results will be stored in `outputs/training_type/job_name/`
 
-### SLURM Support
-
-If your config includes a `slurm` section, running `leap-finetune` will auto-generate and submit a SLURM script. You can also generate SLURM scripts without submitting:
-
-```bash
-uv run leap-finetune slurm <path_to_config.yaml>
-```
-
-To monitor your SLURM jobs in a TUI:
-
-```bash
-uv run turm --me
-```
-
 ### Modal Support
 
 You can run training jobs on Modal's serverless GPUs directly from your Mac or laptop — no local GPU required.
@@ -149,6 +135,20 @@ modal volume get leap-finetune <checkpoint-name> ./local-outputs     # download 
 **Detached mode:** Set `detach: true` in the modal config to submit and disconnect. Monitor with `modal app logs leap-finetune`.
 
 See [`job_configs/sft_example_modal.yaml`](./job_configs/sft_example_modal.yaml) for all available options.
+
+### SLURM Support
+
+If your config includes a `slurm` section, running `leap-finetune` will auto-generate and submit a SLURM script. You can also generate SLURM scripts without submitting:
+
+```bash
+uv run leap-finetune slurm <path_to_config.yaml>
+```
+
+To monitor your SLURM jobs in a TUI:
+
+```bash
+uv run turm --me
+```
 
 ### 3. (Optional) Experiment Tracking
 

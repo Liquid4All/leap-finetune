@@ -26,6 +26,7 @@ dependencies = [
     "turm>=0.13.0; sys_platform == 'linux'",
     "torchvision>=0.24.1",
     "modal>=0.73",
+    "trackio>=0.3",
 ]
 
 [project.scripts]

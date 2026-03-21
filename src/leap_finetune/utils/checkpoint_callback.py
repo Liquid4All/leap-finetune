@@ -31,6 +31,7 @@ class LeapCheckpointCallback(TrainerCallback):
     def __init__(self, run_name_template: str | None = None) -> None:
         super().__init__()
         self.metrics: dict = {}
+        self.loss_history: list[float] = []
         self.run_name_template = run_name_template
 
     def on_log(
@@ -43,6 +44,8 @@ class LeapCheckpointCallback(TrainerCallback):
     ) -> None:
         if logs:
             self.metrics.update(logs)
+            if "loss" in logs:
+                self.loss_history.append(logs["loss"])
 
     def on_save(
         self,
@@ -59,10 +62,28 @@ class LeapCheckpointCallback(TrainerCallback):
             if self.run_name_template and _is_local_path(args.output_dir):
                 self._rename_checkpoint(args, state)
 
+        # Include loss curve summary for test assertions
+        report_metrics = self.metrics.copy()
+        if self.loss_history:
+            report_metrics["loss_history"] = self.loss_history.copy()
+
         # Report metrics only — HF Trainer already saved checkpoint to output_dir.
         # Passing checkpoint=None avoids Ray duplicating files into ray_logs/.
-        train.report(metrics=self.metrics.copy(), checkpoint=None)
+        train.report(metrics=report_metrics, checkpoint=None)
         self.metrics.clear()
+
+    def on_train_end(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
+    ) -> None:
+        if self.metrics:
+            report_metrics = self.metrics.copy()
+            if self.loss_history:
+                report_metrics["loss_history"] = self.loss_history.copy()
+            train.report(metrics=report_metrics, checkpoint=None)
 
     def _rename_checkpoint(self, args: TrainingArguments, state: TrainerState) -> None:
         output_path = pathlib.Path(args.output_dir)

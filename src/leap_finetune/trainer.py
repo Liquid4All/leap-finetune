@@ -138,7 +138,7 @@ def ray_trainer(job_config: dict) -> None:
         datasets=datasets,
     )
 
-    trainer.fit()
+    result = trainer.fit()
 
     print_next_steps_panel(output_dir)
     # Ensure Ray cleans up resources promptly to avoid post-training hangs
@@ -146,3 +146,5 @@ def ray_trainer(job_config: dict) -> None:
         ray.shutdown()
     except Exception:
         pass
+
+    return result

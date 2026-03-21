@@ -37,6 +37,17 @@ build-backend = "hatchling.build"
 [tool.uv]
 no-build-isolation-package = ["flash-attn"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "configs: config parsing, validation, override, filtering (no GPU)",
+    "data: dataset loading, tokenization, sharding validation",
+    "dense: dense model end-to-end training tests",
+    "vlm: VLM end-to-end training tests",
+    "moe: MoE end-to-end training tests",
+]
+addopts = "-v --tb=short"
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.2.0",

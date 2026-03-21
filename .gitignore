@@ -17,8 +17,7 @@ src/*
 outputs/
 logs/
 
-# Tests and scripts
-tests/
+# Scripts
 scripts/
 
 # Quick testing files

@@ -33,7 +33,6 @@ class LeapCheckpointCallback(TrainerCallback):
         self.metrics: dict = {}
         self.loss_history: list[float] = []
         self.run_name_template = run_name_template
-        self._reported = False
 
     def on_log(
         self,
@@ -72,7 +71,6 @@ class LeapCheckpointCallback(TrainerCallback):
         # Passing checkpoint=None avoids Ray duplicating files into ray_logs/.
         train.report(metrics=report_metrics, checkpoint=None)
         self.metrics.clear()
-        self._reported = True
 
     def on_train_end(
         self,
@@ -81,9 +79,7 @@ class LeapCheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> None:
-        # When save_strategy="no", on_save never fires, so report final metrics here.
-        # All workers must call train.report the same number of times or training hangs.
-        if not self._reported:
+        if self.metrics:
             report_metrics = self.metrics.copy()
             if self.loss_history:
                 report_metrics["loss_history"] = self.loss_history.copy()

@@ -1,5 +1,4 @@
 import ray.train
-from torch.utils.data import DataLoader
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import Trainer, TrainingArguments
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
@@ -16,27 +15,11 @@ from leap_finetune.utils.logging_utils import (
 )
 from leap_finetune.utils.model_utils import is_moe_model_from_name
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
+from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
 
 
-class LFMSFTTrainer(Trainer):
-    """Trainer that bypasses DistributedSampler since Ray already shards data."""
-
-    def get_train_dataloader(self):
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self._train_batch_size,
-            collate_fn=self.data_collator,
-            shuffle=True,
-        )
-
-    def get_eval_dataloader(self, eval_dataset=None):
-        if eval_dataset is None:
-            eval_dataset = self.eval_dataset
-        return DataLoader(
-            eval_dataset,
-            batch_size=self.args.per_device_eval_batch_size,
-            collate_fn=self.data_collator,
-        )
+class LFMSFTTrainer(RayDataLoaderMixin, Trainer):
+    """SFT Trainer with Ray data integration."""
 
 
 def sft_run(training_config: dict) -> None:
@@ -123,24 +106,7 @@ def sft_run(training_config: dict) -> None:
 
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
     trainer = prepare_trainer(trainer)
-
-    try:
-        trainer.train()
-        print("Training completed successfully")
-    except RuntimeError as e:
-        error_msg = str(e)
-        if any(
-            keyword in error_msg.lower()
-            for keyword in ["cuda error", "ecc error", "nccl", "collective", "timeout"]
-        ):
-            print(
-                f"Training completed but hit distributed communication error during cleanup: {error_msg}"
-            )
-            print(
-                "Training was successful - error occurred in post-training synchronization"
-            )
-        else:
-            raise e
+    run_training_safely(trainer)
 
     # Save PEFT model if applicable
     if peft_config and is_rank_zero():

@@ -244,10 +244,11 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
         candidates.append(env_tmp)
     if preferred:
         candidates.append(preferred)
+    user = os.environ.get("USER", "default")
     home_default = str(Path.home() / "ray_temp")
     candidates.extend(
         [
-            "/tmp/ray",
+            f"/tmp/{user}/ray",
             home_default,
         ]
     )

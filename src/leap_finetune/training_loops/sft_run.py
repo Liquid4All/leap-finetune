@@ -117,12 +117,9 @@ def sft_run(training_config: dict) -> None:
     # === Context Parallelism setup ===
     cp_size = training_config.get("train_config", {}).get("context_parallel_size", 1)
     model_config = training_config.get("model_config")
-    force_sdpa = cp_size > 1
 
     # Load model + tokenizer on worker
-    model, tokenizer = load_model(
-        model_name, model_config=model_config, force_sdpa=force_sdpa
-    )
+    model, tokenizer = load_model(model_name, model_config=model_config)
 
     cp_config = None
     if cp_size > 1:

@@ -198,12 +198,9 @@ def moe_sft_run(training_config: dict) -> None:
     if not ep_size:
         ep_size = 1
 
-    # Load model + tokenizer (force SDPA when CP is enabled)
+    # Load model + tokenizer
     model_config = training_config.get("model_config")
-    force_sdpa = cp_size > 1
-    model, tokenizer = load_model(
-        model_name, model_config=model_config, force_sdpa=force_sdpa
-    )
+    model, tokenizer = load_model(model_name, model_config=model_config)
 
     # === 2D Parallel Process Groups (CP x EP) ===
     parallel_config = None

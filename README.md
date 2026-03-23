@@ -1,13 +1,26 @@
-# leap-finetune
+<div align="center">
+  <img
+    src="./banner.png"
+    alt="leap-finetune"
+    style="width: 100%; max-width: 100%; height: auto; display: inline-block; margin-bottom: 0.5em; margin-top: 0.5em;"
+  />
+  <div style="display: flex; justify-content: center; gap: 0.5em;">
+    <a href="https://playground.liquid.ai/"><strong>Try LFM</strong></a> •
+    <a href="https://docs.liquid.ai/lfm"><strong>Documentation</strong></a> •
+    <a href="https://leap.liquid.ai/"><strong>LEAP</strong></a>
+  </div>
+  <br/>
+  <a href="https://discord.com/invite/liquid-ai"><img src="https://img.shields.io/discord/1385439864920739850?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Join Discord"></a>
+</div>
+</br>
 
 A minimal fine-tuning repo for LFM2, fully built on Open Source.
 
 > **⚠️ Important**
 >
-> - **Hardware:** We tested this tool on H100 80GB GPU. Multi-GPU parallelization has been tested up to 8 such GPUs.
-> - **Operating system:** This tool currently supports Linux machines with the x86_64 architecture.
+> - **Hardware:** Local training requires GPUs (tested on H100 80GB, up to 8 GPUs). For remote training via Modal, any Mac or laptop works.
 > - **Python:** Make sure you are running Python >= 3.12.
-> - **Access token:** Make sure you are logged in on Hugging Face to access models and datasets.
+> - **Access token:** For private or gated models, make sure you are logged in on Hugging Face.
 
 For feature requests or if you have a different setup, reach out to [support@liquid.ai](mailto:support@liquid.ai) and tell us about your specific configuration.
 
@@ -77,6 +90,52 @@ It uses Ray Train + Accelerate for distributed training.
 
 Unless you overwrote `output_dir`, results will be stored in `outputs/training_type/job_name/`
 
+### Modal Support
+
+You can run training jobs on Modal's serverless GPUs directly from your Mac or laptop — no local GPU required.
+
+**One-time setup:**
+
+```bash
+huggingface-cli login   # required — used for model downloads and trackio
+modal setup              # configure Modal credentials
+```
+
+**Add a `modal:` section to any config:**
+
+```yaml
+modal:
+  gpu: "H100:4"
+  timeout: 86400
+  output_volume: "leap-finetune"
+  output_dir: "/outputs"
+  detach: false
+```
+
+**Run:**
+
+```bash
+uv run leap-finetune job_configs/sft_example_modal.yaml
+```
+
+That's it. The CLI will:
+
+1. Build the container image (~5 min on first run, cached after that)
+2. Auto-create a `huggingface-secret` on Modal from your local HF token
+3. Stream build and training logs to your terminal in real-time
+4. Save checkpoints to a Modal Volume
+
+**Retrieving checkpoints:**
+
+```bash
+modal volume ls leap-finetune                                        # list saved checkpoints
+modal volume get leap-finetune <checkpoint-name> ./local-outputs     # download to local
+```
+
+**Detached mode:** Set `detach: true` in the modal config to submit and disconnect. Monitor with `modal app logs leap-finetune`.
+
+See [`job_configs/sft_example_modal.yaml`](./job_configs/sft_example_modal.yaml) for all available options.
+
 ### SLURM Support
 
 If your config includes a `slurm` section, running `leap-finetune` will auto-generate and submit a SLURM script. You can also generate SLURM scripts without submitting:
@@ -91,12 +150,48 @@ To monitor your SLURM jobs in a TUI:
 uv run turm --me
 ```
 
-### 3. (Optional) Experiment Tracking with Weights & Biases
+### 3. (Optional) Experiment Tracking
 
-Set `wandb_logging: true` in your YAML config's `training_config` section. By default logs are saved locally to `./wandb/`. To sync to [wandb.ai](https://wandb.ai), set `WANDB_API_KEY`:
+Add `tracker` to your `training_config`:
+
+```yaml
+training_config:
+  tracker: "trackio" # or "wandb"
+```
+
+#### Trackio
+
+[Trackio](https://huggingface.co/blog/trackio) is a free experiment tracker that logs to a HuggingFace Space.
+
+```yaml
+training_config:
+  tracker: "trackio"
+  trackio_space_id: "username/my-dashboard" # auto-created if it doesn't exist
+```
+
+Requires a HF token (via `huggingface-cli login`). On Modal, the token is auto-injected — no extra setup needed. View your dashboard at `https://huggingface.co/spaces/<trackio_space_id>`.
+
+#### Weights & Biases
+
+[Weights & Biases](https://wandb.ai) is a popular experiment tracking platform.
+
+```yaml
+training_config:
+  tracker: "wandb"
+```
+
+Set your API key locally with `export WANDB_API_KEY=your_key`. On Modal, add a secret:
 
 ```bash
-export WANDB_API_KEY=your_api_key
+modal secret create wandb-secret WANDB_API_KEY=your_key
+```
+
+Then add it to your Modal config:
+
+```yaml
+modal:
+  secrets:
+    - "wandb-secret"
 ```
 
 ### 4. Bundle Checkpoint for LEAP

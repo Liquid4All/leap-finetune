@@ -36,6 +36,8 @@ DEEPSPEED_CONFIG = {
 VLM_SFT_EXCLUDED_KEYS = {
     "training_type",
     "wandb_logging",
+    "tracker",
+    "trackio_space_id",
     "max_image_tokens",
     "do_image_splitting",
     "lr_multipliers",

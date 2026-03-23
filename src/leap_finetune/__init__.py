@@ -16,7 +16,7 @@ def check_and_handle_slurm(config_path_arg: str) -> bool:
         return False
 
     try:
-        from leap_finetune.utils.config_parser import resolve_config_path
+        from leap_finetune.utils.config_resolver import resolve_config_path
 
         config_path = resolve_config_path(config_path_arg)
     except (FileNotFoundError, Exception):
@@ -94,7 +94,7 @@ def main() -> None:
             config_path_arg = sys.argv[1]
 
     if command == "slurm":
-        from leap_finetune.utils.config_parser import resolve_config_path
+        from leap_finetune.utils.config_resolver import resolve_config_path
         from leap_finetune.utils.slurm_generator import generate_slurm_script
 
         if not config_path_arg:
@@ -114,8 +114,13 @@ def main() -> None:
         generate_slurm_script(config_path, config_dict, output_dir, auto_submit=False)
         return
 
-    # Check for SLURM config BEFORE importing heavy dependencies
+    # Check for SLURM / Modal config BEFORE importing heavy dependencies
     if check_and_handle_slurm(config_path_arg):
+        return
+
+    from leap_finetune.backends.modal_backend import check_and_handle_modal
+
+    if check_and_handle_modal(config_path_arg):
         return
 
     if not config_path_arg:
@@ -124,7 +129,20 @@ def main() -> None:
         print("   or: leap-finetune slurm <path_to_config.yaml>")
         sys.exit(1)
 
-    # Heavy imports deferred to here to keep slurm codepath fast
+    # === Guard: local training requires GPU deps + CUDA ===
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA not available")
+    except (ImportError, RuntimeError):
+        print("Local training requires GPU dependencies and CUDA.")
+        print(
+            "For remote execution, add a 'modal:' or 'slurm:' section to your config."
+        )
+        sys.exit(1)
+
+    # Heavy imports deferred to here to keep slurm/modal codepath fast
     # (these transitively load torch, ray, peft, datasets, etc.)
     from leap_finetune.data_loaders.dataset_loader import DatasetLoader
     from leap_finetune.trainer import ray_trainer

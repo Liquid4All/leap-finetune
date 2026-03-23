@@ -5,6 +5,8 @@ from leap_finetune.utils.constants import SFT_OUTPUT_PATH
 SFT_EXCLUDED_KEYS = {
     "training_type",
     "wandb_logging",
+    "tracker",
+    "trackio_space_id",
     "packing",
     "max_length",
     "packing_strategy",

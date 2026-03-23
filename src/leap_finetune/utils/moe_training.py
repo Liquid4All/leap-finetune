@@ -224,7 +224,11 @@ class MoETrainingEnhancer:
 
             if config.aux_loss_coef > 0:
                 aux = switch_load_balancing_loss(
-                    router_probs, selected_experts, num_experts, top_k, config.aux_loss_coef
+                    router_probs,
+                    selected_experts,
+                    num_experts,
+                    top_k,
+                    config.aux_loss_coef,
                 )
                 total_aux_loss = total_aux_loss + aux
                 block._moe_aux_loss = aux.detach()

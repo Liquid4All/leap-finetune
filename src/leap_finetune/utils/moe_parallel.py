@@ -52,9 +52,7 @@ def create_ep_process_groups(ep_size: int, num_experts: int) -> dict:
         )
     )
 
-    logger.info(
-        f"EP rank {my_ep_rank}/{ep_size}: local experts {local_expert_indices}"
-    )
+    logger.info(f"EP rank {my_ep_rank}/{ep_size}: local experts {local_expert_indices}")
 
     return {
         "ep_group": my_ep_group,

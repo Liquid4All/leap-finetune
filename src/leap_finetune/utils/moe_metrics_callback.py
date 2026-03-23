@@ -69,7 +69,9 @@ class MoEMetricsCallback(TrainerCallback):
 
             # Expert utilization — fraction of experts receiving at least 1 token
             active_experts = (mean_tpe > 0).sum().item()
-            metrics["moe/expert_utilization"] = active_experts / num_experts if num_experts > 0 else 0.0
+            metrics["moe/expert_utilization"] = (
+                active_experts / num_experts if num_experts > 0 else 0.0
+            )
 
             # Max expert load ratio — max tokens / mean tokens
             mean_load = total_tokens / num_experts if num_experts > 0 else 1.0
@@ -87,6 +89,8 @@ class MoEMetricsCallback(TrainerCallback):
             entropy = -(probs * probs.log()).sum().item()
             max_entropy = torch.tensor(float(num_experts)).log().item()
             metrics["moe/router_entropy"] = entropy
-            metrics["moe/router_entropy_normalized"] = entropy / max_entropy if max_entropy > 0 else 0.0
+            metrics["moe/router_entropy_normalized"] = (
+                entropy / max_entropy if max_entropy > 0 else 0.0
+            )
 
         return metrics

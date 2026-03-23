@@ -6,4 +6,6 @@ def is_moe_model_from_name(model_name: str) -> bool:
 def is_large_moe_model_from_name(model_name: str) -> bool:
     """Check if model is a large MoE (24B+) that needs full_shard FSDP."""
     large_moe_indicators = ["24B-A2B", "24BA2B"]
-    return any(indicator.lower() in model_name.lower() for indicator in large_moe_indicators)
+    return any(
+        indicator.lower() in model_name.lower() for indicator in large_moe_indicators
+    )

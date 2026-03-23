@@ -30,11 +30,14 @@ class _AllToAll(torch.autograd.Function):
         ctx.input_split_sizes = input_split_sizes
 
         output = torch.empty(
-            sum(output_split_sizes), *input_.shape[1:],
-            dtype=input_.dtype, device=input_.device
+            sum(output_split_sizes),
+            *input_.shape[1:],
+            dtype=input_.dtype,
+            device=input_.device,
         )
         dist.all_to_all_single(
-            output, input_,
+            output,
+            input_,
             output_split_sizes=output_split_sizes,
             input_split_sizes=input_split_sizes,
             group=group,
@@ -45,11 +48,14 @@ class _AllToAll(torch.autograd.Function):
     def backward(ctx, grad_output: torch.Tensor):
         # Reverse the splits for backward
         grad_input = torch.empty(
-            sum(ctx.input_split_sizes), *grad_output.shape[1:],
-            dtype=grad_output.dtype, device=grad_output.device
+            sum(ctx.input_split_sizes),
+            *grad_output.shape[1:],
+            dtype=grad_output.dtype,
+            device=grad_output.device,
         )
         dist.all_to_all_single(
-            grad_input, grad_output,
+            grad_input,
+            grad_output,
             output_split_sizes=ctx.input_split_sizes,
             input_split_sizes=ctx.output_split_sizes,
             group=ctx.group,
@@ -108,7 +114,11 @@ def permute_tokens(
     reverse_map = token_indices
 
     # Get probs — for simplicity, gather max prob per token
-    permuted_probs = probs[token_indices, 0].unsqueeze(-1) if probs.dim() == 2 else probs[token_indices].unsqueeze(-1)
+    permuted_probs = (
+        probs[token_indices, 0].unsqueeze(-1)
+        if probs.dim() == 2
+        else probs[token_indices].unsqueeze(-1)
+    )
 
     return permuted_tokens, permuted_probs, reverse_map
 
@@ -132,7 +142,9 @@ def unpermute_tokens(
     Returns:
         output: [n_tokens, hidden_size]
     """
-    output = torch.zeros(n_tokens, hidden_size, dtype=hidden_states.dtype, device=hidden_states.device)
+    output = torch.zeros(
+        n_tokens, hidden_size, dtype=hidden_states.dtype, device=hidden_states.device
+    )
     weighted = hidden_states * probs
     output.scatter_add_(0, reverse_map.unsqueeze(-1).expand_as(weighted), weighted)
     return output
@@ -264,8 +276,10 @@ class EPTokenDispatcher:
         """
         # Dummy probs for unpermute (already applied during expert compute)
         probs = torch.ones(
-            hidden_states.shape[0], 1,
-            device=hidden_states.device, dtype=hidden_states.dtype
+            hidden_states.shape[0],
+            1,
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
         )
 
         # === 1. Reverse AlltoAll ===
@@ -275,8 +289,7 @@ class EPTokenDispatcher:
 
         # === 2. Unpermute to original token order ===
         output = unpermute_tokens(
-            local_tokens, self._reverse_map, probs,
-            self._n_tokens, self._hidden_size
+            local_tokens, self._reverse_map, probs, self._n_tokens, self._hidden_size
         )
 
         return output
@@ -298,6 +311,7 @@ def patch_moe_block_for_ep(block: nn.Module, dispatcher: EPTokenDispatcher) -> N
         block: Lfm2MoeSparseMoeBlock module
         dispatcher: EPTokenDispatcher configured for this model
     """
+
     def ep_moe_forward(hidden_states: torch.Tensor) -> torch.Tensor:
         B, S, H = hidden_states.shape
         x = hidden_states.view(-1, H)

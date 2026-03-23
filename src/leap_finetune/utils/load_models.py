@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     AutoProcessor,
@@ -37,15 +38,34 @@ def load_tokenizer(model_name: str) -> AutoTokenizer:
     return AutoTokenizer.from_pretrained(model_id)
 
 
-def load_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """Load a model from the Hugging Face Hub or from a local path"""
+def load_model(
+    model_name: str,
+    model_config: dict | None = None,
+    force_sdpa: bool = False,
+) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
+    """Load a model from the Hugging Face Hub or from a local path.
 
-    attn_impl = _get_attn_implementation()
+    Args:
+        model_name: HuggingFace model ID or local path
+        model_config: optional overrides applied to the model config before loading
+            (e.g. rope_scaling, max_position_embeddings for YaRN)
+        force_sdpa: force SDPA attention even when flash-attn is available
+            (required for context parallelism which needs custom causal masks)
+    """
+    attn_impl = "sdpa" if force_sdpa else _get_attn_implementation()
     model_id = _resolve_model_id(model_name)
     print(f"Loading model: {model_id}")
 
+    # Load config first so we can apply overrides (rope_scaling, etc.)
+    config = AutoConfig.from_pretrained(model_id)
+    if model_config:
+        for key, value in model_config.items():
+            setattr(config, key, value)
+        logger.info(f"Applied model config overrides: {list(model_config.keys())}")
+
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
+        config=config,
         dtype=torch.bfloat16,
         attn_implementation=attn_impl,
     )

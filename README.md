@@ -200,6 +200,34 @@ Benchmark data uses the **same format as training data** (HF messages schema). A
 
 See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data format examples, YAML reference, and how to add custom metrics.
 
+### External Benchmarks (lmms-eval)
+
+For comprehensive post-training evaluation on standard benchmarks (MMMU, MMBench, OCRBench, RefCOCO, etc.), install the optional `eval` extra:
+
+```bash
+uv sync --extra lmms-eval
+```
+
+This installs [lmms-eval](https://github.com/Liquid4All/lmms-eval) (Liquid4All fork) with built-in LFM2-VL model support.
+
+```bash
+# Evaluate a fine-tuned checkpoint
+python -m lmms_eval \
+    --model lfm2_vl \
+    --model_args pretrained=/path/to/checkpoint \
+    --tasks mmmu_val \
+    --batch_size 1
+
+# Multi-GPU evaluation
+torchrun --nproc-per-node=4 -m lmms_eval \
+    --model lfm2_vl \
+    --model_args pretrained=/path/to/checkpoint \
+    --tasks mmmu_val,ocrbench,pope \
+    --batch_size 1
+```
+
+> **Note:** Requires SSH access to the Liquid4All/lmms-eval private repo.
+
 ## 🧪 Advanced Configuration
 
 Default base configs live in [`src/leap_finetune/training_configs/`](./src/leap_finetune/training_configs/) and are auto-discovered — new configs added to these files are immediately available via `extends` in YAML.

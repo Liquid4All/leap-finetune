@@ -1,0 +1,39 @@
+project_name: "long_context_moe_sft"
+model_name: "LFM2-24B-A2B"
+training_type: "moe_sft"
+
+# YaRN RoPE scaling: extend 32k base context to ~300k
+model_config:
+  rope_scaling:
+    rope_type: "yarn"
+    factor: 10.0
+    original_max_position_embeddings: 32768
+    beta_fast: 32
+    beta_slow: 1
+  max_position_embeddings: 327680
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  limit: 1000
+  test_size: 0.2
+  subset: "all"
+
+training_config:
+  extends: "MOE_LARGE_SFT"
+  max_length: 327680
+  context_parallel_size: 4
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 5e-5
+
+  moe_training:
+    aux_loss_coef: 0.01
+    z_loss_coef: 0.001
+    capacity_factor: null
+    token_drop_policy: "probs"
+    router_lr_ratio: 0.1
+    expert_parallel_size: 4
+
+peft_config:
+  use_peft: false

@@ -1,5 +1,6 @@
 from typing import cast
 
+import torch.distributed as dist
 import ray.train
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
@@ -8,6 +9,13 @@ from ray.train.huggingface.transformers import prepare_trainer
 
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
+from leap_finetune.utils.context_parallel import (
+    aggregate_cp_loss,
+    apply_cp_to_model,
+    create_parallel_process_groups,
+    split_batch_for_cp,
+    validate_cp_config,
+)
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
     init_wandb_if_enabled,
@@ -23,6 +31,10 @@ class LFMDPOTrainer(DPOTrainer):
     Ray already shards data across workers via get_dataset_shard(), so we return
     plain DataLoaders to avoid double sharding by Accelerate's DistributedSampler.
     """
+
+    def __init__(self, cp_config: dict | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.cp_config = cp_config
 
     def _prepare_dataset(self, dataset, *args, **kwargs):
         return dataset
@@ -43,6 +55,18 @@ class LFMDPOTrainer(DPOTrainer):
             batch_size=self.args.per_device_eval_batch_size,
             collate_fn=self.data_collator,
         )
+
+    def training_step(self, model, inputs, **kwargs):
+        if self.cp_config and self.cp_config["cp_size"] > 1:
+            inputs = split_batch_for_cp(
+                inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
+            )
+        loss = super().training_step(model, inputs, **kwargs)
+        if self.cp_config and self.cp_config["cp_size"] > 1:
+            loss = aggregate_cp_loss(
+                loss, self.cp_config["cp_group"], self.cp_config["cp_size"]
+            )
+        return loss
 
 
 def dpo_run(training_config: dict) -> None:
@@ -65,7 +89,13 @@ def dpo_run(training_config: dict) -> None:
     )
 
     # Filter out non-DPOConfig parameters
-    excluded_keys = {"training_type", "wandb_logging", "leap_run_name_template"}
+    excluded_keys = {
+        "training_type",
+        "wandb_logging",
+        "leap_run_name_template",
+        "model_config",
+        "context_parallel_size",
+    }
 
     train_config_filtered = {
         k: v
@@ -93,8 +123,21 @@ def dpo_run(training_config: dict) -> None:
     }
     training_args = DPOConfig(**config_kwargs)
 
+    # === Context Parallelism setup ===
+    cp_size = training_config.get("train_config", {}).get("context_parallel_size", 1)
+    model_config = training_config.get("model_config")
+    force_sdpa = cp_size > 1
+
     # Load model after config is created
-    model, tokenizer = load_model(model_name)
+    model, tokenizer = load_model(
+        model_name, model_config=model_config, force_sdpa=force_sdpa
+    )
+
+    cp_config = None
+    if cp_size > 1:
+        validate_cp_config(cp_size, world_size=dist.get_world_size())
+        cp_config = create_parallel_process_groups(cp_size)
+        apply_cp_to_model(model, cp_config)
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
@@ -106,6 +149,7 @@ def dpo_run(training_config: dict) -> None:
 
     # Pre-tokenized data — use subclass that skips _prepare_dataset
     trainer = LFMDPOTrainer(
+        cp_config=cp_config,
         model=model,
         args=training_args,
         train_dataset=train_dataset,

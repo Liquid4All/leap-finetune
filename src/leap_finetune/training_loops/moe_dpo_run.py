@@ -2,6 +2,7 @@ import logging
 from typing import cast
 
 import torch
+import torch.distributed as dist
 import ray.train
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
@@ -14,6 +15,13 @@ from leap_finetune.training_configs.distributed_configs import (
 )
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
+from leap_finetune.utils.context_parallel import (
+    aggregate_cp_loss,
+    apply_cp_to_model,
+    create_parallel_process_groups,
+    split_batch_for_cp,
+    validate_cp_config,
+)
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
     init_wandb_if_enabled,
@@ -25,7 +33,6 @@ from leap_finetune.utils.moe_dispatch import apply_ep_to_model
 from leap_finetune.utils.moe_metrics_callback import MoEMetricsCallback
 from leap_finetune.utils.moe_parallel import (
     MOE_FSDP_CONFIG_EP,
-    create_ep_process_groups,
     shard_experts,
 )
 from leap_finetune.utils.moe_training import MoETrainingConfig, MoETrainingEnhancer
@@ -39,15 +46,20 @@ MOE_DPO_EXCLUDED_KEYS = {
     "wandb_logging",
     "leap_run_name_template",
     "moe_training",
+    "model_config",
+    "context_parallel_size",
 }
 
 
 class LFMMoeDPOTrainer(DPOTrainer):
     """DPO Trainer for MoE models with router-specific LR and no internal tokenization."""
 
-    def __init__(self, router_lr_ratio: float = 0.1, **kwargs):
+    def __init__(
+        self, router_lr_ratio: float = 0.1, cp_config: dict | None = None, **kwargs
+    ):
         super().__init__(**kwargs)
         self.router_lr_ratio = router_lr_ratio
+        self.cp_config = cp_config
 
     def _prepare_dataset(self, dataset, *args, **kwargs):
         return dataset
@@ -107,6 +119,18 @@ class LFMMoeDPOTrainer(DPOTrainer):
             optimizer_groups, betas=betas, fused=torch.cuda.is_available()
         )
         return self.optimizer
+
+    def training_step(self, model, inputs, **kwargs):
+        if self.cp_config and self.cp_config["cp_size"] > 1:
+            inputs = split_batch_for_cp(
+                inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
+            )
+        loss = super().training_step(model, inputs, **kwargs)
+        if self.cp_config and self.cp_config["cp_size"] > 1:
+            loss = aggregate_cp_loss(
+                loss, self.cp_config["cp_group"], self.cp_config["cp_size"]
+            )
+        return loss
 
 
 def moe_dpo_run(training_config: dict) -> None:
@@ -172,24 +196,46 @@ def moe_dpo_run(training_config: dict) -> None:
 
     training_args = DPOConfig(**config_kwargs)
 
-    # Load model
-    model, tokenizer = load_model(model_name)
+    # === Parallelism config ===
+    cp_size = training_config.get("train_config", {}).get("context_parallel_size", 1)
+    ep_size = moe_config_dict.get("expert_parallel_size", 1)
+    if not ep_size:
+        ep_size = 1
 
-    # === Expert Parallelism setup (before FSDP wrapping) ===
-    ep_size = moe_config_dict.get("expert_parallel_size")
-    if ep_size and ep_size > 1:
-        num_experts = model.config.num_local_experts
-        ep_config = create_ep_process_groups(ep_size, num_experts)
-        shard_experts(model, ep_config)
+    # Load model (force SDPA when CP is enabled)
+    model_config = training_config.get("model_config")
+    force_sdpa = cp_size > 1
+    model, tokenizer = load_model(
+        model_name, model_config=model_config, force_sdpa=force_sdpa
+    )
+
+    # === 2D Parallel Process Groups (CP x EP) ===
+    parallel_config = None
+    if cp_size > 1 or ep_size > 1:
+        validate_cp_config(
+            cp_size,
+            world_size=dist.get_world_size(),
+            ep_size=ep_size,
+        )
+        num_experts = model.config.num_local_experts if ep_size > 1 else None
+        parallel_config = create_parallel_process_groups(cp_size, ep_size, num_experts)
+
+    # === Expert Parallelism: shard experts (before FSDP wrapping) ===
+    if ep_size > 1 and parallel_config:
+        shard_experts(model, parallel_config)
         fsdp_config = MOE_FSDP_CONFIG_EP
+
+    # === Context Parallelism: patch attention modules ===
+    if cp_size > 1 and parallel_config:
+        apply_cp_to_model(model, parallel_config)
 
     # Apply MoE training enhancements
     enhancer = MoETrainingEnhancer(moe_config)
     enhancer.apply(model)
 
     # Apply EP dispatch after enhancer
-    if ep_size and ep_size > 1:
-        apply_ep_to_model(model, ep_config)
+    if ep_size > 1 and parallel_config:
+        apply_ep_to_model(model, parallel_config)
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
@@ -199,6 +245,7 @@ def moe_dpo_run(training_config: dict) -> None:
 
     trainer = LFMMoeDPOTrainer(
         router_lr_ratio=moe_config.router_lr_ratio,
+        cp_config=parallel_config if (parallel_config and cp_size > 1) else None,
         model=model,
         args=training_args,
         train_dataset=train_dataset,

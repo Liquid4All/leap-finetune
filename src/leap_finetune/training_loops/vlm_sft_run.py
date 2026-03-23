@@ -108,6 +108,7 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
                 logs[f"lr/{name}"] = group["lr"]
         super().log(logs, *args, **kwargs)
 
+
 # === Training loop ===
 
 

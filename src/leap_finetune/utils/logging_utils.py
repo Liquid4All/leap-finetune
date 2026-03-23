@@ -70,9 +70,7 @@ def init_tracker(
             # Stored per job_name to avoid collisions between different runs.
             run_id = None
             run_id_file = (
-                Path(output_dir) / f".wandb_run_id_{job_name}"
-                if output_dir
-                else None
+                Path(output_dir) / f".wandb_run_id_{job_name}" if output_dir else None
             )
             if resume_from_checkpoint and run_id_file and run_id_file.exists():
                 run_id = run_id_file.read_text().strip() or None

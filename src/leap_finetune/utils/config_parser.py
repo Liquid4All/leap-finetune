@@ -237,6 +237,9 @@ def parse_job_config(config_input: str) -> JobConfig:
     final_training_config.value["output_dir"] = str(final_output_dir)
     final_training_config.value["leap_run_name_template"] = run_name
 
+    # === Model config (rope_scaling, max_position_embeddings, etc.) ===
+    model_config = config_dict.get("model_config")
+
     return JobConfig(
         job_name=project_name,
         model_name=config_dict.get("model_name", "LFM2-1.2B"),
@@ -244,4 +247,5 @@ def parse_job_config(config_input: str) -> JobConfig:
         dataset=dataset,
         training_config=final_training_config,
         peft_config=peft_config,
+        model_config=model_config,
     )

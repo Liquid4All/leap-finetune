@@ -37,7 +37,9 @@ def ray_trainer(job_config: dict) -> None:
     training_type = job_config["training_type"]
 
     # Auto-route MoE models to dedicated training loops
-    if training_type in ("sft", "dpo") and is_moe_model_from_name(job_config["model_name"]):
+    if training_type in ("sft", "dpo") and is_moe_model_from_name(
+        job_config["model_name"]
+    ):
         training_type = f"moe_{training_type}"
 
     output_dir = job_config["training_config"]["output_dir"]
@@ -117,6 +119,7 @@ def ray_trainer(job_config: dict) -> None:
         "job_name": job_config.get("job_name", "leap-ft-run"),
         "train_config": training_config,
         "peft_config": job_config["peft_config"],
+        "model_config": job_config.get("model_config"),
     }
 
     scale_config = ScalingConfig(

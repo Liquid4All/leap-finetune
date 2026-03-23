@@ -18,6 +18,7 @@ class JobConfig:
     dataset: DatasetLoader | tuple[Dataset, Dataset] | None = None
     training_config: TrainingConfig = TrainingConfig.DEFAULT_SFT
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
+    model_config: dict | None = None
 
     def __post_init__(self):
         self._validate_job_name()
@@ -57,6 +58,7 @@ class JobConfig:
             "training_config": self.training_config.value,
             "dataset": dataset_to_use,
             "peft_config": self.peft_config.value if self.peft_config else None,
+            "model_config": self.model_config,
         }
 
     def print_config_summary(self):

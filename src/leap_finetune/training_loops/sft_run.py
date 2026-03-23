@@ -1,3 +1,4 @@
+import torch.distributed as dist
 import ray.train
 from torch.utils.data import DataLoader
 from ray.train.huggingface.transformers import prepare_trainer
@@ -7,6 +8,13 @@ from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
+from leap_finetune.utils.context_parallel import (
+    aggregate_cp_loss,
+    apply_cp_to_model,
+    create_parallel_process_groups,
+    split_batch_for_cp,
+    validate_cp_config,
+)
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
     init_wandb_if_enabled,
@@ -18,6 +26,10 @@ from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_mo
 
 class LFMSFTTrainer(Trainer):
     """Trainer that bypasses DistributedSampler since Ray already shards data."""
+
+    def __init__(self, cp_config: dict | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.cp_config = cp_config
 
     def get_train_dataloader(self):
         return DataLoader(
@@ -35,6 +47,18 @@ class LFMSFTTrainer(Trainer):
             batch_size=self.args.per_device_eval_batch_size,
             collate_fn=self.data_collator,
         )
+
+    def training_step(self, model, inputs, **kwargs):
+        if self.cp_config and self.cp_config["cp_size"] > 1:
+            inputs = split_batch_for_cp(
+                inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
+            )
+        loss = super().training_step(model, inputs, **kwargs)
+        if self.cp_config and self.cp_config["cp_size"] > 1:
+            loss = aggregate_cp_loss(
+                loss, self.cp_config["cp_group"], self.cp_config["cp_size"]
+            )
+        return loss
 
 
 def sft_run(training_config: dict) -> None:
@@ -57,7 +81,11 @@ def sft_run(training_config: dict) -> None:
     )
 
     # Filter out SFT-specific keys that don't belong in TrainingArguments
-    excluded_keys = SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
+    excluded_keys = SFT_EXCLUDED_KEYS | {
+        "leap_run_name_template",
+        "model_config",
+        "context_parallel_size",
+    }
 
     train_config_filtered = {
         k: v
@@ -86,8 +114,24 @@ def sft_run(training_config: dict) -> None:
     }
     training_args = TrainingArguments(**config_kwargs)
 
+    # === Context Parallelism setup ===
+    cp_size = training_config.get("train_config", {}).get("context_parallel_size", 1)
+    model_config = training_config.get("model_config")
+    force_sdpa = cp_size > 1
+
     # Load model + tokenizer on worker
-    model, tokenizer = load_model(model_name)
+    model, tokenizer = load_model(
+        model_name, model_config=model_config, force_sdpa=force_sdpa
+    )
+
+    cp_config = None
+    if cp_size > 1:
+        max_length = training_config.get("train_config", {}).get("max_length")
+        validate_cp_config(
+            cp_size, max_length=max_length, world_size=dist.get_world_size()
+        )
+        cp_config = create_parallel_process_groups(cp_size)
+        apply_cp_to_model(model, cp_config)
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
@@ -100,6 +144,7 @@ def sft_run(training_config: dict) -> None:
     )
 
     trainer = LFMSFTTrainer(
+        cp_config=cp_config,
         model=model,
         processing_class=tokenizer,
         args=training_args,

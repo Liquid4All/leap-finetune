@@ -62,8 +62,9 @@ def init_tracker(job_name: str, tracker: str, space_id: str | None = None) -> No
                 "project": project,
                 "name": job_name,
                 "resume": "allow",
-                "settings": wandb.Settings(_disable_stats=False),
             }
+            if tracker == "wandb":
+                init_kwargs["settings"] = wandb.Settings(_disable_stats=False)
             if space_id:
                 init_kwargs["space_id"] = space_id
 

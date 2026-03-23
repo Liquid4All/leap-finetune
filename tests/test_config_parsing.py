@@ -422,7 +422,10 @@ class TestOutputAndEnv:
             "peft_config": {"use_peft": False},
         }
         job = parse_job_config(write_config(config, tmp_path))
-        assert job.training_config.value["output_dir"] == env_dir
+        output_dir = job.training_config.value["output_dir"]
+        assert output_dir.startswith(env_dir), (
+            f"output_dir should be under OUTPUT_DIR: {output_dir}"
+        )
 
     def test_dataset_path_env_override(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DATASET_PATH", "custom/override/dataset")

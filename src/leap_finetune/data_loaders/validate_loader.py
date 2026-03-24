@@ -10,6 +10,12 @@ import pyarrow.parquet as pq
 from datasets import Dataset, load_dataset
 from rich.console import Console
 
+from leap_finetune.data_loaders.validate_tool_calls import (
+    has_foreign_tool_markers,
+    validate_tool_calls_dpo,
+    validate_tool_calls_in_messages,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -173,7 +179,20 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
             return False
 
         first = messages[0]
-        return isinstance(first, dict) and "role" in first and "content" in first
+        if not (isinstance(first, dict) and "role" in first and "content" in first):
+            return False
+
+        # Check for foreign tool call markers or unsupported tool_calls field
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "assistant":
+                if "tool_calls" in msg:
+                    return False
+                content = msg.get("content", "")
+                if isinstance(content, str) and has_foreign_tool_markers(content):
+                    return False
+        return True
 
     def is_valid_dpo(row: dict) -> bool:
         """Check if row has valid DPO format."""
@@ -183,7 +202,27 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
         if not chosen or not rejected:
             return False
 
-        return chosen != rejected
+        if chosen == rejected:
+            return False
+
+        # Check for foreign tool call markers
+        for data in (chosen, rejected):
+            if isinstance(data, str):
+                if has_foreign_tool_markers(data):
+                    return False
+            elif isinstance(data, list):
+                for msg in data:
+                    if not isinstance(msg, dict):
+                        continue
+                    if msg.get("role") == "assistant":
+                        if "tool_calls" in msg:
+                            return False
+                        content = msg.get("content", "")
+                        if isinstance(content, str) and has_foreign_tool_markers(
+                            content
+                        ):
+                            return False
+        return True
 
     def is_valid_vlm_sft(row: dict) -> bool:
         """Check if row has valid VLM SFT format with loadable images.
@@ -432,6 +471,10 @@ def validate_sft_format(dataset: Dataset) -> Dataset:
         msg += "). Each message must have 'role' and 'content' fields."
         raise ValueError(msg)
 
+    # === Validate tool call formatting ===
+    for i in range(len(dataset)):
+        validate_tool_calls_in_messages(dataset[i][conv_col], i)
+
     # Rename column if needed
     if conv_col != "messages":
         return dataset.rename_column(conv_col, "messages")
@@ -495,6 +538,10 @@ def validate_dpo_format(dataset: Dataset) -> Dataset:
             f"Found {len(identical_indices)} samples where chosen == rejected "
             f"(indices: {shown}{'...' if len(identical_indices) > 5 else ''})"
         )
+
+    # === Validate tool call formatting ===
+    for i in range(len(dataset)):
+        validate_tool_calls_dpo(dataset[i]["chosen"], dataset[i]["rejected"], i)
 
     # Add prompt if missing
     if "prompt" in columns:

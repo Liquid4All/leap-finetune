@@ -1,14 +1,8 @@
-"""Benchmark base class for evaluation during training.
-
-Subclass ``Benchmark`` and implement ``load_samples()`` + ``evaluate()``.
-The callback handles distributed sharding, all-reduce, wandb logging, and timing.
-
-Benchmarks return a ``BenchmarkResult`` with a dict of named metrics — each
-metric is averaged across all samples and logged to wandb separately.
-"""
-
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,7 +22,7 @@ class Benchmark(ABC):
 
     Subclass and implement:
       - ``load_samples()`` — return evaluation data (called once, cached).
-      - ``evaluate(model, samples, device)`` — score the model, return BenchmarkResult.
+      - ``score_sample(model, sample, device)`` — score a single sample.
     """
 
     def __init__(self, name: str):
@@ -41,9 +35,30 @@ class Benchmark(ABC):
         ...
 
     @abstractmethod
-    def evaluate(self, model, samples: list, device) -> BenchmarkResult:
-        """Score the model on ``samples`` (already sharded to this rank)."""
+    def score_sample(self, model, sample: dict, device) -> float:
+        """Score a single sample. Return a float (e.g. 0.0 or 1.0)."""
         ...
+
+    def evaluate(self, model, samples: list, device) -> BenchmarkResult:
+        """Score the model on ``samples`` (already sharded to this rank).
+
+        Skips failed samples and excludes them from the count so they
+        don't deflate the average.
+        """
+        total_score = 0.0
+        count = 0
+        for sample in samples:
+            try:
+                total_score += self.score_sample(model, sample, device)
+                count += 1
+            except Exception:
+                logger.warning(
+                    "[%s] Failed on sample %s",
+                    self.name,
+                    sample.get("id", count),
+                    exc_info=True,
+                )
+        return BenchmarkResult(metrics={"score": total_score}, count=count)
 
     def get_samples(self) -> list:
         if self._samples is None:

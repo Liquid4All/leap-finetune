@@ -190,8 +190,9 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
                 if "tool_calls" in msg:
                     return False
                 content = msg.get("content", "")
-                if isinstance(content, str) and has_foreign_tool_markers(content):
-                    return False
+                if isinstance(content, str) and ("<" in content or "[" in content):
+                    if has_foreign_tool_markers(content):
+                        return False
         return True
 
     def is_valid_dpo(row: dict) -> bool:
@@ -208,7 +209,7 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
         # Check for foreign tool call markers
         for data in (chosen, rejected):
             if isinstance(data, str):
-                if has_foreign_tool_markers(data):
+                if ("<" in data or "[" in data) and has_foreign_tool_markers(data):
                     return False
             elif isinstance(data, list):
                 for msg in data:
@@ -218,10 +219,11 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
                         if "tool_calls" in msg:
                             return False
                         content = msg.get("content", "")
-                        if isinstance(content, str) and has_foreign_tool_markers(
-                            content
+                        if isinstance(content, str) and (
+                            "<" in content or "[" in content
                         ):
-                            return False
+                            if has_foreign_tool_markers(content):
+                                return False
         return True
 
     def is_valid_vlm_sft(row: dict) -> bool:

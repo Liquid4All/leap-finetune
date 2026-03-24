@@ -40,7 +40,9 @@ def create_llm_benchmarks_from_config(
             )
         elif metric in GENERATION_METRICS:
             result.append(
-                LLMGenerationBenchmark(name=name, path=path, tokenizer=tokenizer, **kwargs)
+                LLMGenerationBenchmark(
+                    name=name, path=path, tokenizer=tokenizer, **kwargs
+                )
             )
         else:
             raise ValueError(

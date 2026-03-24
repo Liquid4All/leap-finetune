@@ -81,7 +81,10 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
             short_name = prefix.removeprefix("model.")
             self._optimizer_group_names.append(short_name)
             logger.info(
-                "Param group '%s': %d params, lr=%.2e", prefix, len(params), base_lr * mult
+                "Param group '%s': %d params, lr=%.2e",
+                prefix,
+                len(params),
+                base_lr * mult,
             )
 
         if ungrouped:
@@ -175,7 +178,11 @@ def vlm_sft_run(training_config: dict) -> None:
 
     logger.info(
         "Computed max_steps=%d (samples=%d, batch=%d, accum=%d, epochs=%s)",
-        max_steps, num_samples, train_batch_size, grad_accum, epochs,
+        max_steps,
+        num_samples,
+        train_batch_size,
+        grad_accum,
+        epochs,
     )
 
     # Build training args — use max_steps instead of num_train_epochs

@@ -157,7 +157,9 @@ class VLMLogprobBenchmark(Benchmark):
                     log_probs[i - 1, input_ids[i].item()].item()
                     for i in range(prompt_len, len(input_ids))
                 )
-                option_scores.append(total_logprob / num_tokens if num_tokens > 0 else 0.0)
+                option_scores.append(
+                    total_logprob / num_tokens if num_tokens > 0 else 0.0
+                )
 
             return 1.0 if int(np.argmax(option_scores)) == answer_id else 0.0
         finally:

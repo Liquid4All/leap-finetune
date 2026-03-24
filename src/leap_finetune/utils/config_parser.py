@@ -3,14 +3,14 @@ import os
 import pathlib
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
-
 import yaml
 
 from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 from leap_finetune.training_configs import PeftConfig, TrainingConfig
 from leap_finetune.training_configs.job_config import JobConfig
 from leap_finetune.utils.config_resolver import resolve_config_path
+
+logger = logging.getLogger(__name__)
 
 
 def generate_run_name(

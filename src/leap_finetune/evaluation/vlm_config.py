@@ -42,7 +42,9 @@ def create_vlm_benchmarks_from_config(
             )
         elif metric in GENERATION_METRICS:
             result.append(
-                VLMGenerationBenchmark(name=name, path=path, processor=processor, **kwargs)
+                VLMGenerationBenchmark(
+                    name=name, path=path, processor=processor, **kwargs
+                )
             )
         else:
             raise ValueError(

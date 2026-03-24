@@ -612,7 +612,11 @@ class TestBenchmarkConfig:
             "benchmarks": {
                 "max_new_tokens": 64,
                 "benchmarks": [
-                    {"name": "eval1", "path": "/data/eval.jsonl", "metric": "short_answer"},
+                    {
+                        "name": "eval1",
+                        "path": "/data/eval.jsonl",
+                        "metric": "short_answer",
+                    },
                 ],
             },
         }

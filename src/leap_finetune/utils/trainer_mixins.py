@@ -60,7 +60,8 @@ def run_training_safely(trainer, **kwargs):
         if is_cleanup_error:
             logger.warning(
                 "Training completed but hit distributed communication error "
-                "during cleanup: %s", e
+                "during cleanup: %s",
+                e,
             )
         else:
             raise

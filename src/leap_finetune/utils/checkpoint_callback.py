@@ -70,7 +70,6 @@ class LeapCheckpointCallback(TrainerCallback):
         # Report metrics only — HF Trainer already saved checkpoint to output_dir.
         # Passing checkpoint=None avoids Ray duplicating files into ray_logs/.
         train.report(metrics=report_metrics, checkpoint=None)
-        self.metrics.clear()
 
     def on_train_end(
         self,

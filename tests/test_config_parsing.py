@@ -422,7 +422,10 @@ class TestOutputAndEnv:
             "peft_config": {"use_peft": False},
         }
         job = parse_job_config(write_config(config, tmp_path))
-        assert job.training_config.value["output_dir"] == env_dir
+        output_dir = job.training_config.value["output_dir"]
+        assert output_dir.startswith(env_dir), (
+            f"output_dir should be under OUTPUT_DIR: {output_dir}"
+        )
 
     def test_dataset_path_env_override(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DATASET_PATH", "custom/override/dataset")
@@ -592,6 +595,66 @@ class TestProjectNameFallback:
         }
         job = parse_job_config(write_config(config, tmp_path))
         assert job.job_name == "default_job"
+
+
+# === Benchmark config passthrough ===
+
+
+class TestBenchmarkConfig:
+    def test_benchmarks_parsed_from_yaml(self, tmp_path):
+        config = {
+            "project_name": "test_bench",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+            "benchmarks": {
+                "max_new_tokens": 64,
+                "benchmarks": [
+                    {
+                        "name": "eval1",
+                        "path": "/data/eval.jsonl",
+                        "metric": "short_answer",
+                    },
+                ],
+            },
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.benchmark_configs is not None
+        assert len(job.benchmark_configs["benchmarks"]) == 1
+        assert job.benchmark_configs["max_new_tokens"] == 64
+
+    def test_no_benchmarks_gives_none(self, tmp_path):
+        config = {
+            "project_name": "test_no_bench",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.benchmark_configs is None
+
+    def test_benchmarks_in_to_dict(self, tmp_path):
+        config = {
+            "project_name": "test_bench_dict",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+            "benchmarks": {
+                "benchmarks": [
+                    {"name": "e", "path": "/data/e.jsonl", "metric": "mcq_gen"},
+                ],
+            },
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        d = job.to_dict()
+        assert "benchmark_configs" in d
+        assert d["benchmark_configs"]["benchmarks"][0]["name"] == "e"
 
 
 # === SLURM generation ===

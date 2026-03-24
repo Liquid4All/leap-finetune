@@ -33,13 +33,21 @@ def is_rank_zero() -> bool:
         return True
 
 
-def init_tracker(job_name: str, tracker: str, space_id: str | None = None) -> None:
+def init_tracker(
+    job_name: str,
+    tracker: str,
+    space_id: str | None = None,
+    output_dir: str | None = None,
+    resume_from_checkpoint: str | None = None,
+) -> None:
     """Initialize experiment tracker. Must be called BEFORE creating the trainer.
 
     Args:
         job_name: Name for the run
         tracker: "wandb", "trackio", or "none"
         space_id: HF Space ID for trackio (required when tracker is "trackio")
+        output_dir: Training output directory — used to persist/restore wandb run ID
+        resume_from_checkpoint: If set, restore the saved wandb run ID for continuity
     """
     if tracker == "none":
         return
@@ -58,11 +66,22 @@ def init_tracker(job_name: str, tracker: str, space_id: str | None = None) -> No
         if is_rank_zero():
             project = os.environ.get("WANDB_PROJECT", "leap-finetune")
 
+            # Auto-read saved run ID from previous run if resuming.
+            # Stored per job_name to avoid collisions between different runs.
+            run_id = None
+            run_id_file = (
+                Path(output_dir) / f".wandb_run_id_{job_name}" if output_dir else None
+            )
+            if resume_from_checkpoint and run_id_file and run_id_file.exists():
+                run_id = run_id_file.read_text().strip() or None
+
             init_kwargs = {
                 "project": project,
                 "name": job_name,
                 "resume": "allow",
             }
+            if run_id:
+                init_kwargs["id"] = run_id
             if tracker == "wandb":
                 init_kwargs["settings"] = wandb.Settings(_disable_stats=False)
             if space_id:
@@ -71,12 +90,38 @@ def init_tracker(job_name: str, tracker: str, space_id: str | None = None) -> No
             run = wandb.init(**init_kwargs)
             if hasattr(run, "url") and run.url:
                 print(f"\nTracker URL: {run.url}")
+
+            # Persist run ID so resumed runs can continue logging to the same run
+            if wandb.run and run_id_file:
+                run_id_file.write_text(wandb.run.id)
     except ImportError:
         pass
     except Exception as e:
-        import warnings
-
         warnings.warn(f"Failed to initialize {tracker}: {e}", UserWarning)
+
+
+def finish_tracker(tracker: str) -> None:
+    """Cleanly finish the tracker run so it shows as 'Completed'.
+
+    Must only be called after all training steps have finished successfully.
+    Only acts on rank 0 (the process that owns the run).
+    """
+    if tracker == "none" or not is_rank_zero():
+        return
+    try:
+        if tracker == "trackio":
+            import trackio as wandb
+        else:
+            import wandb
+
+        if wandb.run is not None:
+            wandb.finish()
+    except Exception:
+        pass
+
+
+# Backward-compatible alias
+finish_wandb_if_enabled = finish_tracker
 
 
 def worker_process_setup_hook() -> None:
@@ -180,7 +225,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
         "RAY_IGNORE_UNHANDLED_ERRORS": "1",
         # Reduce Ray logging verbosity
-        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver (reduce terminal noise)
+        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver
         "RAY_DEDUP_LOGS": "1",  # Keep deduplication enabled (shows ... for repeated messages)
         "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
     }
@@ -251,6 +296,7 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
         [
             f"/tmp/{user}/ray",
             home_default,
+            "/tmp/ray",
         ]
     )
 
@@ -295,8 +341,7 @@ def select_object_spilling_dir(ray_temp_dir: str | None = None) -> str:
     home = str(Path.home())
     candidates = [
         os.path.join(ray_temp_dir or home, "spill"),
-        "/tmp/ray_spill",  # Usually disk-based, survives reboots
-        f"{home}/ray_spill",  # Fallback on user's home filesystem
+        f"{home}/ray_spill",
     ]
     good = _paths_with_free_space(candidates, min_free_ratio=0.10)
     target = good[0] if good else candidates[-1]

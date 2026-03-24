@@ -247,10 +247,10 @@ def assert_checkpoints_exist(output_dir: pathlib.Path):
     checkpoint_dirs = list(output_dir.rglob("checkpoint-*"))
     renamed_dirs = [
         d
-        for d in output_dir.iterdir()
+        for d in output_dir.rglob("*")
         if d.is_dir() and re.search(r"-e\d+s\d+-", d.name)
     ]
     assert len(checkpoint_dirs) + len(renamed_dirs) > 0, (
         f"No checkpoint directories found under {output_dir}. "
-        f"Contents: {[p.name for p in output_dir.iterdir()]}"
+        f"Contents: {[p.name for p in output_dir.rglob('*') if p.is_dir()]}"
     )

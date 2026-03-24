@@ -88,7 +88,7 @@ uv run leap-finetune <path_to_config.yaml>
 
 It uses Ray Train + Accelerate for distributed training.
 
-Unless you overwrote `output_dir`, results will be stored in `outputs/training_type/job_name/`
+Unless you overwrote `output_dir`, results will be stored in `outputs/{project_name}/{run_name}/`. Each run gets its own directory with a unique name based on model, dataset, LR, and timestamp.
 
 ### Modal Support
 
@@ -251,6 +251,49 @@ When training is done, you can bundle your output checkpoint with `leap-bundle` 
 ```
 
 > **Note**: VLM datasets commonly have images in a separate row and are referenced in the messages column. If your image URLs or Paths are in a separate column from your messages, you'll need to merge the images into the 'messages' section like above.
+
+## 🔄 Resuming Training
+
+If a run is interrupted (SLURM preemption, crash, etc.), you can resume from the last checkpoint with full optimizer state, LR schedule, and wandb continuity.
+
+Add `resume_from_checkpoint` to your `training_config`:
+
+```yaml
+training_config:
+  resume_from_checkpoint: "latest" # resumes from the most recent checkpoint
+```
+
+This finds the most recent run directory under `outputs/{project_name}/` and resumes from its latest checkpoint. To resume from a specific checkpoint instead:
+
+```yaml
+training_config:
+  resume_from_checkpoint: "/path/to/outputs/my_project/run_name/checkpoint-step-8000"
+```
+
+**What gets restored:** model weights, optimizer states, LR scheduler position, training step counter, and RNG states.
+
+**Wandb continuity:** The wandb run ID is saved to `<run_dir>/.wandb_run_id` automatically. On resume, it restores the same wandb run. Fresh runs always get a new wandb run.
+
+## 📈 Evaluation Benchmarks
+
+Run benchmarks automatically during training at every `eval_steps`. Add a `benchmarks` section to your YAML config:
+
+```yaml
+benchmarks:
+  max_new_tokens: 128
+  benchmarks:
+    - name: "mmmu_val"
+      path: "/data/mmmu_val.jsonl"
+      metric: "short_answer"
+
+    - name: "imagenette"
+      path: "/data/imagenette_eval.jsonl"
+      metric: "logprob_zero_shot"
+```
+
+Benchmark data uses the **same format as training data** (HF messages schema). Available metrics: `short_answer`, `grounding_iou`, `mcq_gen`, `logprob_zero_shot`. Results are logged to wandb at `benchmark/{name}/score`.
+
+See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data format examples, YAML reference, and how to add custom metrics.
 
 ## 🧪 Advanced Configuration
 

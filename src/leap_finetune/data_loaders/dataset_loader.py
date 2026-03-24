@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 
 from datasets import Dataset, load_dataset
 
@@ -24,9 +24,6 @@ class DatasetLoader:
     # Prepended to relative image paths in VLM datasets (e.g. "/data/images")
     image_root: str | None = None
     cache_dataset: bool = False
-    # Optional preprocessing function: takes Ray Dataset, returns Ray Dataset
-    # Applied before validation - use for custom filtering, transforms, joins, etc.
-    preprocess_fn: Callable | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if not (0 < self.test_size < 1):
@@ -54,9 +51,16 @@ class DatasetLoader:
         path = self.dataset_path
 
         if self._is_local_file(path):
+            p = Path(path)
             if path.endswith((".parquet", ".pq")):
                 console.print(f"[dim]Reading parquet: {path}[/dim]")
                 ds = ray.data.read_parquet(path)
+            elif p.is_dir() and any(p.glob("*.parquet")):
+                parquet_files = sorted(str(f) for f in p.glob("*.parquet"))
+                console.print(
+                    f"[dim]Reading {len(parquet_files)} parquet shards from: {path}[/dim]"
+                )
+                ds = ray.data.read_parquet(parquet_files)
             else:
                 console.print(f"[dim]Reading JSONL: {path}[/dim]")
                 ds = ray.data.read_json(path)

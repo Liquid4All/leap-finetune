@@ -8,6 +8,10 @@ from ray.train.huggingface.transformers import prepare_trainer
 
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.tokenize_data import create_vlm_collate_fn
+from leap_finetune.evaluation import (
+    BenchmarkEvalCallback,
+    create_vlm_benchmarks_from_config,
+)
 from leap_finetune.training_configs.vlm_sft_config import (
     DEFAULT_LR_MULTIPLIERS,
     VLM_SFT_EXCLUDED_KEYS,
@@ -15,6 +19,7 @@ from leap_finetune.training_configs.vlm_sft_config import (
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.logging_utils import (
+    finish_tracker,
     init_tracker,
     is_rank_zero,
     setup_worker_logging,
@@ -31,26 +36,21 @@ logger = logging.getLogger(__name__)
 class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
     """VLM Trainer with per-component LR multipliers and Ray data integration.
 
-    Mirrors liquid-vlm convention: vision encoder trains at a lower LR
-    to preserve pretrained features, while the projector and LLM backbone
-    train at the full base rate.
-
-    HF VLM param prefixes:
-        model.vision_tower          — vision encoder (e.g. SigLIP2)
-        model.multi_modal_projector — projector
-        model.language_model        — LLM backbone (e.g. LFM2)
+    Vision encoder trains at a lower LR to preserve pretrained features,
+    while the projector and LLM backbone train at the base rate.
     """
 
     def __init__(self, lr_multipliers: dict[str, float] | None = None, **kwargs):
         super().__init__(**kwargs)
         self.lr_multipliers = lr_multipliers or DEFAULT_LR_MULTIPLIERS
+        self._optimizer_group_names: list[str] = []
 
     def create_optimizer(self):
         if self.optimizer is not None:
             return self.optimizer
 
         base_lr = self.args.learning_rate
-        weight_decay = self.args.weight_decay
+        weight_decay = float(self.args.weight_decay)
 
         # Group trainable params by matching prefix
         grouped: dict[str, list] = {prefix: [] for prefix in self.lr_multipliers}
@@ -68,8 +68,9 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
             if not matched:
                 ungrouped.append(param)
 
-        # Build optimizer param groups
+        # Build optimizer param groups (order matches _optimizer_group_names)
         optimizer_groups = []
+        self._optimizer_group_names = []
         for prefix, params in grouped.items():
             if not params:
                 continue
@@ -77,16 +78,22 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
             optimizer_groups.append(
                 {"params": params, "lr": base_lr * mult, "weight_decay": weight_decay}
             )
+            short_name = prefix.removeprefix("model.")
+            self._optimizer_group_names.append(short_name)
             logger.info(
-                f"Param group '{prefix}': {len(params)} params, lr={base_lr * mult:.2e}"
+                "Param group '%s': %d params, lr=%.2e",
+                prefix,
+                len(params),
+                base_lr * mult,
             )
 
         if ungrouped:
             optimizer_groups.append(
                 {"params": ungrouped, "lr": base_lr, "weight_decay": weight_decay}
             )
+            self._optimizer_group_names.append("ungrouped")
             logger.info(
-                f"Param group 'ungrouped': {len(ungrouped)} params, lr={base_lr:.2e}"
+                "Param group 'ungrouped': %d params, lr=%.2e", len(ungrouped), base_lr
             )
 
         betas = (self.args.adam_beta1, self.args.adam_beta2)
@@ -94,6 +101,15 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
             optimizer_groups, betas=betas, fused=torch.cuda.is_available()
         )
         return self.optimizer
+
+    def log(self, logs: dict[str, float], *args, **kwargs) -> None:
+        # Inject per-component LRs so wandb tracks each group separately
+        if self.optimizer is not None and "learning_rate" in logs:
+            for name, group in zip(
+                self._optimizer_group_names, self.optimizer.param_groups
+            ):
+                logs[f"lr/{name}"] = group["lr"]
+        super().log(logs, *args, **kwargs)
 
 
 # === Training loop ===
@@ -127,6 +143,12 @@ def vlm_sft_run(training_config: dict) -> None:
             "vision_encoder_lr_multiplier"
         ]
 
+    # Resume path is already resolved by config_parser
+    resume_from = train_config.get("resume_from_checkpoint")
+    output_dir = train_config.get("output_dir", "")
+    if resume_from:
+        logger.info("Resuming from checkpoint: %s", resume_from)
+
     # Filter out non-TrainingArguments parameters
     excluded_keys = VLM_SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
     train_config_filtered = {
@@ -137,7 +159,13 @@ def vlm_sft_run(training_config: dict) -> None:
     tracker = train_config.get("tracker", "none")
     if tracker == "none" and train_config.get("wandb_logging", False):
         tracker = "wandb"
-    init_tracker(job_name, tracker, train_config.get("trackio_space_id"))
+    init_tracker(
+        job_name,
+        tracker,
+        train_config.get("trackio_space_id"),
+        output_dir=output_dir if output_dir else None,
+        resume_from_checkpoint=resume_from,
+    )
 
     # Compute max_steps from materialized dataset size
     # (Trainer can't infer it from our bypassed DataLoader)
@@ -149,9 +177,12 @@ def vlm_sft_run(training_config: dict) -> None:
     max_steps = steps_per_epoch * epochs // grad_accum
 
     logger.info(
-        f"Computed max_steps={max_steps} "
-        f"(samples={num_samples}, batch={train_batch_size}, "
-        f"accum={grad_accum}, epochs={epochs})"
+        "Computed max_steps=%d (samples=%d, batch=%d, accum=%d, epochs=%s)",
+        max_steps,
+        num_samples,
+        train_batch_size,
+        grad_accum,
+        epochs,
     )
 
     # Build training args — use max_steps instead of num_train_epochs
@@ -191,11 +222,21 @@ def vlm_sft_run(training_config: dict) -> None:
     )
 
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
+
+    # Add benchmark evaluation callback if configured
+    benchmark_configs = training_config.get("benchmark_configs")
+    if benchmark_configs and benchmark_configs.get("benchmarks"):
+        benchmarks = create_vlm_benchmarks_from_config(benchmark_configs, processor)
+        if benchmarks:
+            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
+
     trainer = prepare_trainer(trainer)
-    run_training_safely(trainer)
+    run_training_safely(trainer, resume_from_checkpoint=resume_from)
 
     # Save PEFT model if applicable
     if peft_config and is_rank_zero():
         merge_and_save_peft_model(
             model, processor, training_args.output_dir, run_name_template
         )
+
+    finish_tracker(tracker)

@@ -111,6 +111,7 @@ def ray_trainer(job_config: dict) -> None:
         "job_name": job_config.get("job_name", "leap-ft-run"),
         "train_config": training_config,
         "peft_config": job_config["peft_config"],
+        "benchmark_configs": job_config.get("benchmark_configs"),
     }
 
     scale_config = ScalingConfig(

@@ -597,6 +597,62 @@ class TestProjectNameFallback:
         assert job.job_name == "default_job"
 
 
+# === Benchmark config passthrough ===
+
+
+class TestBenchmarkConfig:
+    def test_benchmarks_parsed_from_yaml(self, tmp_path):
+        config = {
+            "project_name": "test_bench",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+            "benchmarks": {
+                "max_new_tokens": 64,
+                "benchmarks": [
+                    {"name": "eval1", "path": "/data/eval.jsonl", "metric": "short_answer"},
+                ],
+            },
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.benchmark_configs is not None
+        assert len(job.benchmark_configs["benchmarks"]) == 1
+        assert job.benchmark_configs["max_new_tokens"] == 64
+
+    def test_no_benchmarks_gives_none(self, tmp_path):
+        config = {
+            "project_name": "test_no_bench",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.benchmark_configs is None
+
+    def test_benchmarks_in_to_dict(self, tmp_path):
+        config = {
+            "project_name": "test_bench_dict",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+            "benchmarks": {
+                "benchmarks": [
+                    {"name": "e", "path": "/data/e.jsonl", "metric": "mcq_gen"},
+                ],
+            },
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        d = job.to_dict()
+        assert "benchmark_configs" in d
+        assert d["benchmark_configs"]["benchmarks"][0]["name"] == "e"
+
+
 # === SLURM generation ===
 
 

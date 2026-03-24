@@ -15,16 +15,16 @@ _DISTRIBUTED_CLEANUP_KEYWORDS = (
 class RayDataLoaderMixin:
     """Bypasses Accelerate's DistributedSampler for Ray-sharded data.
 
-    Handles overriding Accelerate's DistributedSampler for Ray-sharded data.
-
-    Note: prepare_trainer() is a no-op for our setup — it only activates for
-    _IterableFromIterator datasets (Ray streaming), not materialized HF Datasets.
+    Ray already shards data across workers via get_dataset_shard(), so we
+    return plain DataLoaders to avoid double-sharding. Uses
+    args.per_device_train_batch_size directly (NOT self._train_batch_size,
+    which HF Trainer auto-multiplies by world_size).
     """
 
     def get_train_dataloader(self):
         return DataLoader(
             self.train_dataset,
-            batch_size=self._train_batch_size,
+            batch_size=self.args.per_device_train_batch_size,
             collate_fn=self.data_collator,
             shuffle=True,
         )
@@ -60,7 +60,7 @@ def run_training_safely(trainer, **kwargs):
         if is_cleanup_error:
             logger.warning(
                 "Training completed but hit distributed communication error "
-                f"during cleanup: {e}"
+                "during cleanup: %s", e
             )
         else:
             raise

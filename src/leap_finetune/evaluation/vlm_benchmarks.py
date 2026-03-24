@@ -1,47 +1,13 @@
-"""VLM benchmark implementations for vision-language model evaluation.
-
-Two strategies:
-- VLMGenerationBenchmark: generate text and score against ground truth.
-- VLMLogprobBenchmark: zero-shot MCQ via per-option logprob comparison.
-
-Benchmark data uses the same HF messages schema as the training pipeline::
-
-    Generation::
-        {"messages": [
-            {"role": "user", "content": [
-                {"type": "image", "image": "/path/to/img.jpg"},
-                {"type": "text", "text": "Describe this image."}
-            ]},
-            {"role": "assistant", "content": [
-                {"type": "text", "text": "A dog on a beach."}
-            ]}
-        ]}
-
-    Logprob MCQ::
-        {"messages": [
-            {"role": "user", "content": [
-                {"type": "image", "image": "/path/to/img.jpg"},
-                {"type": "text", "text": "What animal is this?"}
-            ]}
-        ], "options": ["cat", "dog", "bird"], "answer_id": 1}
-
-Column aliases (``conversation``, ``conversations``, etc.) are auto-renamed
-to ``messages`` by the shared normalization layer in ``data_loaders.py``.
-"""
-
 import copy
-import logging
 from collections.abc import Callable
 
 import numpy as np
 import torch
 
 from leap_finetune.data_loaders.image_loader import load_image
-from leap_finetune.evaluation.base import Benchmark, BenchmarkResult
+from leap_finetune.evaluation.base import Benchmark
 from leap_finetune.evaluation.data_loaders import load_benchmark_samples
 from leap_finetune.evaluation.metrics import compute_metric
-
-logger = logging.getLogger(__name__)
 
 
 class VLMGenerationBenchmark(Benchmark):
@@ -80,23 +46,8 @@ class VLMGenerationBenchmark(Benchmark):
             self.path, self.limit, self.format, self.image_root
         )
 
-    def evaluate(self, model, samples: list[dict], device) -> BenchmarkResult:
-        total_score = 0.0
-        count = 0
-        for sample in samples:
-            try:
-                total_score += self._score_sample(model, sample, device)
-            except Exception:
-                logger.warning(
-                    "[%s] Failed on sample %s",
-                    self.name,
-                    sample.get("id", count),
-                    exc_info=True,
-                )
-            count += 1
-        return BenchmarkResult(metrics={"score": total_score}, count=count)
-
-    def _score_sample(self, model, sample: dict, device) -> float:
+    def score_sample(self, model, sample: dict, device) -> float:
+        """Generate a response from prompt turns (with images) and score against the last (GT) turn."""
         messages = sample["messages"]
         ground_truth = _extract_text(messages[-1]["content"])
 
@@ -111,7 +62,7 @@ class VLMGenerationBenchmark(Benchmark):
             )
             inputs = {k: v.to(device) for k, v in inputs.items() if v is not None}
 
-            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            with torch.amp.autocast(device.type, dtype=torch.bfloat16):
                 output_ids = model.generate(
                     **inputs, max_new_tokens=self.max_new_tokens, do_sample=False
                 )
@@ -162,23 +113,8 @@ class VLMLogprobBenchmark(Benchmark):
             self.path, self.limit, self.format, self.image_root
         )
 
-    def evaluate(self, model, samples: list[dict], device) -> BenchmarkResult:
-        total_score = 0.0
-        count = 0
-        for sample in samples:
-            try:
-                total_score += self._score_sample(model, sample, device)
-            except Exception:
-                logger.warning(
-                    "[%s] Failed on sample %s",
-                    self.name,
-                    sample.get("id", count),
-                    exc_info=True,
-                )
-            count += 1
-        return BenchmarkResult(metrics={"score": total_score}, count=count)
-
-    def _score_sample(self, model, sample: dict, device) -> float:
+    def score_sample(self, model, sample: dict, device) -> float:
+        """Score each option by length-normalized log-prob; 1.0 if argmax matches answer_id."""
         options = sample["options"]
         answer_id = int(sample["answer_id"])
 
@@ -211,26 +147,24 @@ class VLMLogprobBenchmark(Benchmark):
                     k: v.to(device) for k, v in full_inputs.items() if v is not None
                 }
 
-                with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                with torch.amp.autocast(device.type, dtype=torch.bfloat16):
                     logits = model(**full_inputs).logits
 
                 log_probs = logits[0].log_softmax(dim=-1)
                 input_ids = full_inputs["input_ids"][0]
-                n_tokens = len(input_ids) - prompt_len
+                num_tokens = len(input_ids) - prompt_len
                 total_logprob = sum(
                     log_probs[i - 1, input_ids[i].item()].item()
                     for i in range(prompt_len, len(input_ids))
                 )
-                option_scores.append(
-                    total_logprob / n_tokens if n_tokens > 0 else total_logprob
-                )
+                option_scores.append(total_logprob / num_tokens if num_tokens > 0 else 0.0)
 
             return 1.0 if int(np.argmax(option_scores)) == answer_id else 0.0
         finally:
             _close_images(loaded)
 
 
-# -- Helpers --
+# === Helpers ===
 
 
 def _prepare_messages(messages: list[dict]) -> tuple[list[dict], list]:
@@ -261,6 +195,7 @@ def _extract_text(content) -> str:
 
 
 def _close_images(images: list) -> None:
+    """Close any PIL images opened during evaluation to free memory."""
     for img in images:
         if hasattr(img, "close"):
             img.close()

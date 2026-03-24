@@ -196,6 +196,8 @@ class LLMLogprobBenchmark(Benchmark):
                 log_probs[i - 1, input_ids[i].item()].item()
                 for i in range(prompt_len, len(input_ids))
             )
-            option_scores.append(total_logprob / n_tokens if n_tokens > 0 else total_logprob)
+            option_scores.append(
+                total_logprob / n_tokens if n_tokens > 0 else total_logprob
+            )
 
         return 1.0 if int(np.argmax(option_scores)) == answer_id else 0.0

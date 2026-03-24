@@ -1,19 +1,10 @@
-"""Scoring functions for benchmark evaluation.
-
-Built-in metrics: ``grounding_iou``, ``short_answer``, ``mcq_gen``.
-
-To add a new metric:
-  1. Define a function: ``(prediction: str, ground_truth: str, **kwargs) -> float``
-  2. Add it to ``_METRIC_DISPATCH`` below.
-  3. Add the metric name to ``GENERATION_METRICS`` or ``LOGPROB_METRICS`` in ``vlm_config.py``.
-"""
-
 import ast
 import json
 import re
+from collections.abc import Callable
 
 
-# -- Built-in scoring functions --
+# === Built-in scoring functions ===
 
 
 def score_grounding_iou(
@@ -71,7 +62,7 @@ def score_mcq_gen(prediction: str, ground_truth: str, **_) -> float:
     return 1.0 if gt_letter == pred_letter else 0.0
 
 
-# -- Metric dispatch (add new metrics here) --
+# === Metric dispatch (add new metrics here) ===
 
 _METRIC_DISPATCH: dict[str, callable] = {
     "grounding_iou": score_grounding_iou,
@@ -83,7 +74,7 @@ _METRIC_DISPATCH: dict[str, callable] = {
 def compute_metric(
     metric_type: str, prediction: str, ground_truth: str, **kwargs
 ) -> float:
-    """Look up and call the named scoring function."""
+    """Dispatch to the named scoring function and return a 0-1 score."""
     fn = _METRIC_DISPATCH.get(metric_type)
     if fn is None:
         raise ValueError(
@@ -92,7 +83,7 @@ def compute_metric(
     return fn(prediction, ground_truth, **kwargs)
 
 
-# -- Internal helpers --
+# === Internal helpers ===
 
 _VALID_MCQ_LETTERS = set("abcdef")
 

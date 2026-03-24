@@ -1,6 +1,9 @@
+import logging
 import os
 import pathlib
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 import yaml
 
@@ -237,8 +240,9 @@ def parse_job_config(config_input: str) -> JobConfig:
     try:
         final_output_dir.mkdir(parents=True, exist_ok=True)
     except PermissionError:
-        print(
-            f"Permission denied creating {final_output_dir}, falling back to local ./outputs"
+        logger.warning(
+            "Permission denied creating %s, falling back to local ./outputs",
+            final_output_dir,
         )
         final_output_dir = pathlib.Path.cwd() / "outputs" / project_name / run_name
         final_output_dir.mkdir(parents=True, exist_ok=True)

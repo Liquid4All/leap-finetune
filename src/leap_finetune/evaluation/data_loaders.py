@@ -1,12 +1,3 @@
-"""Format-agnostic data loading for benchmarks (JSONL, JSON, Parquet, CSV).
-
-Auto-detects format from file extension. Applies the same normalization as
-the training pipeline (column renames, JSON parsing, image_root prepending)
-so benchmark data uses one unified schema::
-
-    samples = load_benchmark_samples("/data/eval.parquet", limit=500)
-"""
-
 import json
 import logging
 from pathlib import Path, PurePosixPath
@@ -108,6 +99,7 @@ def _convert_legacy_to_hf_format(sample: dict, image_root: str | None = None) ->
 
 
 def _detect_format(path: str) -> str:
+    """Infer data format from file extension, defaulting to jsonl."""
     p = path.lower()
     if p.endswith((".jsonl", ".ndjson")):
         return "jsonl"

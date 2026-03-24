@@ -55,7 +55,7 @@ def sft_run(training_config: dict) -> None:
     resume_from = train_config.get("resume_from_checkpoint")
     output_dir = train_config.get("output_dir", "")
     if resume_from:
-        logger.info(f"Resuming from checkpoint: {resume_from}")
+        logger.info("Resuming from checkpoint: %s", resume_from)
 
     # Filter out SFT-specific keys that don't belong in TrainingArguments
     excluded_keys = SFT_EXCLUDED_KEYS | {"leap_run_name_template"}

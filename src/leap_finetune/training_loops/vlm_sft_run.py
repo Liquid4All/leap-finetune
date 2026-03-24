@@ -81,7 +81,7 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
             short_name = prefix.removeprefix("model.")
             self._optimizer_group_names.append(short_name)
             logger.info(
-                f"Param group '{prefix}': {len(params)} params, lr={base_lr * mult:.2e}"
+                "Param group '%s': %d params, lr=%.2e", prefix, len(params), base_lr * mult
             )
 
         if ungrouped:
@@ -90,7 +90,7 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
             )
             self._optimizer_group_names.append("ungrouped")
             logger.info(
-                f"Param group 'ungrouped': {len(ungrouped)} params, lr={base_lr:.2e}"
+                "Param group 'ungrouped': %d params, lr=%.2e", len(ungrouped), base_lr
             )
 
         betas = (self.args.adam_beta1, self.args.adam_beta2)
@@ -144,7 +144,7 @@ def vlm_sft_run(training_config: dict) -> None:
     resume_from = train_config.get("resume_from_checkpoint")
     output_dir = train_config.get("output_dir", "")
     if resume_from:
-        logger.info(f"Resuming from checkpoint: {resume_from}")
+        logger.info("Resuming from checkpoint: %s", resume_from)
 
     # Filter out non-TrainingArguments parameters
     excluded_keys = VLM_SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
@@ -174,9 +174,8 @@ def vlm_sft_run(training_config: dict) -> None:
     max_steps = steps_per_epoch * epochs // grad_accum
 
     logger.info(
-        f"Computed max_steps={max_steps} "
-        f"(samples={num_samples}, batch={train_batch_size}, "
-        f"accum={grad_accum}, epochs={epochs})"
+        "Computed max_steps=%d (samples=%d, batch=%d, accum=%d, epochs=%s)",
+        max_steps, num_samples, train_batch_size, grad_accum, epochs,
     )
 
     # Build training args — use max_steps instead of num_train_epochs

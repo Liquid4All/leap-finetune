@@ -65,7 +65,7 @@ def dpo_run(training_config: dict) -> None:
     resume_from = train_config.get("resume_from_checkpoint")
     output_dir = train_config.get("output_dir", "")
     if resume_from:
-        logger.info(f"Resuming from checkpoint: {resume_from}")
+        logger.info("Resuming from checkpoint: %s", resume_from)
 
     # Filter out non-DPOConfig parameters
     excluded_keys = {

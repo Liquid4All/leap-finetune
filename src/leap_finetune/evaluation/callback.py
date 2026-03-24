@@ -1,12 +1,3 @@
-"""Generic benchmark evaluation callback for HuggingFace Trainer.
-
-Model-agnostic — all inference and scoring logic lives in the Benchmark instances.
-Each benchmark returns a ``BenchmarkResult`` with a dict of named metrics;
-the callback all-reduces each metric across ranks and logs to wandb.
-
-
-"""
-
 import logging
 import time
 
@@ -40,6 +31,7 @@ class BenchmarkEvalCallback(TrainerCallback):
         model=None,
         **kwargs,
     ):
+        """Run all benchmarks, all-reduce metrics across ranks, and log to wandb."""
         if model is None or not self.benchmarks:
             return
 
@@ -115,12 +107,14 @@ class BenchmarkEvalCallback(TrainerCallback):
 
     @staticmethod
     def _get_rank_and_world() -> tuple[int, int]:
+        """Return (rank, world_size), defaulting to (0, 1) for non-distributed runs."""
         if dist.is_initialized():
             return dist.get_rank(), dist.get_world_size()
         return 0, 1
 
     @staticmethod
     def _unwrap_model(model):
+        """Unwrap DDP/FSDP wrapper to get the underlying model."""
         return model.module if hasattr(model, "module") else model
 
     @staticmethod

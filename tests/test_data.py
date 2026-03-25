@@ -1,6 +1,230 @@
 import pytest
 
+from datasets import Dataset
+
 pytestmark = pytest.mark.data
+
+
+# === Tool call validation ===
+
+
+class TestToolCallValidation:
+    # --- SFT ---
+
+    def test_sft_foreign_markers_rejected(self):
+        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+
+        for marker, fmt in [("<tool_call>", "Qwen"), ("[TOOL_CALLS]", "Mistral")]:
+            ds = Dataset.from_list(
+                [
+                    {
+                        "messages": [
+                            {"role": "user", "content": "Hi"},
+                            {
+                                "role": "assistant",
+                                "content": f"{marker} foo {marker.replace('<', '</')}",
+                            },
+                        ]
+                    }
+                ]
+            )
+            with pytest.raises(ValueError, match=f"{fmt} tool call markers"):
+                validate_sft_format(ds)
+
+    def test_sft_correct_lfm_format_passes(self):
+        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+
+        ds = Dataset.from_list(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Get weather"},
+                        {
+                            "role": "assistant",
+                            "content": '<|tool_call_start|>[get_weather(location="SF")]<|tool_call_end|>\nChecking now.',
+                        },
+                        {"role": "tool", "content": '{"temp": 18}'},
+                        {"role": "assistant", "content": "It's 18 degrees."},
+                    ]
+                }
+            ]
+        )
+        assert len(validate_sft_format(ds)) == 1
+
+    def test_sft_text_before_tool_call_rejected(self):
+        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+
+        ds = Dataset.from_list(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Get weather"},
+                        {
+                            "role": "assistant",
+                            "content": 'Sure thing!\n<|tool_call_start|>[get_weather(location="SF")]<|tool_call_end|>',
+                        },
+                        {"role": "tool", "content": '{"temp": 18}'},
+                    ]
+                }
+            ]
+        )
+        with pytest.raises(ValueError, match="Text appears before tool call"):
+            validate_sft_format(ds)
+
+    def test_sft_structured_tool_calls_field_rejected(self):
+        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+
+        ds = Dataset.from_list(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Hi"},
+                        {
+                            "role": "assistant",
+                            "content": "Let me check.",
+                            "tool_calls": [{"name": "get_weather"}],
+                        },
+                    ]
+                }
+            ]
+        )
+        with pytest.raises(ValueError, match="tool_calls.*not supported"):
+            validate_sft_format(ds)
+
+    def test_sft_missing_tool_response_rejected(self):
+        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+
+        ds = Dataset.from_list(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Get weather"},
+                        {
+                            "role": "assistant",
+                            "content": '<|tool_call_start|>[get_weather(location="SF")]<|tool_call_end|>',
+                        },
+                        {"role": "user", "content": "Thanks"},
+                    ]
+                }
+            ]
+        )
+        with pytest.raises(ValueError, match="no tool response"):
+            validate_sft_format(ds)
+
+    # --- DPO ---
+
+    def test_dpo_foreign_markers_rejected(self):
+        from leap_finetune.data_loaders.validate_loader import validate_dpo_format
+
+        # String format
+        ds = Dataset.from_list(
+            [{"chosen": "<tool_call>foo</tool_call>", "rejected": "no tools"}]
+        )
+        with pytest.raises(ValueError, match="Qwen"):
+            validate_dpo_format(ds)
+
+        # Message list format
+        ds = Dataset.from_list(
+            [
+                {
+                    "chosen": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "<tool_call>foo</tool_call>"},
+                    ],
+                    "rejected": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "No tools."},
+                    ],
+                }
+            ]
+        )
+        with pytest.raises(ValueError, match="Qwen"):
+            validate_dpo_format(ds)
+
+    def test_dpo_text_before_tool_call_rejected(self):
+        from leap_finetune.data_loaders.validate_loader import validate_dpo_format
+
+        ds = Dataset.from_list(
+            [
+                {
+                    "chosen": 'Sure!\n<|tool_call_start|>[get_weather(location="SF")]<|tool_call_end|>',
+                    "rejected": "I can't do that.",
+                }
+            ]
+        )
+        with pytest.raises(ValueError, match="Text appears before tool call"):
+            validate_dpo_format(ds)
+
+    # --- Row filters ---
+
+    def test_sft_row_filter_rejects_bad_tool_calls(self):
+        from leap_finetune.data_loaders.validate_loader import get_row_filter
+
+        f = get_row_filter("sft")
+        assert (
+            f(
+                {
+                    "messages": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "<tool_call>x</tool_call>"},
+                    ]
+                }
+            )
+            is False
+        )
+        assert (
+            f(
+                {
+                    "messages": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "ok", "tool_calls": [{}]},
+                    ]
+                }
+            )
+            is False
+        )
+
+    def test_dpo_row_filter_rejects_foreign_markers(self):
+        from leap_finetune.data_loaders.validate_loader import get_row_filter
+
+        f = get_row_filter("dpo")
+        assert f({"chosen": "<tool_call>x</tool_call>", "rejected": "no"}) is False
+
+    # --- Regression ---
+
+    def test_non_tool_call_data_unaffected(self):
+        from leap_finetune.data_loaders.validate_loader import (
+            validate_dpo_format,
+            validate_sft_format,
+        )
+
+        sft = Dataset.from_list(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "Hello!"},
+                    ]
+                }
+            ]
+        )
+        assert len(validate_sft_format(sft)) == 1
+
+        dpo = Dataset.from_list(
+            [
+                {
+                    "chosen": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "Hello!"},
+                    ],
+                    "rejected": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "Hey."},
+                    ],
+                }
+            ]
+        )
+        assert len(validate_dpo_format(dpo)) == 1
 
 
 # === DatasetLoader construction ===

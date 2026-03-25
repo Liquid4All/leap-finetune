@@ -32,13 +32,15 @@ def create_llm_benchmarks_from_config(
             raise ValueError(f"Benchmark {name!r} is missing required 'metric' field")
 
         kwargs = {k: v for k, v in bench.items() if k not in _FACTORY_KEYS}
-        kwargs.setdefault("max_new_tokens", default_max_new_tokens)
 
         if metric in LOGPROB_METRICS:
+            # Logprob benchmarks don't generate text — drop max_new_tokens
+            logprob_kwargs = {k: v for k, v in kwargs.items() if k != "max_new_tokens"}
             result.append(
-                LLMLogprobBenchmark(name=name, path=path, tokenizer=tokenizer, **kwargs)
+                LLMLogprobBenchmark(name=name, path=path, tokenizer=tokenizer, **logprob_kwargs)
             )
         elif metric in GENERATION_METRICS:
+            kwargs.setdefault("max_new_tokens", default_max_new_tokens)
             result.append(
                 LLMGenerationBenchmark(
                     name=name, path=path, tokenizer=tokenizer, **kwargs

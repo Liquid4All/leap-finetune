@@ -37,7 +37,9 @@ def create_llm_benchmarks_from_config(
             # Logprob benchmarks don't generate text — drop max_new_tokens
             logprob_kwargs = {k: v for k, v in kwargs.items() if k != "max_new_tokens"}
             result.append(
-                LLMLogprobBenchmark(name=name, path=path, tokenizer=tokenizer, **logprob_kwargs)
+                LLMLogprobBenchmark(
+                    name=name, path=path, tokenizer=tokenizer, **logprob_kwargs
+                )
             )
         elif metric in GENERATION_METRICS:
             kwargs.setdefault("max_new_tokens", default_max_new_tokens)

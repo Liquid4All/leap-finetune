@@ -16,11 +16,7 @@
 
 A minimal fine-tuning repo for LFM2, fully built on Open Source.
 
-> **⚠️ Important**
->
-> - **Hardware:** Local training requires GPUs (tested on H100 80GB, up to 8 GPUs). For remote training via Modal, any Mac or laptop works.
-> - **Python:** Make sure you are running Python >= 3.12.
-> - **Access token:** For private or gated models, make sure you are logged in on Hugging Face.
+We support different acceleration backends, including GPU nodes of 8xH100 80GB (both single node and multi node) as well as Modal (H100, H200, B200, ..) in case you don't have your own GPUs.
 
 For feature requests or if you have a different setup, reach out to [support@liquid.ai](mailto:support@liquid.ai) and tell us about your specific configuration.
 

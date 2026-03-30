@@ -12,18 +12,19 @@ There are critical differences between LFM2 and LFM2.5 tool calling formats that
 ### Known differences (verified by reading the actual Jinja templates)
 
 Templates read from HF cache:
+
 - LFM2: `~/.cache/huggingface/hub/models--LiquidAI--LFM2-1.2B/.../chat_template.jinja`
 - LFM2.5: `~/.cache/huggingface/hub/models--LiquidAI--LFM2.5-1.2B-Instruct/.../chat_template.jinja`
 
-| Feature | LFM2 | LFM2.5 |
-|---------|-------|--------|
-| **Tool list** | `<\|tool_list_start\|>[...]<\|tool_list_end\|>` | Plain `[...]` (no special tokens) |
-| **Tool call** | `<\|tool_call_start\|>[...]<\|tool_call_end\|>` (pythonic) | `<\|tool_call_start\|>[...]<\|tool_call_end\|>` (pythonic, same) |
-| **Tool response** | `<\|tool_response_start\|>content<\|tool_response_end\|>` | Plain content (no wrapping tokens) |
-| **Thinking** | Not supported | `</think>` stripping in history (`keep_past_thinking` param) |
-| **JSON tool calls** | Pythonic only | Pythonic by default, JSON optional via system prompt |
-| **Structured `tool_calls` field** | Ignored (crashes without content) | Ignored (same behavior) |
-| **Token special flag** | `tool_call_start/end` are `special: true` | `tool_call_start/end` are `special: false` |
+| Feature                           | LFM2                                                       | LFM2.5                                                           |
+| --------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------- |
+| **Tool list**                     | `<\|tool_list_start\|>[...]<\|tool_list_end\|>`            | Plain `[...]` (no special tokens)                                |
+| **Tool call**                     | `<\|tool_call_start\|>[...]<\|tool_call_end\|>` (pythonic) | `<\|tool_call_start\|>[...]<\|tool_call_end\|>` (pythonic, same) |
+| **Tool response**                 | `<\|tool_response_start\|>content<\|tool_response_end\|>`  | Plain content (no wrapping tokens)                               |
+| **Thinking**                      | Not supported                                              | `</think>` stripping in history (`keep_past_thinking` param)     |
+| **JSON tool calls**               | Pythonic only                                              | Pythonic by default, JSON optional via system prompt             |
+| **Structured `tool_calls` field** | Ignored (crashes without content)                          | Ignored (same behavior)                                          |
+| **Token special flag**            | `tool_call_start/end` are `special: true`                  | `tool_call_start/end` are `special: false`                       |
 
 ### Why this matters for training data
 
@@ -34,6 +35,7 @@ The `apply_chat_template()` function handles these differences automatically —
 ### Parsing confusion across backends
 
 Different inference backends parse tool calls differently:
+
 - **sglang**: Has built-in `--tool-call-parser lfm2` support
 - **vLLM**: No built-in LFM2 parser. Can try `pythonic` parser or write custom plugin via `--tool-parser-plugin`. Needs custom chat template.
 - **llama.cpp**: Works if GGUF has correct chat template
@@ -44,6 +46,7 @@ Different inference backends parse tool calls differently:
 ### File: `tests/test_tool_call_templates.py` (expand existing)
 
 Parametrize all tests across both tokenizers:
+
 - `LFM2-1.2B` (LFM2 format)
 - `LFM2.5-1.2B-Instruct` (LFM2.5 format)
 
@@ -257,6 +260,7 @@ decoded = tokenizer.decode(tokens)
 ## Validation status
 
 Current `validate_tool_calls.py` is already model-agnostic — it only validates things common to both formats:
+
 - `<|tool_call_start|>`/`<|tool_call_end|>` (both use these)
 - Ordering (tool call before text — both require this)
 - `role="tool"` pairing (both require this)
@@ -267,16 +271,20 @@ It does NOT check for `<|tool_list_start|>` or `<|tool_response_start|>` — tho
 ### Potential validation updates after testing
 
 Depending on test results, we may need to:
+
 - Remove unused constants (`_LFM_TOOL_RESPONSE_START`, etc.)
 - Add a model family detection utility (`is_lfm25_format(model_name)`) for any model-specific checks
 - Warn if pre-formatted data contains `<|tool_list_start|>` when training an LFM2.5 model (or vice versa)
 
 ## Files to modify
+
 - `tests/test_tool_call_templates.py` — expand with parametrized tests across both tokenizers, all scenarios above
 - `src/leap_finetune/data_loaders/validate_tool_calls.py` — clean up dead constants after testing confirms they're unused
 
 ## Verification
+
 ```bash
 uv run pytest tests/test_tool_call_templates.py -v
 ```
+
 Needs compute node for LFM2.5 tokenizer download (LFM2-1.2B is already cached locally).

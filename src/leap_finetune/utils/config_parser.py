@@ -1,3 +1,4 @@
+import importlib
 import logging
 import os
 import pathlib
@@ -60,6 +61,23 @@ def generate_run_name(
     return name
 
 
+def _import_callable(dotted_path: str):
+    """Import a callable from a dotted module path like 'my_module.preprocess_fn'."""
+    try:
+        module_path, func_name = dotted_path.rsplit(".", 1)
+    except ValueError:
+        raise ValueError(
+            f"preprocess_fn must be a dotted path like 'my_module.func', got: {dotted_path}"
+        )
+    module = importlib.import_module(module_path)
+    fn = getattr(module, func_name, None)
+    if fn is None:
+        raise ValueError(f"Function '{func_name}' not found in module '{module_path}'")
+    if not callable(fn):
+        raise ValueError(f"'{dotted_path}' is not callable")
+    return fn
+
+
 def parse_job_config(config_input: str) -> JobConfig:
     path_obj = resolve_config_path(config_input)
 
@@ -78,14 +96,24 @@ def parse_job_config(config_input: str) -> JobConfig:
             f"Invalid dataset type: '{ds_type}'. Must be one of: {sorted(valid_types)}"
         )
 
+    # Resolve preprocess_fn from dotted import path
+    preprocess_fn = None
+    preprocess_fn_path = ds_config.get("preprocess_fn")
+    if preprocess_fn_path:
+        preprocess_fn = _import_callable(preprocess_fn_path)
+
+    model_name = config_dict.get("model_name", "LFM2-1.2B")
+
     dataset = DatasetLoader(
         dataset_path=final_dataset_path,
         dataset_type=ds_type,
+        model_name=model_name,
         limit=ds_config.get("limit"),
         test_size=ds_config.get("test_size", 0.2),
         subset=ds_config.get("subset"),
         image_root=ds_config.get("image_root"),
         cache_dataset=ds_config.get("cache_dataset", False),
+        preprocess_fn=preprocess_fn,
     )
 
     # === Training config with extends support ===

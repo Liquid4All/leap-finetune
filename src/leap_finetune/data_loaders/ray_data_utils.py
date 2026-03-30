@@ -10,6 +10,7 @@ from leap_finetune.utils.constants import TOKENIZATION_CACHE_DIR
 
 from .dataset_loader import DatasetLoader
 from .tokenize_data import tokenize_and_pack_sft, tokenize_dpo_dataset
+from .tool_call_utils import get_tool_normalizer
 from .validate_loader import get_row_filter, normalize_columns
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,14 @@ def create_ray_datasets(
     # (handles JSON string conversations, column renames, image_root prefix)
     normalizer = normalize_columns(loader.dataset_type, image_root=loader.image_root)
     ds = ds.map(normalizer)
+
+    # Normalize tool call format (strip wrong markers, convert structured tool_calls)
+    if loader.model_name and loader.dataset_type in ("sft", "dpo"):
+        from leap_finetune.utils.model_utils import get_model_family
+
+        model_family = get_model_family(loader.model_name)
+        tool_normalizer = get_tool_normalizer(model_family)
+        ds = ds.map(tool_normalizer)
 
     # Filter invalid rows using Ray's native filter (pure Python, Ray handles Arrow)
     if loader.dataset_type == "vlm_sft":

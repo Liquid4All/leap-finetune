@@ -1,6 +1,8 @@
 import ast
 import json
+import math
 import re
+from collections import Counter
 
 
 # === Built-in scoring functions ===
@@ -61,12 +63,65 @@ def score_mcq_gen(prediction: str, ground_truth: str, **_) -> float:
     return 1.0 if gt_letter == pred_letter else 0.0
 
 
+def score_bleu(prediction: str, ground_truth: str, max_n: int = 4, **_) -> float:
+    """Sentence-level BLEU score (0-1) up to max_n-grams with brevity penalty."""
+    pred_tokens = _tokenize(prediction)
+    ref_tokens = _tokenize(ground_truth)
+
+    if not pred_tokens or not ref_tokens:
+        return 0.0
+
+    # Brevity penalty
+    bp = (
+        min(1.0, math.exp(1 - len(ref_tokens) / len(pred_tokens)))
+        if pred_tokens
+        else 0.0
+    )
+
+    # n-gram precisions with +1 smoothing (smoothing method 1)
+    log_avg = 0.0
+    for n in range(1, max_n + 1):
+        pred_ngrams = _get_ngrams(pred_tokens, n)
+        ref_ngrams = _get_ngrams(ref_tokens, n)
+        clipped = sum(min(pred_ngrams[ng], ref_ngrams[ng]) for ng in pred_ngrams)
+        total = max(sum(pred_ngrams.values()), 1)
+        # Add-1 smoothing for n > 1 to avoid zero precision killing the score
+        if n > 1:
+            clipped += 1
+            total += 1
+        precision = clipped / total
+        if precision == 0:
+            return 0.0
+        log_avg += math.log(precision) / max_n
+
+    return bp * math.exp(log_avg)
+
+
+def score_rouge_l(prediction: str, ground_truth: str, **_) -> float:
+    """ROUGE-L F1 score (0-1) based on longest common subsequence."""
+    pred_tokens = _tokenize(prediction)
+    ref_tokens = _tokenize(ground_truth)
+
+    if not pred_tokens or not ref_tokens:
+        return 0.0
+
+    lcs_len = _lcs_length(pred_tokens, ref_tokens)
+    precision = lcs_len / len(pred_tokens)
+    recall = lcs_len / len(ref_tokens)
+
+    if precision + recall == 0:
+        return 0.0
+    return 2 * precision * recall / (precision + recall)
+
+
 # === Metric dispatch (add new metrics here) ===
 
 _METRIC_DISPATCH: dict[str, callable] = {
     "grounding_iou": score_grounding_iou,
     "short_answer": score_short_answer,
     "mcq_gen": score_mcq_gen,
+    "bleu": score_bleu,
+    "rouge_l": score_rouge_l,
 }
 
 
@@ -157,6 +212,29 @@ def _parse_bbox(text: str) -> list[float] | None:
         bbox = [c / 1000.0 for c in bbox]
 
     return bbox
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase whitespace tokenization for BLEU/ROUGE."""
+    return text.lower().split()
+
+
+def _get_ngrams(tokens: list[str], n: int) -> Counter:
+    """Count n-grams in a token list."""
+    return Counter(tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
+
+
+def _lcs_length(a: list[str], b: list[str]) -> int:
+    """Length of the longest common subsequence (space-optimised)."""
+    if len(a) < len(b):
+        a, b = b, a
+    prev = [0] * (len(b) + 1)
+    for ai in a:
+        curr = [0] * (len(b) + 1)
+        for j, bj in enumerate(b):
+            curr[j + 1] = prev[j] + 1 if ai == bj else max(prev[j + 1], curr[j])
+        prev = curr
+    return prev[-1]
 
 
 def _compute_iou(box_a: list[float], box_b: list[float]) -> float:

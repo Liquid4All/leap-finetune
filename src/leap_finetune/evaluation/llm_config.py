@@ -8,7 +8,7 @@ from leap_finetune.evaluation.llm_benchmarks import (
 
 logger = logging.getLogger(__name__)
 
-GENERATION_METRICS = {"short_answer", "mcq_gen"}
+GENERATION_METRICS = {"short_answer", "mcq_gen", "bleu", "rouge_l"}
 LOGPROB_METRICS = {"logprob_zero_shot"}
 
 # Keys consumed by the factory — not forwarded to benchmark constructors

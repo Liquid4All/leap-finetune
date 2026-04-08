@@ -8,7 +8,7 @@ from leap_finetune.evaluation.vlm_benchmarks import (
 
 logger = logging.getLogger(__name__)
 
-GENERATION_METRICS = {"grounding_iou", "short_answer", "mcq_gen"}
+GENERATION_METRICS = {"grounding_iou", "short_answer", "mcq_gen", "bleu", "rouge_l"}
 LOGPROB_METRICS = {"logprob_zero_shot"}
 
 # Keys consumed by the factory — not forwarded to benchmark constructors
@@ -47,7 +47,7 @@ def create_vlm_benchmarks_from_config(
             kwargs.setdefault("max_new_tokens", default_max_new_tokens)
             result.append(
                 VLMGenerationBenchmark(
-                    name=name, path=path, processor=processor, **kwargs
+                    name=name, path=path, processor=processor, metric=metric, **kwargs
                 )
             )
         else:

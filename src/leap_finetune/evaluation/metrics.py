@@ -72,7 +72,11 @@ def score_bleu(prediction: str, ground_truth: str, max_n: int = 4, **_) -> float
         return 0.0
 
     # Brevity penalty
-    bp = min(1.0, math.exp(1 - len(ref_tokens) / len(pred_tokens))) if pred_tokens else 0.0
+    bp = (
+        min(1.0, math.exp(1 - len(ref_tokens) / len(pred_tokens)))
+        if pred_tokens
+        else 0.0
+    )
 
     # n-gram precisions with +1 smoothing (smoothing method 1)
     log_avg = 0.0

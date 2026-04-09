@@ -1,0 +1,39 @@
+# Text GRPO quickstart — colocate vLLM on a single machine.
+#
+# This trains LFM2-1.2B on the DeepMath-103K dataset with two rewards stacked:
+# (1) math accuracy via TRL's built-in accuracy_reward (needs `math_verify`),
+# (2) R1-style <think>...</think> format reward.
+#
+# Launch:
+#   uv run leap-finetune job_configs/grpo_example.yaml
+#
+# Works on a single 1xH100 box: vLLM runs colocated inside each training
+# worker and shares GPU memory (budget controlled by vllm_gpu_memory_utilization).
+
+project_name: "lfm2_grpo_math"
+model_name: "LFM2-1.2B"
+training_type: "grpo"
+
+dataset:
+  path: "trl-lib/DeepMath-103K"
+  type: "grpo"
+  limit: 2000          # trim for a quick first run; remove to use the full dataset
+
+rewards:
+  funcs:
+    - "./rewards/accuracy.py::accuracy_reward"      # 1.0 for correct math answer
+    - "./rewards/think_format.py::think_format_reward"  # 1.0 for <think>...</think>
+  weights: [1.0, 0.2]  # format reward shapes early but doesn't dominate
+
+training_config:
+  extends: "DEFAULT_GRPO"
+  num_train_epochs: 1
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 1e-6
+  num_generations: 8
+  max_completion_length: 512
+  # vLLM settings (all passed through to GRPOConfig unchanged) ---
+  # vllm_mode: "colocate"  # default in DEFAULT_GRPO
+  vllm_gpu_memory_utilization: 0.3   # leave headroom for training weights + optimizer
+  vllm_enable_sleep_mode: true       # offload vLLM during optimizer step (less contention)

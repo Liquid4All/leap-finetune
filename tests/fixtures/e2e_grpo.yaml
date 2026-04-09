@@ -1,0 +1,33 @@
+project_name: "e2e_grpo"
+model_name: "LFM2-1.2B"
+training_type: "grpo"
+
+dataset:
+  path: "trl-lib/DeepMath-103K"
+  type: "grpo"
+  limit: 16                      # smallest viable for num_generations=2 on 1 GPU
+
+rewards:
+  funcs:
+    - "./rewards/length.py::length_reward"
+  weights: [1.0]
+
+training_config:
+  extends: "DEFAULT_GRPO"
+  # Single optimizer step is enough to verify the wiring works end-to-end
+  num_train_epochs: 1
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 1e-6
+  num_generations: 2             # tiny group size for the smoke test
+  max_completion_length: 16
+  save_strategy: "no"
+  eval_strategy: "no"
+  logging_steps: 1
+  # Colocate vLLM — low memory budget for a small model + tiny group
+  vllm_mode: "colocate"
+  vllm_gpu_memory_utilization: 0.3
+  vllm_enable_sleep_mode: true
+
+peft_config:
+  use_peft: false

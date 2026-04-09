@@ -1,0 +1,53 @@
+# VLM GRPO with visual grounding — RLVR flagship example.
+#
+# Uses a pre-packaged reward bundle for grounding (JSON format check +
+# schema check + CIoU vs the ground-truth box + Hungarian matching for
+# multi-object scenes). No RL environment needed — grounding is a
+# verifiable task: the model outputs a bbox, we compute IoU against the
+# ground truth, done.
+#
+# The model is trained to output JSON of the form:
+#     {"bboxes": [[x1, y1, x2, y2], ...]}
+# Single-box answers use {"bbox": [x1, y1, x2, y2]} — the bundle accepts both.
+#
+# Required dataset columns:
+#   prompt:     messages list with the image + instruction (standard VLM GRPO shape)
+#   bbox_gt:    [x1, y1, x2, y2] ground-truth box for single-object CIoU reward
+#   bboxes_gt:  list of [x1, y1, x2, y2] for multi-object Hungarian reward
+#               (set bboxes_gt = [bbox_gt] if your dataset has only one box)
+#
+# Launch:
+#   uv run leap-finetune job_configs/vlm_grpo_grounding_example.yaml
+
+project_name: "vlm_grpo_grounding"
+model_name: "LFM2-VL-1.6B"
+training_type: "vlm_grpo"
+
+dataset:
+  path: "liquidai/visual-grounding-bbox-demo"   # replace with your own dataset
+  type: "vlm_grpo"
+  image_root: "/data/images"                    # prepended to relative image paths
+  limit: 500
+
+# One line → JSON format + schema + CIoU + Hungarian rewards with sane
+# default weights [0.1, 0.1, 1.0, 1.0]. Read rewards/vlm_grounding.py to
+# see the full VLMGroundingRecipe class and its four reward functions.
+# Extend by subclassing in your own rewards/*.py file — see the
+# "Extending a recipe" section of rewards/README.md.
+rewards:
+  recipe: "./rewards/vlm_grounding.py::VLMGroundingRecipe"
+  # Optional: override the recipe's default weights
+  # weights: [0.05, 0.05, 1.0, 1.0]
+  # Optional: stack extra individual rewards on top of the recipe's
+  # funcs:
+  #   - "./rewards/length.py::length_reward"
+
+training_config:
+  extends: "DEFAULT_VLM_GRPO"
+  num_train_epochs: 1
+  learning_rate: 1e-6
+  num_generations: 4
+  max_completion_length: 128
+  # Vision encoder trains at 0.1x base LR by default (DEFAULT_VLM_GRPO.lr_multipliers).
+  # Override per-component if needed:
+  # vision_encoder_lr_multiplier: 0.05

@@ -248,6 +248,187 @@ When training is done, you can bundle your output checkpoint with `leap-bundle` 
 
 > **Note**: VLM datasets commonly have images in a separate row and are referenced in the messages column. If your image URLs or Paths are in a separate column from your messages, you'll need to merge the images into the 'messages' section like above.
 
+### GRPO (Group Relative Policy Optimization)
+
+GRPO trains a policy with RL rewards. `leap-finetune` wraps TRL v1's
+`GRPOTrainer` with vLLM rollouts (colocate by default, server mode
+supported) and a plain-Python rewards directory — same single-YAML workflow
+as SFT/DPO.
+
+The primary path is **RLVR** (Reinforcement Learning with Verifiable
+Rewards): the reward for each completion is computed by a pure Python
+function. This covers math (check against a known answer), code (run
+tests), grounding (IoU vs ground-truth bbox), format (regex / schema),
+and any other task where a completion can be scored without an interactive
+environment.
+
+#### Dataset format
+
+Only a `prompt` column is required. It can be a plain string or a
+conversational messages list. Any other columns (e.g. `solution`,
+`ground_truth`, `bbox_gt`) are forwarded to your reward functions as
+kwargs.
+
+```json
+{ "prompt": "What is 7 × 9?", "solution": "63" }
+```
+
+or conversational:
+
+```json
+{ "prompt": [{"role": "user", "content": "What is 7 × 9?"}], "solution": "63" }
+```
+
+#### Rewards — customer extension point
+
+All rewards live in the top-level [`rewards/`](./rewards/) directory as
+plain Python files:
+
+- **Individual reward functions** (`accuracy.py`, `think_format.py`,
+  `length.py`, `json_schema.py`, `regex_match.py`) — stack them in YAML
+  under `rewards.funcs: [...]` with optional `weights:`.
+- **Recipes** (`vlm_grounding.py`) — a Python class that bundles multiple
+  reward functions, their weights, and the task's required dataset columns
+  into one file. Reference a whole task's reward stack with one YAML line:
+  `rewards.recipe: "./rewards/vlm_grounding.py::VLMGroundingRecipe"`.
+
+To write your own individual reward, drop a `.py` file in `rewards/` with
+a function of signature `fn(completions, **kwargs) -> list[float]` and
+reference it by path. To write your own recipe, subclass the `Recipe`
+base class and override `rewards()`. To **extend** a shipped recipe, use
+the `load_recipe()` helper to import it as a parent class and subclass
+with regular Python inheritance — see [`rewards/README.md`](./rewards/README.md)
+for the full extension pattern.
+
+No decorators, no registry, no class hierarchy to learn beyond the
+four-attribute `Recipe` base class.
+
+```python
+# rewards/my_custom.py
+def my_reward(completions, **kwargs):
+    """Return 1.0 for completions over 50 chars, 0.0 otherwise."""
+    return [
+        1.0 if (c[0]["content"] if isinstance(c, list) else c) and len(c[0]["content"]) > 50 else 0.0
+        for c in completions
+    ]
+```
+
+```yaml
+# job_configs/my_grpo.yaml
+project_name: "my_math_grpo"
+model_name: "LFM2-1.2B"
+training_type: "grpo"
+
+dataset:
+  path: "trl-lib/DeepMath-103K"
+  type: "grpo"
+
+rewards:
+  funcs:
+    - "./rewards/accuracy.py::accuracy_reward"
+    - "./rewards/my_custom.py::my_reward"
+  weights: [1.0, 0.2]   # optional; defaults to 1.0 each
+
+training_config:
+  extends: "DEFAULT_GRPO"
+  num_generations: 8
+  max_completion_length: 512
+```
+
+Launch the same way as SFT/DPO:
+
+```bash
+uv run leap-finetune job_configs/my_grpo.yaml
+```
+
+#### vLLM rollouts — colocate vs server
+
+TRL v1 supports two vLLM modes and we expose both through YAML. The default
+is **colocate** — vLLM runs inside each training worker and shares GPU
+memory. This works on a single 1×H100 with no extra setup.
+
+```yaml
+training_config:
+  extends: "DEFAULT_GRPO"
+  vllm_mode: "colocate"                 # default
+  vllm_gpu_memory_utilization: 0.3
+  vllm_enable_sleep_mode: true          # offload vLLM during optimizer step
+```
+
+For bigger models or higher throughput, use **server mode** — `trl
+vllm-serve` runs on a dedicated GPU (or a dedicated node) and training
+workers reach it over HTTP. The leap-finetune driver launches and tears
+down the server for you:
+
+```yaml
+grpo_rollout:
+  dedicated_gpus: 1
+  tensor_parallel_size: 1
+  dtype: "bfloat16"
+
+training_config:
+  extends: "DEFAULT_GRPO"
+  vllm_mode: "server"
+  vllm_server_host: "auto"   # resolves to SLURMD_NODENAME / hostname
+  vllm_server_port: 8000
+```
+
+Requires ≥2 GPUs in total (1 dedicated to vLLM, the rest for training).
+Scales cleanly to multi-node SLURM — set `grpo_rollout.dedicated_nodes`
+instead of `dedicated_gpus` for the two-group `srun` layout.
+
+#### VLM GRPO
+
+Use `training_type: "vlm_grpo"` and `extends: "DEFAULT_VLM_GRPO"`. The VLM
+trainer applies the same per-component learning rates as VLM SFT (vision
+encoder at 0.1× base LR) so you can run RL on a fine-tuned LFM2-VL without
+corrupting the pretrained vision features.
+
+```yaml
+project_name: "vlm_grounding_grpo"
+model_name: "LFM2-VL-1.6B"
+training_type: "vlm_grpo"
+
+dataset:
+  path: "liquidai/visual-grounding-bbox-demo"
+  type: "vlm_grpo"
+  image_root: "/data/images"
+
+# One line for the whole grounding reward stack:
+# json format + schema + CIoU + Hungarian matching with sane default weights.
+rewards:
+  recipe: "./rewards/vlm_grounding.py::VLMGroundingRecipe"
+
+training_config:
+  extends: "DEFAULT_VLM_GRPO"
+  num_generations: 4
+```
+
+The dataset needs `prompt`, `bbox_gt` (single box as `[x1, y1, x2, y2]`)
+and `bboxes_gt` (list of boxes for multi-object scenes). The model is
+trained to output `{"bboxes": [[x1, y1, x2, y2], ...]}`.
+
+See the shipped example configs in `job_configs/`:
+- [`grpo_example.yaml`](./job_configs/grpo_example.yaml) — text GRPO colocate quickstart
+- [`grpo_server_mode_example.yaml`](./job_configs/grpo_server_mode_example.yaml) — dedicated vLLM GPU
+- [`vlm_grpo_grounding_example.yaml`](./job_configs/vlm_grpo_grounding_example.yaml) — VLM GRPO + grounding bundle
+
+#### Advanced: agentic environments (OpenEnv)
+
+RLVR with reward functions is strictly simpler and more efficient for any
+task where a completion can be scored without an interactive environment
+— math, code, grounding, format, schema compliance, etc. Use the `rewards:`
+block above for those.
+
+For tasks where the **environment state evolves based on agent actions**
+— web browsing, real tool use, game simulators, multi-turn reasoning with
+stateful feedback — `leap-finetune` also supports
+[OpenEnv](https://github.com/meta-pytorch/OpenEnv), the Gym-style
+HF-Hub-distributed environment standard. This is an advanced / optional
+path: install `uv sync --extra rl-env` and add `rl_env:` to your YAML.
+See [`src/leap_finetune/rl_envs/README.md`](./src/leap_finetune/rl_envs/README.md)
+for details if you're sure you need it.
+
 ## 🔄 Resuming Training
 
 If a run is interrupted (SLURM preemption, crash, etc.), you can resume from the last checkpoint with full optimizer state, LR schedule, and wandb continuity.
@@ -290,6 +471,55 @@ benchmarks:
 Benchmark data uses the **same format as training data** (HF messages schema). Available metrics: `short_answer`, `grounding_iou`, `mcq_gen`, `logprob_zero_shot`. Results are logged to wandb at `benchmark/{name}/score`.
 
 See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data format examples, YAML reference, and how to add custom metrics.
+
+### Post-Training Evaluation with lmms-eval
+
+For comprehensive post-training evaluation on standard VLM benchmarks (MMMU, OCRBench, RefCOCO, POPE, etc.), install the optional `lmms-eval` extra:
+
+```bash
+uv sync --extra lmms-eval
+```
+
+This installs [lmms-eval](https://github.com/Liquid4All/lmms-eval) with built-in LFM2-VL model support.
+
+**Evaluate a fine-tuned checkpoint:**
+
+```bash
+# Single GPU
+python -m lmms_eval \
+    --model lfm2_vl \
+    --model_args pretrained=/path/to/checkpoint \
+    --tasks mmmu_val,ocrbench,pope \
+    --batch_size 1
+
+# Multi-GPU
+torchrun --nproc-per-node=4 -m lmms_eval \
+    --model lfm2_vl \
+    --model_args pretrained=/path/to/checkpoint \
+    --tasks mmmu_val,ocrbench,pope \
+    --batch_size 1
+```
+
+**For faster evaluation with vLLM backend (~8x speedup):**
+
+```bash
+uv sync --extra lmms-eval-vllm
+
+python -m lmms_eval \
+    --model lfm2_vl_vllm \
+    --model_args pretrained=/path/to/checkpoint,tensor_parallel_size=1,gpu_memory_utilization=0.85 \
+    --tasks mmmu_val,ocrbench,pope \
+    --batch_size 64
+```
+
+**Updating lmms-eval to latest:**
+
+```bash
+uv lock --upgrade-package lmms-eval
+uv sync --extra lmms-eval
+```
+
+> **Note:** Requires SSH access to the Liquid4All GitHub repos. The lmms-eval and vllm packages are sourced from private Liquid4All forks with LFM2 model support.
 
 ## 🧪 Advanced Configuration
 

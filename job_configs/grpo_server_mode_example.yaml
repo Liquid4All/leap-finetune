@@ -1,0 +1,56 @@
+# Text GRPO with a dedicated vLLM rollout GPU (server mode).
+#
+# Unlike the colocate quickstart, this config carves off 1 GPU for a
+# standalone `trl vllm-serve` process that training workers reach over HTTP.
+# Requires at least 2 GPUs total: 1 for vLLM, the rest for training.
+# Server mode is strictly more throughput-efficient than colocate for larger
+# models (70B+) because training and rollouts overlap and don't fight for
+# the same GPU memory.
+#
+# Launch:
+#   uv run leap-finetune job_configs/grpo_server_mode_example.yaml
+#
+# The leap-finetune driver will:
+# 1. Split GPUs: GPU 0 → vLLM, remaining → training.
+# 2. `trl vllm-serve --model LFM2-1.2B --host 0.0.0.0 --port 8000 ...`
+# 3. Wait for /health, then spawn Ray Train workers.
+# 4. Terminate the vLLM subprocess when training finishes.
+
+project_name: "lfm2_grpo_math_server"
+model_name: "LFM2-1.2B"
+training_type: "grpo"
+
+dataset:
+  path: "trl-lib/DeepMath-103K"
+  type: "grpo"
+  limit: 2000
+
+rewards:
+  funcs:
+    - "./rewards/accuracy.py::accuracy_reward"
+    - "./rewards/think_format.py::think_format_reward"
+  weights: [1.0, 0.2]
+
+# New top-level block for server-mode vLLM.
+# The driver consumes this and the rest of the config just sets
+# vllm_mode: server + vllm_server_host / port inside training_config.
+grpo_rollout:
+  dedicated_gpus: 1
+  tensor_parallel_size: 1
+  dtype: "bfloat16"
+  gpu_memory_utilization: 0.9   # vLLM gets its GPU(s) to itself here
+
+training_config:
+  extends: "DEFAULT_GRPO"
+  num_train_epochs: 1
+  per_device_train_batch_size: 8
+  learning_rate: 1e-6
+  num_generations: 8
+  max_completion_length: 512
+  # Switch vLLM into server mode. The driver fills in vllm_server_base_url.
+  vllm_mode: "server"
+  vllm_server_host: "auto"      # resolves to hostname or SLURMD_NODENAME
+  vllm_server_port: 8000
+  # In server mode the training workers don't run vLLM themselves, so the
+  # colocate-only knob below doesn't apply — but keeping it doesn't hurt.
+  vllm_gpu_memory_utilization: 0.3

@@ -12,10 +12,10 @@ dependencies = [
     "peft>=0.15.2",
     "deepspeed>=0.17.1; sys_platform == 'linux'",
     "torch>=2.7.1",
-    "transformers>=5.0.0",
+    "transformers>=5.3.0,<5.4.0",
     "flash-attn>=2.8.0; sys_platform == 'linux'",
     "numpy>=2.4.1",
-    "trl>=0.18.2",
+    "trl>=1.0,<2.0",
     "rich>=14.1.0",
     "pillow>=11.3.0",
     "mpi4py>=4.1.0; sys_platform == 'linux'",
@@ -27,6 +27,13 @@ dependencies = [
     "torchvision>=0.24.1",
     "modal>=0.73",
     "trackio>=0.3",
+]
+
+[project.optional-dependencies]
+# OpenEnv RL environments — only needed if you use rl_env in your config.
+# Install with: uv sync --extra rl-env
+rl-env = [
+    "openenv-core>=0.1; sys_platform == 'linux'",
 ]
 
 [project.scripts]

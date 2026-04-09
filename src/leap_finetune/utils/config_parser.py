@@ -71,18 +71,23 @@ def parse_job_config(config_input: str) -> JobConfig:
     dataset_path_env = os.getenv("DATASET_PATH")
     final_dataset_path = dataset_path_env if dataset_path_env else ds_config.get("path")
 
-    valid_types = {"sft", "dpo", "vlm_sft"}
+    valid_types = {"sft", "dpo", "vlm_sft", "grpo", "vlm_grpo"}
     ds_type = ds_config.get("type")
     if ds_type not in valid_types:
         raise ValueError(
             f"Invalid dataset type: '{ds_type}'. Must be one of: {sorted(valid_types)}"
         )
 
+    # GRPO is online — it doesn't need offline eval. Default test_size to a
+    # tiny value so the pipeline still produces a non-empty eval shard, but
+    # eval_strategy="no" in DEFAULT_GRPO means it's never iterated.
+    default_test_size = 0.01 if ds_type in ("grpo", "vlm_grpo") else 0.2
+
     dataset = DatasetLoader(
         dataset_path=final_dataset_path,
         dataset_type=ds_type,
         limit=ds_config.get("limit"),
-        test_size=ds_config.get("test_size", 0.2),
+        test_size=ds_config.get("test_size", default_test_size),
         subset=ds_config.get("subset"),
         image_root=ds_config.get("image_root"),
         cache_dataset=ds_config.get("cache_dataset", False),
@@ -109,6 +114,8 @@ def parse_job_config(config_input: str) -> JobConfig:
             "sft": "DEFAULT_SFT",
             "dpo": "DEFAULT_DPO",
             "vlm_sft": "DEFAULT_VLM_SFT",
+            "grpo": "DEFAULT_GRPO",
+            "vlm_grpo": "DEFAULT_VLM_GRPO",
         }
         if training_type not in training_type_to_config:
             raise ValueError(f"Unknown training type: {training_type}")
@@ -253,6 +260,22 @@ def parse_job_config(config_input: str) -> JobConfig:
     # === Benchmark evaluation config ===
     benchmark_configs = config_dict.get("benchmarks")
 
+    # === GRPO-specific top-level blocks ===
+    # These are only meaningful for training_type in ("grpo", "vlm_grpo") but
+    # we parse them unconditionally so customers get a clear error if they
+    # accidentally set one on a non-GRPO run.
+    rewards_cfg = config_dict.get("rewards")
+    rl_env_cfg = config_dict.get("rl_env")
+    grpo_rollout_cfg = config_dict.get("grpo_rollout")
+
+    if training_type not in ("grpo", "vlm_grpo"):
+        for key, val in (("rewards", rewards_cfg), ("rl_env", rl_env_cfg), ("grpo_rollout", grpo_rollout_cfg)):
+            if val is not None:
+                raise ValueError(
+                    f"Config key `{key}` is only valid for training_type in "
+                    f"('grpo', 'vlm_grpo'); got training_type={training_type!r}."
+                )
+
     return JobConfig(
         job_name=project_name,
         model_name=config_dict.get("model_name", "LFM2-1.2B"),
@@ -261,4 +284,8 @@ def parse_job_config(config_input: str) -> JobConfig:
         training_config=final_training_config,
         peft_config=peft_config,
         benchmark_configs=benchmark_configs,
+        rewards=rewards_cfg,
+        rl_env=rl_env_cfg,
+        grpo_rollout=grpo_rollout_cfg,
+        config_dir=str(path_obj.parent.resolve()),
     )

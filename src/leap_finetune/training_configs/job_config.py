@@ -14,11 +14,21 @@ from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 class JobConfig:
     job_name: str
     model_name: str = "LFM2-1.2B"
-    training_type: Literal["sft", "dpo", "vlm_sft"] = "sft"
+    training_type: Literal["sft", "dpo", "vlm_sft", "grpo", "vlm_grpo"] = "sft"
     dataset: DatasetLoader | tuple[Dataset, Dataset] | None = None
     training_config: TrainingConfig = TrainingConfig.DEFAULT_SFT
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
     benchmark_configs: dict | None = None
+    # GRPO-specific: reward function specs (raw YAML list/dict, resolved on the
+    # driver before being passed to the trainer). None for non-GRPO runs.
+    rewards: list | dict | None = None
+    # GRPO-specific: OpenEnv rl_env block. None when no env is used.
+    rl_env: dict | None = None
+    # GRPO-specific: server-mode vLLM rollout block with dedicated_gpus etc.
+    grpo_rollout: dict | None = None
+    # Absolute path to the directory containing the YAML config file — used as
+    # the base for resolving relative reward file paths on the driver.
+    config_dir: str | None = None
 
     def __post_init__(self):
         self._validate_job_name()
@@ -52,6 +62,11 @@ class JobConfig:
             "dataset": dataset_to_use,
             "peft_config": self.peft_config.value if self.peft_config else None,
             "benchmark_configs": self.benchmark_configs,
+            # GRPO-specific fields — carried through to workers when set
+            "rewards": self.rewards,
+            "rl_env": self.rl_env,
+            "grpo_rollout": self.grpo_rollout,
+            "config_dir": self.config_dir,
         }
 
     def print_config_summary(self):

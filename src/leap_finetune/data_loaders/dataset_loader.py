@@ -16,7 +16,7 @@ class DatasetLoader:
     """Dataset loader for training and testing datasets."""
 
     dataset_path: str
-    dataset_type: Literal["sft", "dpo", "vlm_sft"]
+    dataset_type: Literal["sft", "dpo", "vlm_sft", "grpo", "vlm_grpo"]
     limit: int | None = None
     split: str = "train"
     test_size: float = 0.2

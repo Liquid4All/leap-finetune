@@ -18,3 +18,5 @@ training_config:
 peft_config:
   extends: "DEFAULT_LORA"
   use_peft: true
+  # To continue training from a previously saved LoRA adapter, set:
+  # adapter_path: "/path/to/saved/adapter"

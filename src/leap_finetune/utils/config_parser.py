@@ -133,6 +133,8 @@ def parse_job_config(config_input: str) -> JobConfig:
 
     use_peft = peft_dict.get("use_peft", None) if peft_dict else None
 
+    adapter_path = peft_dict.get("adapter_path") if peft_dict else None
+
     if use_peft is False:
         peft_config = None
     else:
@@ -141,6 +143,7 @@ def parse_job_config(config_input: str) -> JobConfig:
             "base", None
         )
         peft_config_dict.pop("use_peft", None)
+        peft_config_dict.pop("adapter_path", None)
 
         if base_peft_name:
             base_peft_map = {member.name: member for member in PeftConfig}
@@ -249,6 +252,8 @@ def parse_job_config(config_input: str) -> JobConfig:
 
     final_training_config.value["output_dir"] = str(final_output_dir)
     final_training_config.value["leap_run_name_template"] = run_name
+    if adapter_path:
+        final_training_config.value["adapter_path"] = adapter_path
 
     # === Benchmark evaluation config ===
     benchmark_configs = config_dict.get("benchmarks")

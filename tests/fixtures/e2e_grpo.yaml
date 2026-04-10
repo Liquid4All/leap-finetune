@@ -24,10 +24,9 @@ training_config:
   save_strategy: "no"
   eval_strategy: "no"
   logging_steps: 1
-  # Colocate vLLM — low memory budget for a small model + tiny group
-  vllm_mode: "colocate"
-  vllm_gpu_memory_utilization: 0.3
-  vllm_enable_sleep_mode: true
+  # vLLM disabled in CI: public vllm 0.19 is ABI-incompatible with torch 2.11.
+  # Enable once the Liquid4All fork or upstream PR #30566 lands a compatible build.
+  use_vllm: false
 
 peft_config:
   use_peft: false

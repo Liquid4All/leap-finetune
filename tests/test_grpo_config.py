@@ -80,10 +80,11 @@ class TestParseGRPOConfig:
         }
         jc = parse_job_config(write_config(config, tmp_path))
         assert jc.training_type == "grpo"
-        assert jc.rewards == {
-            "funcs": ["./rewards/length.py::length_reward"],
-            "weights": [1.0],
-        }
+        # Paths are pre-resolved to absolute by config_parser so Ray workers
+        # (whose CWD is a sandbox) can find the reward files.
+        assert len(jc.rewards["funcs"]) == 1
+        assert jc.rewards["funcs"][0].endswith("rewards/length.py::length_reward")
+        assert jc.rewards["weights"] == [1.0]
         assert jc.rl_env is None
         assert jc.grpo_rollout is None
         assert jc.config_dir == str(tmp_path.resolve())

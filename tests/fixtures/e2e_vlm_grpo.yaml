@@ -24,9 +24,7 @@ training_config:
   save_strategy: "no"
   eval_strategy: "no"
   logging_steps: 1
-  vllm_mode: "colocate"
-  vllm_gpu_memory_utilization: 0.25
-  vllm_enable_sleep_mode: true
+  use_vllm: false
 
 peft_config:
   use_peft: false

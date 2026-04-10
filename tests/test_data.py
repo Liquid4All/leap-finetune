@@ -395,23 +395,23 @@ class TestTokenizationDPO:
     def test_dpo_tokenization_content(self, dpo_datasets, tokenizer):
         train_ds, _ = dpo_datasets
         row = next(iter(train_ds.iter_rows()))
-        assert "prompt_input_ids" in row
-        assert "chosen_input_ids" in row
-        assert "rejected_input_ids" in row
+        assert "prompt_ids" in row
+        assert "chosen_ids" in row
+        assert "rejected_ids" in row
 
         # All sequences must be non-empty
-        assert len(row["prompt_input_ids"]) > 0, "prompt_input_ids is empty"
-        assert len(row["chosen_input_ids"]) > 0, "chosen_input_ids is empty"
-        assert len(row["rejected_input_ids"]) > 0, "rejected_input_ids is empty"
+        assert len(row["prompt_ids"]) > 0, "prompt_ids is empty"
+        assert len(row["chosen_ids"]) > 0, "chosen_ids is empty"
+        assert len(row["rejected_ids"]) > 0, "rejected_ids is empty"
 
         # Chosen and rejected must differ (otherwise DPO is meaningless)
-        assert row["chosen_input_ids"] != row["rejected_input_ids"], (
+        assert row["chosen_ids"] != row["rejected_ids"], (
             "chosen and rejected have identical token IDs"
         )
 
         # All token IDs must be within vocab range
         vocab_size = tokenizer.vocab_size
-        for name in ("prompt_input_ids", "chosen_input_ids", "rejected_input_ids"):
+        for name in ("prompt_ids", "chosen_ids", "rejected_ids"):
             for token_id in row[name]:
                 assert 0 <= token_id < vocab_size, (
                     f"{name} has token ID {token_id} out of vocab range [0, {vocab_size})"
@@ -422,10 +422,10 @@ class TestTokenizationDPO:
         eos_id = tokenizer.eos_token_id
         # Check multiple rows, not just the first
         for i, row in enumerate(train_ds.iter_rows()):
-            assert row["chosen_input_ids"][-1] == eos_id, (
+            assert row["chosen_ids"][-1] == eos_id, (
                 f"Row {i}: chosen missing EOS token"
             )
-            assert row["rejected_input_ids"][-1] == eos_id, (
+            assert row["rejected_ids"][-1] == eos_id, (
                 f"Row {i}: rejected missing EOS token"
             )
             if i >= 9:

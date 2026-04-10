@@ -12,6 +12,38 @@ from leap_finetune.utils.config_resolver import resolve_config_path
 
 logger = logging.getLogger(__name__)
 
+_REWARD_SEP = "::"
+
+
+def _resolve_reward_paths_to_absolute(rewards_cfg):
+    """Turn relative reward file paths into absolute paths.
+
+    Called on the driver (where CWD is the repo root) so that Ray Train
+    workers — whose CWD is a sandbox dir — can still find the files.
+    """
+
+    def _abs(spec: str) -> str:
+        if _REWARD_SEP not in spec:
+            return spec
+        path_str, sep, name = spec.partition(_REWARD_SEP)
+        p = pathlib.Path(path_str.strip())
+        if not p.is_absolute():
+            p = pathlib.Path.cwd() / p
+            if p.exists():
+                return f"{p.resolve()}{sep}{name}"
+        return spec
+
+    if isinstance(rewards_cfg, list):
+        return [_abs(s) if isinstance(s, str) else s for s in rewards_cfg]
+    if isinstance(rewards_cfg, dict):
+        out = dict(rewards_cfg)
+        if "funcs" in out:
+            out["funcs"] = [_abs(s) if isinstance(s, str) else s for s in out["funcs"]]
+        if "recipe" in out and isinstance(out["recipe"], str):
+            out["recipe"] = _abs(out["recipe"])
+        return out
+    return rewards_cfg
+
 
 def generate_run_name(
     model_name: str,
@@ -265,6 +297,10 @@ def parse_job_config(config_input: str) -> JobConfig:
     # we parse them unconditionally so customers get a clear error if they
     # accidentally set one on a non-GRPO run.
     rewards_cfg = config_dict.get("rewards")
+    # Pre-resolve relative reward paths to absolute while CWD is still the
+    # repo root (before Ray workers change it to a sandbox dir).
+    if rewards_cfg is not None:
+        rewards_cfg = _resolve_reward_paths_to_absolute(rewards_cfg)
     rl_env_cfg = config_dict.get("rl_env")
     grpo_rollout_cfg = config_dict.get("grpo_rollout")
 

@@ -229,10 +229,12 @@ def tokenize_dpo(
         chosen_input_ids = chosen_input_ids[:max_completion_length]
         rejected_input_ids = rejected_input_ids[:max_completion_length]
 
+    # Column names must match TRL v1's DPO data collator:
+    # prompt_ids, chosen_ids, rejected_ids (changed from *_input_ids in TRL 0.x)
     return {
-        "prompt_input_ids": list(prompt_input_ids),
-        "chosen_input_ids": list(chosen_input_ids),
-        "rejected_input_ids": list(rejected_input_ids),
+        "prompt_ids": list(prompt_input_ids),
+        "chosen_ids": list(chosen_input_ids),
+        "rejected_ids": list(rejected_input_ids),
     }
 
 
@@ -246,7 +248,7 @@ def tokenize_dpo_dataset(
     Tokenize a DPO dataset via Ray .map().
 
     Returns a Ray Dataset with columns:
-      prompt_input_ids, chosen_input_ids, rejected_input_ids
+      prompt_ids, chosen_ids, rejected_ids (TRL v1 column names)
     """
     ds = ds.map(
         tokenize_dpo,
@@ -261,9 +263,9 @@ def tokenize_dpo_dataset(
     rows = list(ds.iter_rows())
     features = Features(
         {
-            "prompt_input_ids": Sequence(Value("int64")),
-            "chosen_input_ids": Sequence(Value("int64")),
-            "rejected_input_ids": Sequence(Value("int64")),
+            "prompt_ids": Sequence(Value("int64")),
+            "chosen_ids": Sequence(Value("int64")),
+            "rejected_ids": Sequence(Value("int64")),
         }
     )
     hf_ds = Dataset.from_list(rows, features=features)

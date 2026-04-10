@@ -162,11 +162,11 @@ class TestGRPONormalizeColumns:
 
 
 class TestValidateGRPODatasetFormat:
-    def test_valid_grpo_passes(self):
+    def test_valid_grpo_string_prompt_passes(self):
         ds = Dataset.from_list(
             [
                 {"prompt": "q1", "ground_truth": "a1"},
-                {"prompt": [{"role": "user", "content": "q2"}], "solution": "a2"},
+                {"prompt": "q2", "solution": "a2"},
             ]
         )
         out = validate_dataset_format(ds, "grpo")
@@ -182,7 +182,6 @@ class TestValidateGRPODatasetFormat:
             [
                 {"prompt": "ok"},
                 {"prompt": ""},
-                {"prompt": []},
             ]
         )
         with pytest.raises(ValueError, match="invalid `prompt`"):

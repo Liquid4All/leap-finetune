@@ -43,6 +43,7 @@ VLM_SFT_EXCLUDED_KEYS = {
     "lr_multipliers",
     "vision_encoder_lr_multiplier",
     "resume_from_checkpoint",
+    "adapter_path",
 }
 
 # Per-component LR multipliers (applied to base learning_rate).

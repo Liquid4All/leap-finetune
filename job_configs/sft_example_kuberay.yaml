@@ -1,4 +1,4 @@
-project_name: "my_sft_lora_project"
+project_name: "my_sft_kuberay"
 model_name: "LFM2-1.2B"
 training_type: "sft"
 
@@ -18,5 +18,15 @@ training_config:
 peft_config:
   extends: "DEFAULT_LORA"
   use_peft: true
-  # To continue training from a previously saved LoRA adapter, set:
-  # adapter_path: "/path/to/saved/adapter"
+
+kuberay:
+  image: "your-registry.com/leap-finetune:latest"
+  gpu_count: 4
+  gpu_type: "nvidia.com/gpu"
+  namespace: "default"
+  cpu: 8
+  memory: "64Gi"
+  output_pvc: "training-outputs"
+  output_dir: "/outputs"
+  env:
+    HF_TOKEN: "hf_your_token_here"

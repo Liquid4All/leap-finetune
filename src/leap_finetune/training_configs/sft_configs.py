@@ -19,6 +19,7 @@ SFT_EXCLUDED_KEYS = {
     "completion_only_loss",
     "assistant_only_loss",
     "resume_from_checkpoint",
+    "adapter_path",
 }
 
 

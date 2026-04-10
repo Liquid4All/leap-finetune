@@ -1,17 +1,20 @@
+import logging
 import pathlib
 import re
 from datetime import datetime
 
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, PeftModel, get_peft_model
 from transformers import AutoTokenizer, PreTrainedModel, ProcessorMixin
 
 from leap_finetune.training_configs import PeftConfig
+
+logger = logging.getLogger(__name__)
 
 
 def apply_peft_to_model(
     model: PreTrainedModel, peft_config: PeftConfig | LoraConfig
 ) -> PreTrainedModel:
-    print("Using PEFT for finetuning")
+    logger.info("Applying fresh LoRA adapter")
 
     # Handle enum, _CustomPeftConfig, and direct LoraConfig
     if hasattr(peft_config, "value"):
@@ -20,6 +23,18 @@ def apply_peft_to_model(
         config = peft_config
 
     peft_model = get_peft_model(model, config)
+    peft_model.print_trainable_parameters()
+
+    return peft_model
+
+
+def load_peft_adapter(model: PreTrainedModel, adapter_path: str) -> PreTrainedModel:
+    logger.info("Loading existing LoRA adapter from %s", adapter_path)
+    adapter_dir = pathlib.Path(adapter_path)
+    if not adapter_dir.exists():
+        raise FileNotFoundError(f"Adapter not found: {adapter_path}")
+
+    peft_model = PeftModel.from_pretrained(model, adapter_path, is_trainable=True)
     peft_model.print_trainable_parameters()
 
     return peft_model

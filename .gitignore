@@ -25,3 +25,6 @@ scripts/
 
 # Tokenization cache
 .cache/
+
+# Claude Code
+.claude/

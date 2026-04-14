@@ -49,6 +49,48 @@ def score_short_answer(
     return 1.0 if ground_truth.lower().strip() in prediction.lower().strip() else 0.0
 
 
+_GSM8K_MARKER = re.compile(r"####\s*([\-\+]?[\d,\.]+)")
+_GSM8K_ANY_NUMBER = re.compile(r"([\-\+]?[\d,\.]+)")
+
+
+def _normalize_gsm8k_number(s: str) -> str | None:
+    if s is None:
+        return None
+    s = str(s).strip().rstrip(".").replace(",", "").replace("$", "").replace(" ", "")
+    if not s or not re.search(r"\d", s):
+        return None
+    try:
+        return str(float(s))
+    except (ValueError, TypeError):
+        return s or None
+
+
+def _extract_gsm8k_answer(text: str) -> str | None:
+    if not text:
+        return None
+    tail = text[-1024:]
+    matches = _GSM8K_MARKER.findall(tail)
+    if matches:
+        return _normalize_gsm8k_number(matches[-1])
+    matches = _GSM8K_ANY_NUMBER.findall(tail)
+    if matches:
+        return _normalize_gsm8k_number(matches[-1])
+    return None
+
+
+def score_gsm8k(prediction: str, ground_truth: str, **_) -> float:
+    """1.0 if the numeric answer extracted from prediction matches ground truth.
+
+    Accepts either a clean number or a full chain-of-thought ending in
+    ``#### N`` on either side.
+    """
+    gt = _extract_gsm8k_answer(ground_truth)
+    pred = _extract_gsm8k_answer(prediction)
+    if gt is None or pred is None:
+        return 0.0
+    return 1.0 if gt == pred else 0.0
+
+
 def score_mcq_gen(prediction: str, ground_truth: str, **_) -> float:
     """1.0 if extracted MCQ letter matches ground truth."""
     if prediction.strip() == ground_truth.strip():
@@ -120,6 +162,7 @@ _METRIC_DISPATCH: dict[str, callable] = {
     "grounding_iou": score_grounding_iou,
     "short_answer": score_short_answer,
     "mcq_gen": score_mcq_gen,
+    "gsm8k": score_gsm8k,
     "bleu": score_bleu,
     "rouge_l": score_rouge_l,
 }

@@ -34,9 +34,7 @@ from leap_finetune.utils.vllm_server import (
 
 
 def ray_trainer(job_config: dict) -> None:
-    """
-    Runs on each Ray worker after loading config, setting seed, and calling a training loop
-    """
+    """Entry point: init Ray, build datasets, launch the TorchTrainer."""
 
     training_type = job_config["training_type"]
     output_dir = job_config["training_config"]["output_dir"]
@@ -47,35 +45,47 @@ def ray_trainer(job_config: dict) -> None:
     if not cuda.is_available():
         raise ValueError("No GPU available for training")
 
+    ray_address = os.environ.get("RAY_ADDRESS", "").strip()
+    is_multi_node = bool(ray_address)
+
     if not ray.is_initialized():
-        # Force local init and avoid accidental cluster connects
-        for key in ("RAY_ADDRESS", "RAY_HEAD_IP", "RAY_HEAD_NODE_ADDRESS", "RAY_PORT"):
-            os.environ.pop(key, None)
+        if is_multi_node:
+            runtime_env = RuntimeEnv(
+                working_dir=str(RUNTIME_DIR),
+                env_vars=get_ray_env_vars(ray_temp_dir=None, multi_node=True),
+                worker_process_setup_hook=worker_process_setup_hook,
+            )
+            ray.init(
+                address=ray_address,
+                runtime_env=runtime_env,
+                ignore_reinit_error=True,
+            )
+            print(f"\nConnected to multi-node Ray cluster at {ray_address}")
+        else:
+            for key in ("RAY_ADDRESS", "RAY_HEAD_IP", "RAY_HEAD_NODE_ADDRESS", "RAY_PORT"):
+                os.environ.pop(key, None)
 
-        ray_temp_dir = select_ray_temp_dir(os.path.expanduser("~/ray_temp"))
-        spill_dir = select_object_spilling_dir(ray_temp_dir)
+            ray_temp_dir = select_ray_temp_dir(os.path.expanduser("~/ray_temp"))
+            spill_dir = select_object_spilling_dir(ray_temp_dir)
 
-        runtime_env = RuntimeEnv(
-            working_dir=str(RUNTIME_DIR),
-            env_vars=get_ray_env_vars(ray_temp_dir),
-            worker_process_setup_hook=worker_process_setup_hook,
-        )
+            runtime_env = RuntimeEnv(
+                working_dir=str(RUNTIME_DIR),
+                env_vars=get_ray_env_vars(ray_temp_dir),
+                worker_process_setup_hook=worker_process_setup_hook,
+            )
 
-        # Object store: 40% of available memory (not total, to avoid OOM on shared nodes)
-        object_store_mem = int(psutil.virtual_memory().available * 0.4)
+            # 40% of available RAM, not total, to avoid OOM on shared nodes.
+            object_store_mem = int(psutil.virtual_memory().available * 0.4)
 
-        ray.init(
-            address="local",
-            runtime_env=runtime_env,
-            _temp_dir=ray_temp_dir,
-            object_spilling_directory=spill_dir,
-            object_store_memory=object_store_mem,
-        )
+            ray.init(
+                address="local",
+                runtime_env=runtime_env,
+                _temp_dir=ray_temp_dir,
+                object_spilling_directory=spill_dir,
+                object_store_memory=object_store_mem,
+            )
 
-        # Also suppress on driver (must be after ray.init)
         worker_process_setup_hook()
-
-        # Disable progress bar name truncation warning
         ray.data.DataContext.get_current().enable_progress_bar_name_truncation = False
 
     train_loop = TRAINING_LOOPS.get(training_type)
@@ -85,17 +95,14 @@ def ray_trainer(job_config: dict) -> None:
             f"Available: {list(TRAINING_LOOPS.keys())}"
         )
 
-    # Prepare datasets using Ray Data
     dataset_config = job_config["dataset"]
     training_config = job_config["training_config"]
 
-    # Load tokenizer on driver for pre-tokenization (lightweight, no model weights)
     tokenizer = load_tokenizer(job_config["model_name"])
 
     if isinstance(dataset_config, DatasetLoader):
-        # Pre-tokenize SFT and DPO on driver; VLM-SFT and GRPO variants pass
-        # through raw (VLM-SFT needs raw images for collation; GRPO generates
-        # online from raw prompts).
+        # SFT and DPO pre-tokenize on the driver; VLM-SFT and GRPO variants
+        # need raw rows (images / online generation).
         use_pretokenize = training_type in ("sft", "dpo")
         train_ds, eval_ds = create_ray_datasets(
             dataset_config,
@@ -104,7 +111,6 @@ def ray_trainer(job_config: dict) -> None:
         )
         datasets = {"train": train_ds, "eval": eval_ds}
     elif isinstance(dataset_config, tuple):
-        # Legacy path: pre-loaded (Dataset, Dataset) tuple (deprecate eventually)
         train_hf, eval_hf = dataset_config
         train_ds = ray.data.from_huggingface(train_hf)
         eval_ds = ray.data.from_huggingface(eval_hf)
@@ -112,39 +118,34 @@ def ray_trainer(job_config: dict) -> None:
     else:
         raise ValueError(f"Invalid dataset type: {type(dataset_config)}")
 
-    # Training config
     train_loop_config = {
         "model_name": job_config["model_name"],
         "job_name": job_config.get("job_name", "leap-ft-run"),
         "train_config": training_config,
         "peft_config": job_config["peft_config"],
         "benchmark_configs": job_config.get("benchmark_configs"),
-        # GRPO-specific fields; None for other training types
         "rewards": job_config.get("rewards"),
         "rl_env": job_config.get("rl_env"),
         "grpo_rollout": job_config.get("grpo_rollout"),
         "config_dir": job_config.get("config_dir"),
     }
 
-    # === GRPO server-mode vLLM rollout plumbing ===
-    # When `vllm_mode: server` + `grpo_rollout.dedicated_gpus > 0`, carve off
-    # dedicated GPUs for the vLLM server and launch `trl vllm-serve` on them
-    # before training starts. The remaining GPUs are used for training.
     is_grpo = training_type in ("grpo", "vlm_grpo")
-    training_num_gpus = num_gpus
+    training_num_gpus = int(ray.cluster_resources().get("GPU", num_gpus))
     grpo_rollout_cfg = job_config.get("grpo_rollout") or {}
     vllm_mode = training_config.get("vllm_mode", "colocate")
 
     if is_grpo and vllm_mode == "server" and grpo_rollout_cfg.get("dedicated_gpus"):
+        if is_multi_node:
+            raise NotImplementedError(
+                "vLLM server mode + dedicated_gpus is single-node only. "
+                "Use vllm_mode: colocate for multi-node GRPO."
+            )
         vllm_gpus, train_gpus = plan_gpu_split(num_gpus, grpo_rollout_cfg)
 
-        # Restrict the training pool: Ray Train workers will only see these
-        # GPUs. Setting CUDA_VISIBLE_DEVICES *before* spawning Ray workers
-        # propagates through ray.init's runtime_env.
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in train_gpus)
         training_num_gpus = len(train_gpus)
 
-        # Resolve the server host (supports "auto" for SLURM/localhost)
         host = resolve_server_host(training_config.get("vllm_server_host"))
         port = int(training_config.get("vllm_server_port", 8000))
         model_id = _resolve_model_id(job_config["model_name"])
@@ -153,29 +154,24 @@ def ray_trainer(job_config: dict) -> None:
             model_id=model_id,
             vllm_gpu_ids=vllm_gpus,
             grpo_rollout_cfg=grpo_rollout_cfg,
-            host="0.0.0.0",  # bind to all interfaces so workers can reach it
+            host="0.0.0.0",
             port=port,
         )
-        # Propagate the resolved endpoint into training_config so each
-        # Ray Train worker's GRPOConfig has the right server URL.
         training_config["vllm_server_base_url"] = f"http://{host}:{port}"
         training_config["vllm_server_host"] = host
         training_config["vllm_server_port"] = port
         print(
-            f"[GRPO] vLLM server running on GPU(s) {vllm_gpus} at "
-            f"{training_config['vllm_server_base_url']}; "
-            f"training on GPU(s) {train_gpus}"
+            f"[GRPO] vLLM server on GPU(s) {vllm_gpus} at "
+            f"{training_config['vllm_server_base_url']}; training on {train_gpus}"
         )
-        del server_handle  # atexit hook keeps the reference
+        del server_handle
 
     scale_config = ScalingConfig(
         num_workers=training_num_gpus, use_gpu=True, resources_per_worker={"GPU": 1.0}
     )
 
-    # GRPO requires each worker to see the *full* dataset so TRL's
-    # RepeatSampler + accelerate can handle per-rank distribution correctly
-    # (bypassing Ray's default round-robin split). See
-    # grpo_trainer._get_train_sampler for the rationale.
+    # GRPO: each worker needs the full dataset — TRL's RepeatSampler
+    # handles per-rank striding, so we bypass Ray's default split.
     dataset_config_kwargs = {}
     if is_grpo:
         dataset_config_kwargs["dataset_config"] = DataConfig(datasets_to_split=[])
@@ -190,7 +186,11 @@ def ray_trainer(job_config: dict) -> None:
         ),
     )
 
-    print(f"\nTraining on {num_gpus} GPUs")
+    if is_multi_node:
+        num_nodes = len([n for n in ray.nodes() if n.get("Alive", False)])
+        print(f"\nTraining on {training_num_gpus} GPUs across {num_nodes} nodes")
+    else:
+        print(f"\nTraining on {training_num_gpus} GPUs")
 
     trainer = TorchTrainer(
         train_loop_per_worker=train_loop,
@@ -205,7 +205,6 @@ def ray_trainer(job_config: dict) -> None:
     result = trainer.fit()
 
     print_next_steps_panel(output_dir)
-    # Ensure Ray cleans up resources promptly to avoid post-training hangs
     try:
         ray.shutdown()
     except Exception:

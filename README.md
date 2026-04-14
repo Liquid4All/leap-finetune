@@ -250,184 +250,57 @@ When training is done, you can bundle your output checkpoint with `leap-bundle` 
 
 ### GRPO (Group Relative Policy Optimization)
 
-GRPO trains a policy with RL rewards. `leap-finetune` wraps TRL v1's
-`GRPOTrainer` with vLLM rollouts (colocate by default, server mode
-supported) and a plain-Python rewards directory — same single-YAML workflow
-as SFT/DPO.
+GRPO trains with RL rewards on top of TRL v1's `GRPOTrainer`, wrapped
+with vLLM rollouts and a plain-Python rewards directory. Same single
+YAML workflow as SFT/DPO. Supports both text (`training_type: "grpo"`)
+and VLM (`training_type: "vlm_grpo"`); the VLM trainer applies the same
+per-component learning rates as VLM SFT so RL updates don't corrupt
+pretrained vision features.
 
-The primary path is **RLVR** (Reinforcement Learning with Verifiable
-Rewards): the reward for each completion is computed by a pure Python
-function. This covers math (check against a known answer), code (run
-tests), grounding (IoU vs ground-truth bbox), format (regex / schema),
-and any other task where a completion can be scored without an interactive
-environment.
+GRPO datasets reuse the SFT `messages` format — the loader auto-splits
+each row into `prompt` (non-assistant turns) and `solution` (last
+assistant text), so one parquet drives both SFT warm-up and GRPO with
+no reshaping. Any extra columns are forwarded to rewards as kwargs.
 
-#### Dataset format
+**Rewards.** Composed from a single YAML block pointing at Python files
+in [`rewards/`](./rewards/README.md) — either individual primitives
+(`accuracy.py`, `length.py`, ...) or a whole task recipe
+(`rewards/tasks/<task>/recipe.py::<Recipe>`). Shipped recipes cover VLM
+grounding (IoU-F1 and CIoU-F1), GSM8K, MCQA, and IFEval. Adding a reward
+is a plain Python function; extending a shipped recipe is regular
+subclassing. See [`rewards/README.md`](./rewards/README.md) for the API
+contract and the extension pattern.
 
-Only a `prompt` column is required. It can be a plain string or a
-conversational messages list. Any other columns (e.g. `solution`,
-`ground_truth`, `bbox_gt`) are forwarded to your reward functions as
-kwargs.
+**vLLM rollouts.** Two modes, both driven from YAML:
 
-```json
-{ "prompt": "What is 7 × 9?", "solution": "63" }
-```
+- **Colocate** (default) — vLLM runs inside each training worker and
+  shares GPU memory. Works on single node and **scales to multi-node**
+  out of the box.
+- **Server** — `trl vllm-serve` runs on a dedicated GPU and training
+  workers reach it over HTTP. Currently **single-node only**; multi-node
+  support is tracked and will land in a follow-up.
 
-or conversational:
+**Example configs** — copy and edit instead of writing YAML from scratch:
 
-```json
-{ "prompt": [{"role": "user", "content": "What is 7 × 9?"}], "solution": "63" }
-```
-
-#### Rewards — customer extension point
-
-All rewards live in the top-level [`rewards/`](./rewards/) directory as
-plain Python files:
-
-- **Individual reward functions** (`accuracy.py`, `think_format.py`,
-  `length.py`, `json_schema.py`, `regex_match.py`) — stack them in YAML
-  under `rewards.funcs: [...]` with optional `weights:`.
-- **Recipes** (`vlm_grounding.py`) — a Python class that bundles multiple
-  reward functions, their weights, and the task's required dataset columns
-  into one file. Reference a whole task's reward stack with one YAML line:
-  `rewards.recipe: "./rewards/vlm_grounding.py::VLMGroundingRecipe"`.
-
-To write your own individual reward, drop a `.py` file in `rewards/` with
-a function of signature `fn(completions, **kwargs) -> list[float]` and
-reference it by path. To write your own recipe, subclass the `Recipe`
-base class and override `rewards()`. To **extend** a shipped recipe, use
-the `load_recipe()` helper to import it as a parent class and subclass
-with regular Python inheritance — see [`rewards/README.md`](./rewards/README.md)
-for the full extension pattern.
-
-No decorators, no registry, no class hierarchy to learn beyond the
-four-attribute `Recipe` base class.
-
-```python
-# rewards/my_custom.py
-def my_reward(completions, **kwargs):
-    """Return 1.0 for completions over 50 chars, 0.0 otherwise."""
-    return [
-        1.0 if (c[0]["content"] if isinstance(c, list) else c) and len(c[0]["content"]) > 50 else 0.0
-        for c in completions
-    ]
-```
-
-```yaml
-# job_configs/my_grpo.yaml
-project_name: "my_math_grpo"
-model_name: "LFM2-1.2B"
-training_type: "grpo"
-
-dataset:
-  path: "trl-lib/DeepMath-103K"
-  type: "grpo"
-
-rewards:
-  funcs:
-    - "./rewards/accuracy.py::accuracy_reward"
-    - "./rewards/my_custom.py::my_reward"
-  weights: [1.0, 0.2]   # optional; defaults to 1.0 each
-
-training_config:
-  extends: "DEFAULT_GRPO"
-  num_generations: 8
-  max_completion_length: 512
-```
+- [`job_configs/grpo_example.yaml`](./job_configs/grpo_example.yaml) —
+  text GRPO quickstart, single node, GSM8K recipe.
+- [`job_configs/vlm_grpo_grounding_example.yaml`](./job_configs/vlm_grpo_grounding_example.yaml)
+  — VLM GRPO with the visual-grounding recipe, 2-node colocate demo.
 
 Launch the same way as SFT/DPO:
 
 ```bash
-uv run leap-finetune job_configs/my_grpo.yaml
+uv run leap-finetune job_configs/grpo_example.yaml
 ```
 
-#### vLLM rollouts — colocate vs server
-
-TRL v1 supports two vLLM modes and we expose both through YAML. The default
-is **colocate** — vLLM runs inside each training worker and shares GPU
-memory. This works on a single 1×H100 with no extra setup.
-
-```yaml
-training_config:
-  extends: "DEFAULT_GRPO"
-  vllm_mode: "colocate"                 # default
-  vllm_gpu_memory_utilization: 0.3
-  vllm_enable_sleep_mode: true          # offload vLLM during optimizer step
-```
-
-For bigger models or higher throughput, use **server mode** — `trl
-vllm-serve` runs on a dedicated GPU (or a dedicated node) and training
-workers reach it over HTTP. The leap-finetune driver launches and tears
-down the server for you:
-
-```yaml
-grpo_rollout:
-  dedicated_gpus: 1
-  tensor_parallel_size: 1
-  dtype: "bfloat16"
-
-training_config:
-  extends: "DEFAULT_GRPO"
-  vllm_mode: "server"
-  vllm_server_host: "auto"   # resolves to SLURMD_NODENAME / hostname
-  vllm_server_port: 8000
-```
-
-Requires ≥2 GPUs in total (1 dedicated to vLLM, the rest for training).
-Scales cleanly to multi-node SLURM — set `grpo_rollout.dedicated_nodes`
-instead of `dedicated_gpus` for the two-group `srun` layout.
-
-#### VLM GRPO
-
-Use `training_type: "vlm_grpo"` and `extends: "DEFAULT_VLM_GRPO"`. The VLM
-trainer applies the same per-component learning rates as VLM SFT (vision
-encoder at 0.1× base LR) so you can run RL on a fine-tuned LFM2-VL without
-corrupting the pretrained vision features.
-
-```yaml
-project_name: "vlm_grounding_grpo"
-model_name: "LFM2-VL-1.6B"
-training_type: "vlm_grpo"
-
-dataset:
-  path: "liquidai/visual-grounding-bbox-demo"
-  type: "vlm_grpo"
-  image_root: "/data/images"
-
-# One line for the whole grounding reward stack:
-# json format + schema + CIoU + Hungarian matching with sane default weights.
-rewards:
-  recipe: "./rewards/vlm_grounding.py::VLMGroundingRecipe"
-
-training_config:
-  extends: "DEFAULT_VLM_GRPO"
-  num_generations: 4
-```
-
-The dataset needs `prompt`, `bbox_gt` (single box as `[x1, y1, x2, y2]`)
-and `bboxes_gt` (list of boxes for multi-object scenes). The model is
-trained to output `{"bboxes": [[x1, y1, x2, y2], ...]}`.
-
-See the shipped example configs in `job_configs/`:
-- [`grpo_example.yaml`](./job_configs/grpo_example.yaml) — text GRPO colocate quickstart
-- [`grpo_server_mode_example.yaml`](./job_configs/grpo_server_mode_example.yaml) — dedicated vLLM GPU
-- [`vlm_grpo_grounding_example.yaml`](./job_configs/vlm_grpo_grounding_example.yaml) — VLM GRPO + grounding bundle
-
-#### Advanced: agentic environments (OpenEnv)
-
-RLVR with reward functions is strictly simpler and more efficient for any
-task where a completion can be scored without an interactive environment
-— math, code, grounding, format, schema compliance, etc. Use the `rewards:`
-block above for those.
-
-For tasks where the **environment state evolves based on agent actions**
-— web browsing, real tool use, game simulators, multi-turn reasoning with
-stateful feedback — `leap-finetune` also supports
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv), the Gym-style
-HF-Hub-distributed environment standard. This is an advanced / optional
-path: install `uv sync --extra rl-env` and add `rl_env:` to your YAML.
-See [`src/leap_finetune/rl_envs/README.md`](./src/leap_finetune/rl_envs/README.md)
-for details if you're sure you need it.
+**Agentic environments (advanced).** For tasks where the environment
+state evolves from agent actions (browsing, tool use, game simulators,
+stateful multi-turn), `leap-finetune` also supports
+[OpenEnv](https://github.com/meta-pytorch/OpenEnv) via an optional
+`rl_env:` block. Install with `uv sync --extra rl-env` and see
+[`src/leap_finetune/rl_envs/README.md`](./src/leap_finetune/rl_envs/README.md).
+For anything scorable by a pure Python function, prefer the `rewards:`
+path above — it is simpler and faster.
 
 ## 🔄 Resuming Training
 

@@ -1,29 +1,25 @@
-# Text GRPO quickstart — colocate vLLM on a single machine.
+# Text GRPO quickstart — single-node, colocated vLLM, GSM8K reward.
 #
-# This trains LFM2-1.2B on the DeepMath-103K dataset with two rewards stacked:
-# (1) math accuracy via TRL's built-in accuracy_reward (needs `math_verify`),
-# (2) R1-style <think>...</think> format reward.
+# Same `messages` parquet drives sft / dpo / grpo. In grpo mode the
+# loader splits each row's messages into `prompt` (non-assistant turns)
+# and `solution` (last assistant text); the GSM8K reward extracts the
+# `#### N` answer from the assistant turn. No preprocessing needed.
 #
 # Launch:
 #   uv run leap-finetune job_configs/grpo_example.yaml
-#
-# Works on a single 1xH100 box: vLLM runs colocated inside each training
-# worker and shares GPU memory (budget controlled by vllm_gpu_memory_utilization).
+#   sbatch job_configs/slurms/grpo_example.sh
 
-project_name: "lfm2_grpo_math"
+project_name: "grpo_example"
 model_name: "LFM2-1.2B"
 training_type: "grpo"
 
 dataset:
-  path: "trl-lib/DeepMath-103K"
+  path: "your-org/your-gsm8k-parquet"   # replace with your HF id or local parquet
   type: "grpo"
-  limit: 2000          # trim for a quick first run; remove to use the full dataset
+  limit: 2000                           # remove for full-dataset training
 
 rewards:
-  funcs:
-    - "./rewards/accuracy.py::accuracy_reward"      # 1.0 for correct math answer
-    - "./rewards/think_format.py::think_format_reward"  # 1.0 for <think>...</think>
-  weights: [1.0, 0.2]  # format reward shapes early but doesn't dominate
+  recipe: "./rewards/tasks/gsm8k/recipe.py::GSM8KRecipe"
 
 training_config:
   extends: "DEFAULT_GRPO"
@@ -32,8 +28,6 @@ training_config:
   gradient_accumulation_steps: 1
   learning_rate: 1e-6
   num_generations: 8
-  max_completion_length: 512
-  # vLLM settings (all passed through to GRPOConfig unchanged) ---
-  # vllm_mode: "colocate"  # default in DEFAULT_GRPO
-  vllm_gpu_memory_utilization: 0.3   # leave headroom for training weights + optimizer
-  vllm_enable_sleep_mode: true       # offload vLLM during optimizer step (less contention)
+  max_completion_length: 768
+  vllm_gpu_memory_utilization: 0.3
+  vllm_enable_sleep_mode: true

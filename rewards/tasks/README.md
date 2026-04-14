@@ -162,7 +162,7 @@ Recipes can be stacked with primitives from `rewards/`:
 rewards:
   recipe: "./rewards/tasks/gsm8k/recipe.py::GSM8KRecipe"
   funcs:
-    - "./rewards/think_format.py::think_format_reward"
+    - "./rewards/length.py::length_reward"
   weights: [1.0, 0.2]
 ```
 

@@ -3,7 +3,7 @@
 Two layers:
 
 1. **Primitives** at the root — small, single-file reward functions you
-   compose from YAML (`accuracy.py`, `length.py`, `think_format.py`).
+   compose from YAML (`accuracy.py`, `length.py`).
 2. **Task bundles** under [`tasks/`](tasks/README.md) — complete
    recipes for concrete datasets (VLM grounding, GSM8K, IFEval, MCQA).
    Each task lives in its own folder with a single `recipe.py`.
@@ -26,7 +26,7 @@ rewards:
 rewards:
   funcs:
     - "./rewards/accuracy.py::accuracy_reward"
-    - "./rewards/think_format.py::think_format_reward"
+    - "./rewards/length.py::length_reward"
   weights: [1.0, 0.2]
 ```
 
@@ -48,7 +48,6 @@ rewards:
 | File | Function | What it does | Required columns |
 |------|----------|--------------|------------------|
 | `accuracy.py` | `accuracy_reward` | Math accuracy via `math_verify` (re-export of `trl.rewards.accuracy_reward`). | `solution` (str) |
-| `think_format.py` | `think_format_reward` | Checks the completion is wrapped in `<think>...</think>` (re-export of `trl.rewards.think_format_reward`). | none |
 | `length.py` | `length_reward` | Length-based shaping reward, scaled to `[0, 1]`. | none |
 
 ## Shipped task bundles

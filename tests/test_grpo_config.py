@@ -145,7 +145,7 @@ class TestParseVLMGRPOConfig:
                 "dtype": "bfloat16",
             },
             "rewards": {
-                "funcs": ["./rewards/grounding_format.py::grounding_format_reward"],
+                "funcs": ["./rewards/think_format.py::think_format_reward"],
                 "weights": [0.2],
             },
         }
@@ -223,8 +223,6 @@ class TestShippedExampleConfigs:
         "filename",
         [
             "grpo_example.yaml",
-            "grpo_server_mode_example.yaml",
-            "grpo_openenv_echo_example.yaml",
             "vlm_grpo_grounding_example.yaml",
         ],
     )

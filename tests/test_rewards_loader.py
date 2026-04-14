@@ -38,12 +38,12 @@ class TestResolveRewardSpecs:
         funcs, weights = resolve_reward_specs(
             [
                 "./rewards/length.py::length_reward",
-                "./rewards/grounding_format.py::grounding_format_reward",
+                "./rewards/think_format.py::think_format_reward",
             ],
             tmp_path,  # any dir — paths resolve against CWD first
         )
         assert len(funcs) == 2
-        assert [f.__name__ for f in funcs] == ["length_reward", "grounding_format_reward"]
+        assert [f.__name__ for f in funcs] == ["length_reward", "think_format_reward"]
         assert weights is None
 
     def test_shipped_reward_is_callable_with_completions(self, tmp_path):
@@ -60,7 +60,7 @@ class TestResolveRewardSpecs:
             {
                 "funcs": [
                     "./rewards/length.py::length_reward",
-                    "./rewards/grounding_format.py::grounding_format_reward",
+                    "./rewards/think_format.py::think_format_reward",
                 ],
                 "weights": [0.8, 0.2],
             },
@@ -162,57 +162,58 @@ class TestRecipes:
 
     def test_shipped_recipe_uses_default_weights(self, tmp_path):
         funcs, weights = resolve_reward_specs(
-            {"recipe": "./rewards/vlm_grounding.py::VLMGroundingRecipe"}, tmp_path
+            {
+                "recipe": "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+            },
+            tmp_path,
         )
-        assert len(funcs) == 4
-        assert weights == [0.1, 0.1, 1.0, 1.0]
+        assert len(funcs) == 2
+        assert weights == [0.1, 1.0]
         assert [f.__name__ for f in funcs] == [
-            "json_format_reward",
-            "bbox_schema_reward",
-            "ciou_reward",
-            "hungarian_reward",
+            "strict_format_reward",
+            "iou_f1_reward",
         ]
 
     def test_recipe_plus_individual_funcs_stacks(self, tmp_path):
         funcs, weights = resolve_reward_specs(
             {
-                "recipe": "./rewards/vlm_grounding.py::VLMGroundingRecipe",
+                "recipe": "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe",
                 "funcs": ["./rewards/length.py::length_reward"],
             },
             tmp_path,
         )
-        assert len(funcs) == 5
+        assert len(funcs) == 3
         # Recipe weights first, then 1.0 for each stacked individual reward.
-        assert weights == [0.1, 0.1, 1.0, 1.0, 1.0]
+        assert weights == [0.1, 1.0, 1.0]
         assert funcs[-1].__name__ == "length_reward"
 
     def test_recipe_weights_override(self, tmp_path):
         _, weights = resolve_reward_specs(
             {
-                "recipe": "./rewards/vlm_grounding.py::VLMGroundingRecipe",
-                "weights": [0.2, 0.2, 2.0, 2.0],
+                "recipe": "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe",
+                "weights": [0.2, 2.0],
             },
             tmp_path,
         )
-        assert weights == [0.2, 0.2, 2.0, 2.0]
+        assert weights == [0.2, 2.0]
 
     def test_recipe_and_funcs_combined_weights_override(self, tmp_path):
         funcs, weights = resolve_reward_specs(
             {
-                "recipe": "./rewards/vlm_grounding.py::VLMGroundingRecipe",
+                "recipe": "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe",
                 "funcs": ["./rewards/length.py::length_reward"],
-                "weights": [0.1, 0.1, 1.0, 1.0, 0.5],
+                "weights": [0.1, 1.0, 0.5],
             },
             tmp_path,
         )
-        assert len(funcs) == 5
-        assert weights == [0.1, 0.1, 1.0, 1.0, 0.5]
+        assert len(funcs) == 3
+        assert weights == [0.1, 1.0, 0.5]
 
     def test_recipe_weights_length_mismatch_raises(self, tmp_path):
         with pytest.raises(ValueError, match="Lengths must match"):
             resolve_reward_specs(
                 {
-                    "recipe": "./rewards/vlm_grounding.py::VLMGroundingRecipe",
+                    "recipe": "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe",
                     "weights": [1.0],
                 },
                 tmp_path,
@@ -221,13 +222,18 @@ class TestRecipes:
     def test_missing_class_name_raises_with_alternatives(self, tmp_path):
         with pytest.raises(ValueError, match="not found"):
             resolve_reward_specs(
-                {"recipe": "./rewards/vlm_grounding.py::NotARecipe"}, tmp_path
+                {
+                    "recipe": "./rewards/tasks/vlm_grounding/recipe.py::NotARecipe"
+                },
+                tmp_path,
             )
 
     def test_malformed_recipe_spec_raises(self, tmp_path):
         with pytest.raises(ValueError, match="malformed"):
             resolve_reward_specs(
-                {"recipe": "./rewards/vlm_grounding.py"},  # missing ::ClassName
+                {
+                    "recipe": "./rewards/tasks/vlm_grounding/recipe.py"
+                },  # missing ::ClassName
                 tmp_path,
             )
 
@@ -269,11 +275,11 @@ class TestRecipes:
         recipe via load_recipe() and subclasses it."""
         import pathlib
 
-        shipped = pathlib.Path("rewards/vlm_grounding.py").resolve()
+        shipped = pathlib.Path("rewards/tasks/vlm_grounding/recipe.py").resolve()
         custom = tmp_path / "my_recipe.py"
         custom.write_text(
             "from leap_finetune.rewards import load_recipe\n"
-            f"BaseRecipe = load_recipe(r'{shipped}::VLMGroundingRecipe')\n"
+            f"BaseRecipe = load_recipe(r'{shipped}::VLMGroundingIoURecipe')\n"
             "\n"
             "def my_extra_reward(completions, **kwargs):\n"
             "    return [0.7] * len(completions)\n"
@@ -286,19 +292,19 @@ class TestRecipes:
         funcs, weights = resolve_reward_specs(
             {"recipe": f"{custom}::MyGroundingRecipe"}, tmp_path
         )
-        assert len(funcs) == 5
-        assert weights == [0.1, 0.1, 1.0, 1.0, 0.5]
+        assert len(funcs) == 3
+        assert weights == [0.1, 1.0, 0.5]
         assert funcs[-1].__name__ == "my_extra_reward"
 
     def test_customer_subclass_preserves_parent_required_columns(self, tmp_path):
         """Extension should be able to read and extend parent class attributes."""
         import pathlib
 
-        shipped = pathlib.Path("rewards/vlm_grounding.py").resolve()
+        shipped = pathlib.Path("rewards/tasks/vlm_grounding/recipe.py").resolve()
         custom = tmp_path / "my_recipe.py"
         custom.write_text(
             "from leap_finetune.rewards import load_recipe\n"
-            f"BaseRecipe = load_recipe(r'{shipped}::VLMGroundingRecipe')\n"
+            f"BaseRecipe = load_recipe(r'{shipped}::VLMGroundingIoURecipe')\n"
             "\n"
             "class ExtendedRecipe(BaseRecipe):\n"
             "    required_columns = BaseRecipe.required_columns + ('extra_col',)\n"
@@ -307,8 +313,10 @@ class TestRecipes:
         )
         # We can't test required_columns through the loader (it doesn't
         # expose it yet), but we can at least verify the file imports cleanly
-        # and the loader accepts the subclass.
+        # and the loader accepts the subclass. VLMGroundingIoURecipe ships 2
+        # rewards (strict_format + iou_f1) and ExtendedRecipe inherits them
+        # unchanged.
         funcs, _ = resolve_reward_specs(
             {"recipe": f"{custom}::ExtendedRecipe"}, tmp_path
         )
-        assert len(funcs) == 4
+        assert len(funcs) == 2

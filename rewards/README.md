@@ -1,35 +1,97 @@
-# Reward functions
+# Rewards
 
-This directory holds **reward functions** used by GRPO training. The same
-mechanism works for everything: built-in rewards we ship and custom rewards
-you write are both plain Python functions in this directory, referenced from
-your YAML config by `path::function_name`.
+Two layers:
 
-## Using a shipped reward
+1. **Primitives** at the root — small, single-file reward functions you
+   compose from YAML (`accuracy.py`, `length.py`, `think_format.py`).
+2. **Task bundles** under [`tasks/`](tasks/README.md) — complete
+   recipes for concrete datasets (VLM grounding, GSM8K, IFEval, MCQA).
+   Each task lives in its own folder with a single `recipe.py`.
+
+For the recipe index and copy-paste YAML snippets, go to
+[`tasks/README.md`](tasks/README.md).
+
+## Referencing rewards from YAML
+
+### As a recipe (task bundle)
 
 ```yaml
-# job_configs/my_grpo.yaml
+rewards:
+  recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+```
+
+### As a list of primitives
+
+```yaml
 rewards:
   funcs:
     - "./rewards/accuracy.py::accuracy_reward"
     - "./rewards/think_format.py::think_format_reward"
-  weights: [1.0, 0.2]   # optional; defaults to 1.0 for each
+  weights: [1.0, 0.2]
 ```
 
-The `path` is resolved relative to the directory containing your YAML file
-(or you can use an absolute path). The `function_name` is the name of any
-top-level function in that file with the GRPO reward signature.
+Paths are resolved relative to the current working directory first,
+then to the directory containing the YAML. Absolute paths work too.
+
+### Stacking a recipe with extra primitives
+
+```yaml
+rewards:
+  recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+  funcs:
+    - "./rewards/length.py::length_reward"
+  weights: [0.1, 1.0, 0.05]   # recipe weights + the stacked func weight
+```
+
+## Shipped primitives
+
+| File | Function | What it does | Required columns |
+|------|----------|--------------|------------------|
+| `accuracy.py` | `accuracy_reward` | Math accuracy via `math_verify` (re-export of `trl.rewards.accuracy_reward`). | `solution` (str) |
+| `think_format.py` | `think_format_reward` | Checks the completion is wrapped in `<think>...</think>` (re-export of `trl.rewards.think_format_reward`). | none |
+| `length.py` | `length_reward` | Length-based shaping reward, scaled to `[0, 1]`. | none |
+
+## Shipped task bundles
+
+Full list in [`tasks/README.md`](tasks/README.md).
+
+| Task | Recipe | Reward shape |
+|------|--------|--------------|
+| VLM visual grounding | `tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe` | strict JSON format (0.1) + F1 of matched IoUs (1.0) |
+| VLM visual grounding (CIoU) | `tasks/vlm_grounding/recipe.py::VLMGroundingCIoURecipe` | strict JSON format (0.1) + F1 of matched CIoUs (1.0) |
+| GSM8K | `tasks/gsm8k/recipe.py::GSM8KRecipe` | numeric exact match via `#### N` (1.0) |
+| MCQA | `tasks/mcqa/recipe.py::MCQARecipe` | letter match A..J (1.0) |
+| IFEval | `tasks/ifeval/recipe.py::IFEvalRecipe` | fraction of constraints satisfied (1.0) |
+
+## Reward function signature
+
+```python
+def reward_fn(completions, **kwargs) -> list[float | None]:
+    ...
+```
+
+- **`completions`** — one entry per generation. Conversational prompts
+  wrap each entry as `[{"role": "assistant", "content": "<text>"}]`;
+  string prompts pass through the raw string. Extract defensively:
+  `c[0]["content"] if isinstance(c, list) else c`.
+- **`**kwargs`** — every other column in the dataset row is forwarded
+  as a keyword with the same name. TRL also forwards `prompts`,
+  `completion_ids`, `trainer_state`, and (when `rl_env` is used)
+  `env_reward`. Use `**kwargs` so unused fields are ignored.
+- **Return** — a list of floats, one per completion. Returning `None`
+  for a sample marks it "not applicable" and drops it from advantage
+  aggregation.
 
 ## Writing a custom reward
 
-Drop a new `.py` file in this directory (or anywhere — the path in YAML can
-be relative to the config or absolute) and reference it by path. No
-decorators, no registry — just write a function:
+### As a primitive
+
+Drop a new `.py` file at the root of `rewards/` and reference it by
+path:
 
 ```python
-# rewards/my_custom.py
-def my_custom_reward(completions, **kwargs):
-    """Reward 1.0 for completions over 50 characters, 0.0 otherwise."""
+# rewards/my_primitive.py
+def my_primitive_reward(completions, **kwargs):
     contents = [c[0]["content"] if isinstance(c, list) else c for c in completions]
     return [1.0 if len(t) >= 50 else 0.0 for t in contents]
 ```
@@ -37,133 +99,64 @@ def my_custom_reward(completions, **kwargs):
 ```yaml
 rewards:
   funcs:
-    - "./rewards/my_custom.py::my_custom_reward"
+    - "./rewards/my_primitive.py::my_primitive_reward"
 ```
 
-## The reward function signature
+### As a task bundle
+
+Create a folder under `tasks/` with `__init__.py` and `recipe.py`:
 
 ```python
-def reward_fn(completions, **kwargs) -> list[float | None]:
-    ...
-```
-
-- **`completions`** — a list with one entry per generated completion.
-  - For **conversational** prompts (chat models, the common case),
-    each entry is `[{"role": "assistant", "content": "<text>"}]`.
-  - For **string** prompts, each entry is the raw completion string.
-  - Always extract content defensively: `c[0]["content"] if isinstance(c, list) else c`.
-- **`**kwargs`** — every other column in your dataset row is forwarded as a
-  keyword argument with the same name. For example, if your dataset has a
-  `solution` column, your reward function receives `solution: list[str]`.
-  TRL also forwards `prompts`, `completion_ids`, `trainer_state`, and (when
-  using `rl_env`) `env_reward` from the rollout output. Use `**kwargs` so
-  unused fields are silently ignored.
-- **Return** — a list of floats, one per completion. You can return `None`
-  for a sample to mark it as not applicable to this reward function (useful
-  for multi-task datasets where different reward functions apply to
-  different rows). TRL skips `None` entries during reward aggregation.
-
-## Shipped rewards (individual functions)
-
-| File | Function | What it does | Required dataset columns |
-|------|----------|--------------|--------------------------|
-| `accuracy.py` | `accuracy_reward` | Math accuracy via `math_verify` (re-export of `trl.rewards.accuracy_reward`). Returns 1.0 / 0.0 / `None`. | `solution` (str) |
-| `think_format.py` | `think_format_reward` | Checks the completion is wrapped in `<think>...</think>` (re-export of `trl.rewards.think_format_reward`). | none |
-| `length.py` | `length_reward` | Length-based shaping reward, scaled to `[0, 1]`. Useful for encouraging longer (or shorter) completions during early training. | none |
-| `json_schema.py` | `json_schema_reward` | Parses the completion as JSON and validates it against a hardcoded schema. Edit the schema in the file or copy as a template. | none |
-| `regex_match.py` | `regex_match_reward` | Generic regex match against a hardcoded pattern. Edit or copy as template. | none |
-| `grounding_iou.py` | `grounding_iou_reward` | Legacy single-box IoU reader for `<bbox>...</bbox>` tagged output (pure IoU, no center-distance term). Superseded by `vlm_grounding.py::ciou_reward` for most use cases. | `bbox_gt` (list of 4 floats) |
-| `grounding_format.py` | `grounding_format_reward` | Legacy `<bbox>x,y,x,y</bbox>` format check. | none |
-
-## Shipped recipes
-
-A **recipe** is a Python class that collects everything the reward side of
-a GRPO task needs — the set of reward functions, their weights, the
-dataset columns they expect, and a recommended system prompt — in one
-file. Reference the class by `<path>::<ClassName>` from YAML and the
-training loop pulls in all of the recipe's rewards automatically.
-
-```yaml
-rewards:
-  recipe: "./rewards/vlm_grounding.py::VLMGroundingRecipe"
-  # Optional — override the recipe's default weights:
-  # weights: [0.1, 0.1, 1.0, 1.0]
-  # Optional — stack extra individual rewards after the recipe:
-  # funcs:
-  #   - "./rewards/length.py::length_reward"
-```
-
-| File | Recipe class | Task | Required columns |
-|------|---|---|---|
-| `vlm_grounding.py` | `VLMGroundingRecipe` | VLM visual grounding with JSON-output bounding boxes, CIoU vs `bbox_gt`, Hungarian matching over `bboxes_gt` with over- and under-prediction penalties. | `prompt`, `bbox_gt`, `bboxes_gt` |
-
-### Writing your own recipe
-
-Drop a new file in `rewards/`. Define your reward functions in the same
-file as the class that uses them — everything about the task is in one
-place. Subclass `Recipe` and override `rewards()`:
-
-```python
-# rewards/my_task.py
+# rewards/tasks/my_task/recipe.py
 from leap_finetune.rewards import Recipe
 
 
-def format_reward(completions, **kwargs):
-    return [1.0 if "<answer>" in (c[0]["content"] if isinstance(c, list) else c) else 0.0
-            for c in completions]
-
-
-def correctness_reward(completions, solution, **kwargs):
-    # ...your verification logic...
-    return [...]
+def my_correctness_reward(completions, solution, **kwargs):
+    ...
 
 
 class MyTaskRecipe(Recipe):
-    """One-line summary shown in logs when the recipe is loaded."""
-
-    description = "My task"
+    description = "My task — what the reward measures"
     required_columns = ("prompt", "solution")
-    system_prompt = "You are a ... Respond with ..."
+    system_prompt = "..."
 
     def rewards(self):
-        return [
-            (format_reward,      0.2),
-            (correctness_reward, 1.0),
-        ]
+        return [(my_correctness_reward, 1.0)]
 ```
 
-Then reference it from YAML:
+```python
+# rewards/tasks/my_task/__init__.py
+from .recipe import MyTaskRecipe, my_correctness_reward
+
+__all__ = ["MyTaskRecipe", "my_correctness_reward"]
+```
 
 ```yaml
 rewards:
-  recipe: "./rewards/my_task.py::MyTaskRecipe"
+  recipe: "./rewards/tasks/my_task/recipe.py::MyTaskRecipe"
 ```
+
+Then add a row to [`tasks/README.md`](tasks/README.md).
 
 ### Extending a shipped recipe
 
-Use `load_recipe` to pull in a sibling recipe class as a parent, then
-subclass it with regular Python inheritance. This is the right pattern
-when the shipped recipe is *mostly* what you want but you need to add or
-replace a reward.
+Load a sibling recipe as a parent and subclass it:
 
 ```python
-# rewards/my_grounding_with_captions.py
+# rewards/tasks/my_grounding_plus_captions/recipe.py
 from leap_finetune.rewards import load_recipe
 
-VLMGroundingRecipe = load_recipe(
-    "./rewards/vlm_grounding.py::VLMGroundingRecipe"
+VLMGroundingIoURecipe = load_recipe(
+    "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
 )
 
 
 def description_judge_reward(completions, object_descriptions, **kwargs):
-    """Score per-object descriptions with an LLM judge."""
-    return [...]
+    ...
 
 
-class GroundingWithCaptionsRecipe(VLMGroundingRecipe):
-    """Base grounding rewards + an LLM-judge for object descriptions."""
-
-    required_columns = VLMGroundingRecipe.required_columns + ("object_descriptions",)
+class GroundingWithCaptionsRecipe(VLMGroundingIoURecipe):
+    required_columns = VLMGroundingIoURecipe.required_columns + ("object_descriptions",)
 
     def rewards(self):
         return [
@@ -172,26 +165,17 @@ class GroundingWithCaptionsRecipe(VLMGroundingRecipe):
         ]
 ```
 
-```yaml
-rewards:
-  recipe: "./rewards/my_grounding_with_captions.py::GroundingWithCaptionsRecipe"
-```
-
-That's the whole extension story — plain Python subclassing, no registry,
-no decorators, no codegen. If you want to *reweight* the parent's rewards
-instead of adding new ones, override `rewards()` and return a different
-list of `(callable, float)` tuples. If you want to *remove* a reward,
+To reweight the parent without adding new rewards, override `rewards()`
+and return different `(callable, float)` tuples. To remove a reward,
 return a filtered version of `super().rewards()`.
 
 ## Notes
 
-- Reward functions are discovered and imported once per training run when
-  the config is parsed (driver-side). They are then sent to each Ray Train
-  worker as part of the trainer state.
-- For dependencies that aren't in `pyproject.toml` (like `math_verify` for
-  `accuracy.py`), install them yourself: `uv pip install math_verify`. We
-  intentionally don't pull these into the base install.
-- Reward functions can be `async def` if they need to call external services
-  — TRL runs async rewards concurrently via `asyncio.gather`.
-- Keep reward functions deterministic and side-effect-free where possible —
-  they're called multiple times per training step.
+- Reward functions are imported once per training run when the config
+  is parsed, then shipped to each worker as part of the trainer state.
+- Dependencies outside `pyproject.toml` (like `math_verify` for
+  `accuracy.py`) need to be installed separately.
+- Reward functions can be `async def` — TRL runs async rewards
+  concurrently via `asyncio.gather`.
+- Keep reward functions deterministic and side-effect-free; they run
+  multiple times per training step.

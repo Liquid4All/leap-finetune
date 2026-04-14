@@ -38,12 +38,12 @@ class TestResolveRewardSpecs:
         funcs, weights = resolve_reward_specs(
             [
                 "./rewards/length.py::length_reward",
-                "./rewards/think_format.py::think_format_reward",
+                "./rewards/accuracy.py::accuracy_reward",
             ],
             tmp_path,  # any dir — paths resolve against CWD first
         )
         assert len(funcs) == 2
-        assert [f.__name__ for f in funcs] == ["length_reward", "think_format_reward"]
+        assert [f.__name__ for f in funcs] == ["length_reward", "accuracy_reward"]
         assert weights is None
 
     def test_shipped_reward_is_callable_with_completions(self, tmp_path):
@@ -60,7 +60,7 @@ class TestResolveRewardSpecs:
             {
                 "funcs": [
                     "./rewards/length.py::length_reward",
-                    "./rewards/think_format.py::think_format_reward",
+                    "./rewards/accuracy.py::accuracy_reward",
                 ],
                 "weights": [0.8, 0.2],
             },

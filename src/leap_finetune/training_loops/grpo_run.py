@@ -1,24 +1,19 @@
 """Text GRPO training loop.
 
-Mirrors the structure of ``dpo_run.py`` / ``sft_run.py`` but uses TRL v1's
-``GRPOTrainer`` and does NOT pre-tokenize. GRPO generates completions online
-each step from raw prompts.
+Mirrors ``dpo_run.py`` / ``sft_run.py`` but uses TRL v1's ``GRPOTrainer``
+and does NOT pre-tokenize — GRPO generates completions online each step.
 
-Key differences from SFT/DPO runs:
+Unlike SFT/DPO we do NOT subclass ``RayDataLoaderMixin``: GRPO's
+``RepeatSampler`` + ``accelerator.prepare`` handles per-rank prompt
+distribution natively, and bypassing it would break group-relative
+reward normalization. The Ray Train driver instead passes the full
+(unsplit) dataset to every worker via
+``DataConfig(datasets_to_split=[])``.
 
-* No ``RayDataLoaderMixin`` — GRPO's ``RepeatSampler`` + ``accelerator.prepare``
-  handles per-rank prompt distribution natively, and bypassing that (like we
-  do for SFT/DPO) would break group-relative reward normalization. The Ray
-  Train driver carves around this by passing the full (unsplit) dataset to
-  every worker via ``DataConfig(datasets_to_split=[])``.
-* Reward functions come from the YAML ``rewards:`` block resolved via
-  ``resolve_reward_specs``. Customers write plain Python files in
-  ``rewards/`` and reference them by path.
-* When ``rl_env`` is set in YAML, we connect to an OpenEnv environment and
-  pass a ``rollout_func`` to the trainer that drives env.reset/step around
-  TRL's generation helper. The environment's per-step reward is forwarded as
-  an extra ``env_reward`` field and picked up by a tiny auto-prepended
-  ``env_reward`` reward function.
+Reward functions come from the YAML ``rewards:`` block. If ``rl_env:``
+is set, an OpenEnv rollout drives ``env.reset/step`` around TRL's
+generation helper and forwards the env's per-step reward as an extra
+``env_reward`` kwarg picked up by an auto-prepended reward function.
 """
 
 from __future__ import annotations
@@ -141,16 +136,7 @@ def grpo_run(training_config: dict) -> None:
         training_config.get("config_dir") or ".",
     )
 
-    # Connect OpenEnv environment (if configured) and build a rollout_func.
-    # OpenEnv is an optional advanced feature for agentic / multi-turn
-    # rollouts where the environment state evolves with actions. For pure
-    # RLVR (verifiable reward) workflows — math, grounding, format, code
-    # correctness — you should use the `rewards:` block instead; it's
-    # strictly simpler and more efficient.
-    #
-    # The import is deferred so the `src/leap_finetune/rl_envs/` directory
-    # can be absent (not committed) without breaking the training loop for
-    # everyone else.
+    # Optional OpenEnv rollout. Deferred import so the rl-env extra stays optional.
     rl_env_cfg = training_config.get("rl_env")
     rollout_func = None
     if rl_env_cfg is not None:
@@ -162,10 +148,8 @@ def grpo_run(training_config: dict) -> None:
             )
         except ImportError as e:
             raise ImportError(
-                "`rl_env` in your config requires the optional OpenEnv adapter at "
-                "`src/leap_finetune/rl_envs/`. Either remove `rl_env` from your "
-                "config (RLVR with rewards-only is the recommended path for "
-                "verifiable-reward tasks), or restore the rl_envs directory."
+                "`rl_env:` requires the optional OpenEnv extra. "
+                "Install with: uv sync --extra rl-env"
             ) from e
 
         env_client = connect_openenv(rl_env_cfg)
@@ -175,14 +159,10 @@ def grpo_run(training_config: dict) -> None:
             reset_kwargs=rl_env_cfg.get("reset_kwargs") or {},
             action_key=rl_env_cfg.get("action_key", "message"),
         )
-        # Auto-prepend env_reward so the env's per-step reward contributes.
         reward_funcs = [env_reward, *reward_funcs]
         if reward_weights is not None:
             reward_weights = [1.0, *reward_weights]
 
-    # GRPO requires at least one reward function. Fail loudly if neither
-    # `rewards` nor `rl_env` was provided — otherwise the trainer would
-    # silently do nothing useful.
     if not reward_funcs:
         raise ValueError(
             "GRPO requires at least one reward function. Add a `rewards:` block "

@@ -369,7 +369,7 @@ def vlm_grpo_run(training_config: dict) -> None:
         training_config.get("config_dir") or ".",
     )
 
-    # Deferred import so the optional rl_envs/ package can be absent.
+    # Optional OpenEnv rollout. Deferred import so the rl-env extra stays optional.
     rl_env_cfg = training_config.get("rl_env")
     rollout_func = None
     if rl_env_cfg is not None:
@@ -381,10 +381,8 @@ def vlm_grpo_run(training_config: dict) -> None:
             )
         except ImportError as e:
             raise ImportError(
-                "`rl_env` in your config requires the optional OpenEnv adapter at "
-                "`src/leap_finetune/rl_envs/`. Either remove `rl_env` from your "
-                "config (RLVR with rewards-only is the recommended path for "
-                "verifiable-reward tasks), or restore the rl_envs directory."
+                "`rl_env:` requires the optional OpenEnv extra. "
+                "Install with: uv sync --extra rl-env"
             ) from e
 
         env_client = connect_openenv(rl_env_cfg)

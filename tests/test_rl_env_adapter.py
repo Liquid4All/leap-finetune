@@ -204,4 +204,4 @@ class TestConnectOpenEnv:
 
             monkeypatch.setattr(builtins, "__import__", fake_import)
             with pytest.raises(ImportError, match="openenv-core is required"):
-                connect_openenv({"source": "openenv/echo-env"})
+                connect_openenv({"source": "qgallouedec/echo_env"})

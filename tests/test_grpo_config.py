@@ -145,7 +145,7 @@ class TestParseVLMGRPOConfig:
                 "dtype": "bfloat16",
             },
             "rewards": {
-                "funcs": ["./rewards/think_format.py::think_format_reward"],
+                "funcs": ["./rewards/length.py::length_reward"],
                 "weights": [0.2],
             },
         }
@@ -196,7 +196,7 @@ class TestGRPOKeysRejectedOnNonGRPO:
             "model_name": "LFM2-1.2B",
             "training_type": "dpo",
             "dataset": {"path": "x", "type": "dpo"},
-            "rl_env": {"source": "openenv/echo-env"},
+            "rl_env": {"source": "qgallouedec/echo_env"},
         }
         with pytest.raises((ValueError, Exception), match="grpo"):
             parse_job_config(write_config(config, tmp_path))

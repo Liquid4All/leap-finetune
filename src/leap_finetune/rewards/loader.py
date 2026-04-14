@@ -1,49 +1,17 @@
 """Resolve YAML ``rewards:`` entries into Python callables.
 
-Three YAML shapes are supported, all under a single ``rewards:`` key:
+Three YAML shapes are supported under a single ``rewards:`` key:
 
-1. **A plain list of individual reward specs** — the cheapest path. Each
-   entry is ``<path>::<function_name>``. No weights (GRPO defaults every
-   reward to 1.0).
+1. A plain list of ``<path>::<function>`` specs (no weights — GRPO
+   defaults each to 1.0).
+2. A dict with ``funcs:`` and optional ``weights:``.
+3. A ``recipe:`` reference to a :class:`Recipe` subclass, optionally
+   combined with extra ``funcs:`` and/or a ``weights:`` override that
+   applies to the combined list.
 
-   .. code-block:: yaml
-
-       rewards:
-         - "./rewards/accuracy.py::accuracy_reward"
-         - "./rewards/think_format.py::think_format_reward"
-
-2. **A dict with ``funcs:`` and optional ``weights:``** — same as (1) but
-   with explicit per-function weights.
-
-   .. code-block:: yaml
-
-       rewards:
-         funcs:
-           - "./rewards/accuracy.py::accuracy_reward"
-           - "./rewards/think_format.py::think_format_reward"
-         weights: [1.0, 0.2]
-
-3. **A recipe reference** — pulls in a whole task-shaped set of rewards
-   from a :class:`Recipe` subclass. Can be combined with extra individual
-   ``funcs:`` (appended after the recipe's rewards) and/or a ``weights:``
-   override for the combined list.
-
-   .. code-block:: yaml
-
-       rewards:
-         recipe: "./rewards/vlm_grounding.py::VLMGroundingRecipe"
-         # Optional extras:
-         # funcs:
-         #   - "./rewards/length.py::length_reward"
-         # weights: [0.1, 0.1, 1.0, 1.0, 0.05]
-
-Path resolution (same rules for individual specs and recipe specs):
-
-* Absolute paths → used as-is.
-* Relative paths → tried against the current working directory first
-  (where ``uv run leap-finetune <config>`` is invoked from — typically
-  the repo root, so ``./rewards/...`` "just works"). Falls back to the
-  directory containing the YAML config.
+Path resolution (both spec forms): absolute paths are used as-is;
+relative paths are tried against the current working directory first,
+then the directory containing the YAML config.
 """
 
 from __future__ import annotations
@@ -58,7 +26,6 @@ from leap_finetune.rewards.recipe import Recipe
 
 logger = logging.getLogger(__name__)
 
-# Spec separator: "<path>::<fn_name_or_class_name>"
 _SEP = "::"
 
 
@@ -66,10 +33,10 @@ def resolve_reward_specs(
     rewards_cfg: list | dict | None,
     config_dir: Path | str,
 ) -> tuple[list[Callable], list[float] | None]:
-    """Resolve a YAML ``rewards:`` entry into callables + optional weights.
+    """Resolve a YAML ``rewards:`` entry into ``(funcs, weights)``.
 
-    Returns ``(funcs, weights)``. ``weights`` is ``None`` when the user
-    didn't specify any (GRPOConfig then defaults everything to 1.0).
+    ``weights`` is ``None`` when the user didn't specify any, letting
+    ``GRPOConfig`` default every reward to 1.0.
 
     Raises:
         ValueError: malformed spec, missing file, missing function or
@@ -81,7 +48,7 @@ def resolve_reward_specs(
 
     config_dir = Path(config_dir).resolve()
 
-    # === Normalize the three YAML shapes into (recipe_spec, individual_specs, weights) ===
+    # Normalize the three YAML shapes.
     if isinstance(rewards_cfg, list):
         recipe_spec = None
         individual_specs = rewards_cfg
@@ -98,7 +65,7 @@ def resolve_reward_specs(
     if recipe_spec is None and not individual_specs:
         return [], None
 
-    # === Load recipe (if any) into (funcs, default_weights) ===
+    # Load recipe pairs (if any) with their built-in default weights.
     recipe_pairs: list[tuple[Callable, float]] = []
     if recipe_spec is not None:
         if not isinstance(recipe_spec, str):
@@ -108,10 +75,9 @@ def resolve_reward_specs(
             )
         recipe_cls = _load_recipe_class(recipe_spec, config_dir)
         instance = recipe_cls()
-        raw_pairs = instance.rewards()
-        recipe_pairs = _validate_reward_pairs(raw_pairs, recipe_spec)
+        recipe_pairs = _validate_reward_pairs(instance.rewards(), recipe_spec)
 
-    # === Load individual funcs — each gets weight 1.0 by default ===
+    # Individual funcs each default to weight 1.0.
     individual_pairs: list[tuple[Callable, float]] = []
     for spec in individual_specs:
         if not isinstance(spec, str):
@@ -121,12 +87,11 @@ def resolve_reward_specs(
         fn = _load_reward_spec(spec, config_dir)
         individual_pairs.append((fn, 1.0))
 
-    # === Combine ===
     all_pairs = recipe_pairs + individual_pairs
     funcs = [p[0] for p in all_pairs]
     default_weights = [p[1] for p in all_pairs]
 
-    # === Apply weight override (if any) ===
+    # An explicit `weights:` overrides both recipe defaults and 1.0s.
     if weights_override is not None:
         if not isinstance(weights_override, list) or not all(
             isinstance(w, (int, float)) for w in weights_override
@@ -143,11 +108,10 @@ def resolve_reward_specs(
             )
         final_weights: list[float] | None = [float(w) for w in weights_override]
     elif recipe_spec is not None:
-        # Recipe was used — ship its (possibly non-uniform) defaults through.
+        # Ship the recipe's (possibly non-uniform) defaults through.
         final_weights = default_weights
     else:
-        # Plain individual funcs with no explicit weights → None so
-        # GRPOConfig defaults every reward to 1.0.
+        # Individual funcs with no explicit weights → let GRPOConfig default to 1.0.
         final_weights = None
 
     logger.info(
@@ -165,23 +129,16 @@ def load_recipe(
 ) -> type[Recipe]:
     """Load a :class:`Recipe` subclass by ``<path>::ClassName`` spec.
 
-    Public helper for use from **customer recipe files** that want to
-    subclass a shipped recipe living in a sibling file:
-
-    .. code-block:: python
+    Use this inside a user recipe file to subclass a shipped recipe::
 
         from leap_finetune.rewards import Recipe, load_recipe
 
         VLMGroundingRecipe = load_recipe(
-            "./rewards/vlm_grounding.py::VLMGroundingRecipe"
+            "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
         )
 
         class MyRecipe(VLMGroundingRecipe):
             ...
-
-    The ``config_dir`` default is the current working directory, which is
-    the right choice when the customer launches
-    ``uv run leap-finetune <config>`` from the repo root.
     """
     return _load_recipe_class(spec, Path(config_dir).resolve())
 
@@ -192,11 +149,11 @@ def load_recipe(
 
 
 def _load_recipe_class(spec: str, config_dir: Path) -> type[Recipe]:
-    """Import a ``<path>::ClassName`` recipe spec and verify it's a Recipe."""
+    """Import ``<path>::ClassName`` and verify it subclasses :class:`Recipe`."""
     if _SEP not in spec:
         raise ValueError(
             f"Recipe spec {spec!r} is malformed. Expected format: "
-            f"'<path>::<ClassName>' (e.g. './rewards/vlm_grounding.py::VLMGroundingRecipe'). "
+            f"'<path>::<ClassName>' (e.g. './rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe'). "
             f"The '::' separator is required."
         )
     path_str, _, class_name = spec.partition(_SEP)
@@ -235,7 +192,7 @@ def _load_recipe_class(spec: str, config_dir: Path) -> type[Recipe]:
 def _validate_reward_pairs(
     pairs, recipe_spec: str
 ) -> list[tuple[Callable, float]]:
-    """Check that a recipe's ``rewards()`` returned a well-formed list."""
+    """Check that ``Recipe.rewards()`` returned a non-empty ``[(callable, float)]``."""
     if not isinstance(pairs, list):
         raise ValueError(
             f"Recipe {recipe_spec!r}: rewards() must return a list of "
@@ -303,10 +260,7 @@ def _load_reward_spec(spec: str, config_dir: Path) -> Callable:
 
 
 def _import_reward_file(path_str: str, config_dir: Path, *, original_spec: str):
-    """Resolve ``path_str`` and import it as an anonymous module.
-
-    Resolution order: absolute → CWD → ``config_dir``.
-    """
+    """Resolve ``path_str`` (absolute → CWD → config_dir) and import it."""
     raw = Path(path_str)
     if raw.is_absolute():
         candidates = [raw]
@@ -325,7 +279,7 @@ def _import_reward_file(path_str: str, config_dir: Path, *, original_spec: str):
             f"Reward file not found for spec {original_spec!r}. Tried: "
             + " and ".join(str(c) for c in candidates)
             + ". Use a path relative to the working directory you launch "
-            "leap-finetune from (e.g. './rewards/vlm_grounding.py') or an "
+            "leap-finetune from (e.g. './rewards/tasks/vlm_grounding/recipe.py') or an "
             "absolute path."
         )
 

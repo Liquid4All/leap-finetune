@@ -357,6 +357,14 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
         import json
         import pathlib
 
+        import numpy as np
+
+        # Parquet deserialization returns list columns as ndarrays.
+        for key in ("messages", *_CONVERSATION_ALIASES):
+            val = row.get(key)
+            if isinstance(val, np.ndarray):
+                row[key] = val.tolist()
+
         # === 1. Find and rename conversation column ===
         for col in _CONVERSATION_ALIASES:
             if col in row and "messages" not in row:
@@ -408,29 +416,116 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
                 row["prompt"] = ""
         return row
 
+    def _split_messages(messages: list) -> tuple[list, str | None]:
+        """Split an SFT messages list into GRPO (prompt, solution)."""
+        prompt_turns: list = []
+        assistant_text: str | None = None
+        for msg in messages:
+            if not isinstance(msg, dict):
+                prompt_turns.append(msg)
+                continue
+            if msg.get("role") != "assistant":
+                prompt_turns.append(msg)
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                assistant_text = content
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        assistant_text = item.get("text", "")
+                        break
+        return prompt_turns, assistant_text
+
     def normalize_grpo(row: dict) -> dict:
-        # GRPO only needs a `prompt` column. If the dataset calls it
-        # something else, try common aliases; leave everything else alone.
-        if "prompt" not in row:
+        """Normalize a text GRPO row.
+
+        Same SFT schema works for ``sft`` → ``dpo`` → ``grpo``: the standard
+        ``messages`` column is split into ``prompt`` (non-assistant turns)
+        and ``solution`` (last assistant text). A pre-existing ``solution``
+        column is preserved. Native ``prompt`` and legacy ``question`` /
+        ``query`` / ``input`` aliases remain supported.
+        """
+        import json
+
+        import numpy as np
+
+        for key in ("prompt", "messages", "conversation", "conversations"):
+            val = row.get(key)
+            if isinstance(val, np.ndarray):
+                row[key] = val.tolist()
+
+        source_alias = None
+        if row.get("prompt") is None:
+            for alias in ("messages", "conversation", "conversations", "chat", "dialogue"):
+                if row.get(alias) is not None:
+                    source_alias = alias
+                    break
+
+        if source_alias is not None:
+            messages = row.pop(source_alias)
+            if isinstance(messages, str):
+                try:
+                    messages = json.loads(messages)
+                except (json.JSONDecodeError, TypeError):
+                    row["prompt"] = messages
+                    return row
+            if not isinstance(messages, list) or not messages:
+                row["prompt"] = messages
+                return row
+            prompt_turns, assistant_text = _split_messages(messages)
+            row["prompt"] = prompt_turns or messages
+            if assistant_text is not None and not row.get("solution"):
+                row["solution"] = assistant_text
+
+        if row.get("prompt") is None:
             for alias in ("query", "question", "input"):
-                if alias in row:
+                if row.get(alias):
                     row["prompt"] = row[alias]
                     break
+
         return row
 
     def normalize_vlm_grpo(row: dict) -> dict:
-        """Like normalize_vlm_sft but reads/writes the `prompt` column."""
+        """Normalize a VLM GRPO row.
+
+        Same as ``normalize_grpo`` — the VLM SFT ``messages`` format is
+        split into ``prompt`` (user/system turns) and ``solution`` (last
+        assistant text) so the same dataset file drives ``vlm_sft``,
+        ``vlm_dpo``, and ``vlm_grpo``.
+        """
         import json
         import pathlib
 
-        # VLM GRPO often arrives already in `prompt` form; if not, try
-        # common aliases (including the `messages` column used by VLM SFT
-        # datasets so customers can reuse the same dataset for both).
+        import numpy as np
+
+        for key in ("prompt", "messages", "conversation", "conversations"):
+            val = row.get(key)
+            if isinstance(val, np.ndarray):
+                row[key] = val.tolist()
+
+        source_alias = None
         if "prompt" not in row:
             for alias in ("messages", "conversation", "conversations", "chat", "dialogue"):
                 if alias in row:
-                    row["prompt"] = row.pop(alias)
+                    source_alias = alias
                     break
+
+        if source_alias is not None:
+            messages = row.pop(source_alias)
+            if isinstance(messages, str):
+                try:
+                    messages = json.loads(messages)
+                except (json.JSONDecodeError, TypeError):
+                    row["prompt"] = messages
+                    return row
+            if not isinstance(messages, list) or not messages:
+                row["prompt"] = messages
+                return row
+            prompt_turns, assistant_text = _split_messages(messages)
+            row["prompt"] = prompt_turns or messages
+            if assistant_text is not None and not row.get("solution"):
+                row["solution"] = assistant_text
 
         if "prompt" not in row:
             return row
@@ -441,7 +536,6 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
                 prompt = json.loads(prompt)
                 row["prompt"] = prompt
             except (json.JSONDecodeError, TypeError):
-                # Leave as string — string prompts are valid for standard format
                 return row
 
         if not isinstance(prompt, list):

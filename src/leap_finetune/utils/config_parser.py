@@ -305,7 +305,11 @@ def parse_job_config(config_input: str) -> JobConfig:
     grpo_rollout_cfg = config_dict.get("grpo_rollout")
 
     if training_type not in ("grpo", "vlm_grpo"):
-        for key, val in (("rewards", rewards_cfg), ("rl_env", rl_env_cfg), ("grpo_rollout", grpo_rollout_cfg)):
+        for key, val in (
+            ("rewards", rewards_cfg),
+            ("rl_env", rl_env_cfg),
+            ("grpo_rollout", grpo_rollout_cfg),
+        ):
             if val is not None:
                 raise ValueError(
                     f"Config key `{key}` is only valid for training_type in "

@@ -18,7 +18,6 @@ import pathlib
 import pytest
 
 from conftest import (
-    assert_checkpoints_exist,
     requires_gpu,
     run_e2e_training,
 )

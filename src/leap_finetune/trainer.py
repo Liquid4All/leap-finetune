@@ -62,7 +62,12 @@ def ray_trainer(job_config: dict) -> None:
             )
             print(f"\nConnected to multi-node Ray cluster at {ray_address}")
         else:
-            for key in ("RAY_ADDRESS", "RAY_HEAD_IP", "RAY_HEAD_NODE_ADDRESS", "RAY_PORT"):
+            for key in (
+                "RAY_ADDRESS",
+                "RAY_HEAD_IP",
+                "RAY_HEAD_NODE_ADDRESS",
+                "RAY_PORT",
+            ):
                 os.environ.pop(key, None)
 
             ray_temp_dir = select_ray_temp_dir(os.path.expanduser("~/ray_temp"))

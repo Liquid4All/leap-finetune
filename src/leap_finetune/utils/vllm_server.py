@@ -143,9 +143,7 @@ def launch_vllm_server(
             f"grpo_rollout.dedicated_gpus={len(vllm_gpu_ids)}."
         )
     dtype = str(grpo_rollout_cfg.get("dtype", "bfloat16"))
-    gpu_memory_utilization = float(
-        grpo_rollout_cfg.get("gpu_memory_utilization", 0.9)
-    )
+    gpu_memory_utilization = float(grpo_rollout_cfg.get("gpu_memory_utilization", 0.9))
     max_model_len = grpo_rollout_cfg.get("max_model_len")
 
     cmd: list[Any] = [

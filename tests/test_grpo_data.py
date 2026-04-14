@@ -30,9 +30,7 @@ class TestGRPORowFilter:
         assert self.f({"prompt": "What is 2+2?"}) is True
 
     def test_messages_prompt_accepted(self):
-        assert (
-            self.f({"prompt": [{"role": "user", "content": "hi"}]}) is True
-        )
+        assert self.f({"prompt": [{"role": "user", "content": "hi"}]}) is True
 
     def test_empty_string_rejected(self):
         assert self.f({"prompt": ""}) is False
@@ -316,7 +314,10 @@ class TestVLMGRPOSFTNormalization:
                 {
                     "role": "assistant",
                     "content": [
-                        {"type": "text", "text": '[{"label": "cat", "bbox": [0.1, 0.2, 0.5, 0.6]}]'},
+                        {
+                            "type": "text",
+                            "text": '[{"label": "cat", "bbox": [0.1, 0.2, 0.5, 0.6]}]',
+                        },
                     ],
                 },
             ]
@@ -348,7 +349,10 @@ class TestVLMGRPOSFTNormalization:
         row = {
             "messages": [
                 {"role": "user", "content": [{"type": "text", "text": "q"}]},
-                {"role": "assistant", "content": [{"type": "text", "text": "from assistant"}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "from assistant"}],
+                },
             ],
             "solution": "explicit solution",
         }
@@ -359,7 +363,10 @@ class TestVLMGRPOSFTNormalization:
         n = normalize_columns("vlm_grpo")
         row = {
             "messages": [
-                {"role": "system", "content": [{"type": "text", "text": "You are helpful."}]},
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "You are helpful."}],
+                },
                 {"role": "user", "content": [{"type": "text", "text": "hi"}]},
                 {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
             ]
@@ -502,7 +509,7 @@ class TestVLMGroundingJSONExtract:
         assert VGJ._extract_bboxes(text) is None
 
     def test_reject_empty_string(self):
-        assert VGJ._extract_bboxes('') is None
+        assert VGJ._extract_bboxes("") is None
 
     # --- structure checks ---
 
@@ -511,7 +518,7 @@ class TestVLMGroundingJSONExtract:
         assert VGJ._extract_bboxes(text) is None
 
     def test_reject_empty_array(self):
-        assert VGJ._extract_bboxes('[]') is None
+        assert VGJ._extract_bboxes("[]") is None
 
     def test_multi_object_array_returns_all_with_count(self):
         text = (
@@ -537,7 +544,7 @@ class TestVLMGroundingJSONExtract:
         assert count == 3
 
     def test_reject_list_of_non_dict(self):
-        assert VGJ._extract_bboxes('[[0.1, 0.2, 0.3, 0.4]]') is None
+        assert VGJ._extract_bboxes("[[0.1, 0.2, 0.3, 0.4]]") is None
 
     # --- bbox field checks ---
 
@@ -752,7 +759,9 @@ class TestStrictFormatReward:
                 '[{"label": "a", "bbox": [0, 0, 1, 1]}]'
             ),
             _assistant('[{"label": "a", "bbox": [0, 0, 1, 1]}] more reasoning'),
-            _assistant('<answer>[{"label": "a", "bbox": [0, 0, 1, 1]}]</answer>'),  # legacy tags
+            _assistant(
+                '<answer>[{"label": "a", "bbox": [0, 0, 1, 1]}]</answer>'
+            ),  # legacy tags
         ]
         rewards = VGJ.strict_format_reward(completions)
         assert rewards == [0.0, 0.0, 0.0, 0.0, 0.0]
@@ -878,9 +887,7 @@ class TestVLMGroundingIoUF1:
         c_bad = self._c("broken")
         s_good = '[{"label": "cat", "bbox": [0.1, 0.1, 0.5, 0.5]}]'
         s_other = '[{"label": "dog", "bbox": [0.0, 0.0, 1.0, 1.0]}]'
-        r_good, r_bad = VGJ.iou_f1_reward(
-            [c_good, c_bad], solution=[s_good, s_other]
-        )
+        r_good, r_bad = VGJ.iou_f1_reward([c_good, c_bad], solution=[s_good, s_other])
         assert r_good == pytest.approx(1.0)
         assert r_bad == 0.0
 
@@ -903,7 +910,9 @@ class TestVLMGroundingIoUF1:
         from leap_finetune.rewards import resolve_reward_specs
 
         funcs, weights = resolve_reward_specs(
-            {"recipe": "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"},
+            {
+                "recipe": "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+            },
             config_dir=".",
         )
         names = {f.__name__ for f in funcs}
@@ -1039,7 +1048,9 @@ class TestVLMGroundingCIoUF1:
         from leap_finetune.rewards import resolve_reward_specs
 
         funcs, weights = resolve_reward_specs(
-            {"recipe": "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingCIoURecipe"},
+            {
+                "recipe": "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingCIoURecipe"
+            },
             config_dir=".",
         )
         names = {f.__name__ for f in funcs}
@@ -1170,9 +1181,7 @@ class TestVLMGRPOImageLift:
 
         instance = self._build_instance()
         text_only = {
-            "prompt": [
-                {"role": "user", "content": [{"type": "text", "text": "hi"}]}
-            ],
+            "prompt": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
             "solution": "hello",
         }
         instance._generate_and_score_completions([text_only])

@@ -80,9 +80,7 @@ class TestResolveRewardSpecs:
 
     def test_absolute_path(self, tmp_path):
         abs_path = str(SHIPPED_REWARDS / "length.py")
-        funcs, _ = resolve_reward_specs(
-            [f"{abs_path}::length_reward"], tmp_path
-        )
+        funcs, _ = resolve_reward_specs([f"{abs_path}::length_reward"], tmp_path)
         assert len(funcs) == 1
 
     def test_customer_file_in_tmp_dir(self, tmp_path):
@@ -96,9 +94,7 @@ class TestResolveRewardSpecs:
                 """
             )
         )
-        funcs, _ = resolve_reward_specs(
-            ["./my_reward.py::my_reward"], tmp_path
-        )
+        funcs, _ = resolve_reward_specs(["./my_reward.py::my_reward"], tmp_path)
         assert len(funcs) == 1
         assert funcs[0]([["x"], ["y"]]) == [42.0, 42.0]
 
@@ -118,15 +114,11 @@ class TestResolveRewardSpecs:
 
     def test_missing_file_raises_with_candidates(self, tmp_path):
         with pytest.raises(ValueError, match="not found"):
-            resolve_reward_specs(
-                ["./rewards/does_not_exist.py::fn"], tmp_path
-            )
+            resolve_reward_specs(["./rewards/does_not_exist.py::fn"], tmp_path)
 
     def test_missing_function_raises_listing_available(self, tmp_path):
         with pytest.raises(ValueError, match="length_reward"):
-            resolve_reward_specs(
-                ["./rewards/length.py::not_a_real_function"], tmp_path
-            )
+            resolve_reward_specs(["./rewards/length.py::not_a_real_function"], tmp_path)
 
     def test_weights_length_mismatch_raises(self, tmp_path):
         with pytest.raises(ValueError, match="Lengths must match"):
@@ -222,9 +214,7 @@ class TestRecipes:
     def test_missing_class_name_raises_with_alternatives(self, tmp_path):
         with pytest.raises(ValueError, match="not found"):
             resolve_reward_specs(
-                {
-                    "recipe": "./rewards/tasks/vlm_grounding/recipe.py::NotARecipe"
-                },
+                {"recipe": "./rewards/tasks/vlm_grounding/recipe.py::NotARecipe"},
                 tmp_path,
             )
 
@@ -241,9 +231,7 @@ class TestRecipes:
         not_a_recipe = tmp_path / "not_a_recipe.py"
         not_a_recipe.write_text("class NotARecipe:\n    pass\n")
         with pytest.raises(ValueError, match="subclass leap_finetune.rewards.Recipe"):
-            resolve_reward_specs(
-                {"recipe": f"{not_a_recipe}::NotARecipe"}, tmp_path
-            )
+            resolve_reward_specs({"recipe": f"{not_a_recipe}::NotARecipe"}, tmp_path)
 
     def test_empty_rewards_list_rejected(self, tmp_path):
         empty = tmp_path / "empty_recipe.py"
@@ -273,7 +261,6 @@ class TestRecipes:
     def test_customer_extension_via_load_recipe(self, tmp_path):
         """The documented extension pattern: customer file imports a shipped
         recipe via load_recipe() and subclasses it."""
-        import pathlib
 
         shipped = pathlib.Path("rewards/tasks/vlm_grounding/recipe.py").resolve()
         custom = tmp_path / "my_recipe.py"
@@ -298,7 +285,6 @@ class TestRecipes:
 
     def test_customer_subclass_preserves_parent_required_columns(self, tmp_path):
         """Extension should be able to read and extend parent class attributes."""
-        import pathlib
 
         shipped = pathlib.Path("rewards/tasks/vlm_grounding/recipe.py").resolve()
         custom = tmp_path / "my_recipe.py"

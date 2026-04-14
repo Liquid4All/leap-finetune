@@ -422,9 +422,7 @@ class TestTokenizationDPO:
         eos_id = tokenizer.eos_token_id
         # Check multiple rows, not just the first
         for i, row in enumerate(train_ds.iter_rows()):
-            assert row["chosen_ids"][-1] == eos_id, (
-                f"Row {i}: chosen missing EOS token"
-            )
+            assert row["chosen_ids"][-1] == eos_id, f"Row {i}: chosen missing EOS token"
             assert row["rejected_ids"][-1] == eos_id, (
                 f"Row {i}: rejected missing EOS token"
             )

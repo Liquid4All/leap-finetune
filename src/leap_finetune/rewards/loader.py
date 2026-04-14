@@ -189,9 +189,7 @@ def _load_recipe_class(spec: str, config_dir: Path) -> type[Recipe]:
     return cls
 
 
-def _validate_reward_pairs(
-    pairs, recipe_spec: str
-) -> list[tuple[Callable, float]]:
+def _validate_reward_pairs(pairs, recipe_spec: str) -> list[tuple[Callable, float]]:
     """Check that ``Recipe.rewards()`` returned a non-empty ``[(callable, float)]``."""
     if not isinstance(pairs, list):
         raise ValueError(

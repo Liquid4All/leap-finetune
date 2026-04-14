@@ -457,7 +457,13 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
 
         source_alias = None
         if row.get("prompt") is None:
-            for alias in ("messages", "conversation", "conversations", "chat", "dialogue"):
+            for alias in (
+                "messages",
+                "conversation",
+                "conversations",
+                "chat",
+                "dialogue",
+            ):
                 if row.get(alias) is not None:
                     source_alias = alias
                     break
@@ -506,7 +512,13 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
 
         source_alias = None
         if "prompt" not in row:
-            for alias in ("messages", "conversation", "conversations", "chat", "dialogue"):
+            for alias in (
+                "messages",
+                "conversation",
+                "conversations",
+                "chat",
+                "dialogue",
+            ):
                 if alias in row:
                     source_alias = alias
                     break
@@ -768,7 +780,9 @@ def validate_vlm_grpo_format(dataset: Dataset) -> Dataset:
                             f"Sample {idx}, message {msg_idx}, content {ci}: 'image' must be a "
                             f"path string (got {type(image_data).__name__}). Use paths, not PIL objects."
                         )
-                    from leap_finetune.data_loaders.image_loader import is_image_loadable
+                    from leap_finetune.data_loaders.image_loader import (
+                        is_image_loadable,
+                    )
 
                     if not is_image_loadable(image_data):
                         raise ValueError(

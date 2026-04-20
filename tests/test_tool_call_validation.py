@@ -291,6 +291,89 @@ class TestToolCallsToPythonic:
         assert result == "<|tool_call_start|>[f(flag=True)]<|tool_call_end|>"
 
 
+# === Edge cases the current converter mishandles ===
+# Invariant: converter output must be valid Python (parseable by ast.parse).
+
+
+class TestToolCallsToPythonicEdgeCases:
+    @staticmethod
+    def _assert_parseable_python(result: str):
+        import ast
+
+        inner = result.replace("<|tool_call_start|>", "").replace(
+            "<|tool_call_end|>", ""
+        )
+        ast.parse(inner, mode="eval")
+
+    def test_string_with_embedded_double_quote(self):
+        # String arg containing `"` (e.g. a quoted search query) must be
+        # escaped so the output is still valid Python.
+        tc = [
+            {
+                "type": "function",
+                "function": {"name": "f", "arguments": {"msg": 'he said "hi"'}},
+            }
+        ]
+        result = _tool_calls_to_pythonic(tc)
+        self._assert_parseable_python(result)
+
+    def test_string_with_newline(self):
+        # String arg containing `\n` (e.g. a multi-line email body) must be
+        # escaped; a raw newline inside `"..."` is an unterminated literal.
+        tc = [
+            {
+                "type": "function",
+                "function": {"name": "f", "arguments": {"body": "line1\nline2"}},
+            }
+        ]
+        result = _tool_calls_to_pythonic(tc)
+        self._assert_parseable_python(result)
+
+    def test_string_with_backslash(self):
+        # String arg containing `\` (e.g. a Windows path) must be escaped;
+        # otherwise `\U` etc. is parsed as a Python unicode escape.
+        tc = [
+            {
+                "type": "function",
+                "function": {"name": "f", "arguments": {"path": r"C:\Users\x"}},
+            }
+        ]
+        result = _tool_calls_to_pythonic(tc)
+        self._assert_parseable_python(result)
+
+    def test_non_dict_arguments_does_not_crash(self):
+        # Malformed `arguments` (list instead of dict) should be skipped
+        # with a warning, not crash the Ray worker with AttributeError.
+        tc = [{"type": "function", "function": {"name": "f", "arguments": [1, 2, 3]}}]
+        result = _tool_calls_to_pythonic(tc)
+        assert isinstance(result, str)
+        assert result.startswith("<|tool_call_start|>")
+        assert result.endswith("<|tool_call_end|>")
+
+    def test_nested_list_of_strings_is_parseable(self):
+        # Nested list args must produce valid Python; quote style is left
+        # unconstrained since both `['a']` and `["a"]` are legal.
+        tc = [
+            {
+                "type": "function",
+                "function": {"name": "f", "arguments": {"tags": ["a", "b"]}},
+            }
+        ]
+        result = _tool_calls_to_pythonic(tc)
+        self._assert_parseable_python(result)
+
+    def test_nested_dict_string_values_is_parseable(self):
+        # Nested dict args must produce valid Python; quote style unconstrained.
+        tc = [
+            {
+                "type": "function",
+                "function": {"name": "f", "arguments": {"opts": {"name": "foo"}}},
+            }
+        ]
+        result = _tool_calls_to_pythonic(tc)
+        self._assert_parseable_python(result)
+
+
 # === Normalization ===
 
 

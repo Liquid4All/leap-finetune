@@ -195,6 +195,15 @@ def validate_tool_format(
 # === Normalization (per-row, for Ray .map()) ===
 
 
+def _format_tool_call_value(v) -> str:
+    # json.dumps gives double-quoted + proper escaping of
+    # ", \n, \. Everything else: repr()
+    # gives valid Python literal syntax 
+    if isinstance(v, str):
+        return json.dumps(v, ensure_ascii=False)
+    return repr(v)
+
+
 def _tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
     """Convert structured tool_calls list to LFM pythonic bracket notation."""
     calls = []
@@ -204,13 +213,14 @@ def _tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
         args = func.get("arguments", {})
         if isinstance(args, str):
             args = json.loads(args)
-
-        parts = []
-        for k, v in args.items():
-            if isinstance(v, str):
-                parts.append(f'{k}="{v}"')
-            else:
-                parts.append(f"{k}={v}")
+        # skip malformed tool calls instead of failur error
+        if not isinstance(args, dict):
+            logger.warning(
+                "Skipping tool_call with non-dict arguments (got %s): name=%s",
+                type(args).__name__, name,
+            )
+            continue
+        parts = [f"{k}={_format_tool_call_value(v)}" for k, v in args.items()]
         calls.append(f"{name}({', '.join(parts)})")
 
     return f"{TOOL_CALL_START}[{', '.join(calls)}]{TOOL_CALL_END}"

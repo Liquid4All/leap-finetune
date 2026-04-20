@@ -198,7 +198,7 @@ def validate_tool_format(
 def _format_tool_call_value(v) -> str:
     # json.dumps gives double-quoted + proper escaping of
     # ", \n, \. Everything else: repr()
-    # gives valid Python literal syntax 
+    # gives valid Python literal syntax
     if isinstance(v, str):
         return json.dumps(v, ensure_ascii=False)
     return repr(v)
@@ -217,7 +217,8 @@ def _tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
         if not isinstance(args, dict):
             logger.warning(
                 "Skipping tool_call with non-dict arguments (got %s): name=%s",
-                type(args).__name__, name,
+                type(args).__name__,
+                name,
             )
             continue
         parts = [f"{k}={_format_tool_call_value(v)}" for k, v in args.items()]

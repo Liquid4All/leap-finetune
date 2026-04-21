@@ -490,6 +490,64 @@ class TestRunNameInConfig:
 # === Invalid configs ===
 
 
+class TestModelNameAndPreprocessFn:
+    def test_model_name_passed_to_loader(self, tmp_path):
+        config = {
+            "project_name": "test",
+            "model_name": "LFM2.5-1.2B-Instruct",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.dataset.model_name == "LFM2.5-1.2B-Instruct"
+
+    def test_default_model_name(self, tmp_path):
+        config = {
+            "project_name": "test",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.dataset.model_name == "LFM2-1.2B"
+
+    def test_invalid_preprocess_fn_raises(self, tmp_path):
+        config = {
+            "project_name": "test",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {**BASE_SFT_DATASET, "preprocess_fn": "nonexistent.module.func"},
+            "training_config": {"extends": "DEFAULT_SFT"},
+        }
+        with pytest.raises((ValueError, ModuleNotFoundError)):
+            parse_job_config(write_config(config, tmp_path))
+
+    def test_preprocess_fn_bare_name_raises(self, tmp_path):
+        config = {
+            "project_name": "test",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {**BASE_SFT_DATASET, "preprocess_fn": "no_dots_here"},
+            "training_config": {"extends": "DEFAULT_SFT"},
+        }
+        with pytest.raises(ValueError, match="dotted path"):
+            parse_job_config(write_config(config, tmp_path))
+
+    def test_valid_preprocess_fn_resolved(self, tmp_path):
+        config = {
+            "project_name": "test",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {**BASE_SFT_DATASET, "preprocess_fn": "json.dumps"},
+            "training_config": {"extends": "DEFAULT_SFT"},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        import json
+
+        assert job.dataset.preprocess_fn is json.dumps
+
+
 class TestInvalidConfigs:
     def test_unknown_extends_raises(self, tmp_path):
         config = {

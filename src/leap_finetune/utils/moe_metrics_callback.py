@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 class MoEMetricsCallback(TrainerCallback):
     """Collects MoE health metrics from patched MoE blocks and logs to wandb/trainer.
 
-    Reads module attributes set by MoETrainingEnhancer:
+    Reads module attributes set by the MoE loss patching path:
       _moe_aux_loss, _moe_z_loss, _moe_tokens_per_expert,
       _moe_router_logits_mean, _moe_router_logits_std, _moe_num_experts
     """

@@ -1,6 +1,6 @@
 project_name: "my_moe_dpo_project"
 model_name: "LFM2-8B-A1B"
-training_type: "dpo"
+training_type: "moe_dpo"
 
 dataset:
   path: "mlabonne/orpo-dpo-mix-40k"

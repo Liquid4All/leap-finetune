@@ -13,8 +13,8 @@ from trl import DPOConfig, DPOTrainer
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.sampling import get_length_grouped_sampler
 from leap_finetune.training_configs.distributed_configs import (
-    MOE_FSDP_CONFIG,
-    MOE_FSDP_CONFIG_LARGE,
+    build_moe_fsdp_config,
+    resolve_reshard_after_forward,
 )
 from leap_finetune.utils.callbacks import LeapCheckpointCallback, MoEMetricsCallback
 from leap_finetune.utils.context_parallel import (
@@ -56,6 +56,7 @@ MOE_DPO_EXCLUDED_KEYS = {
     "context_parallel_size",
     "chat_template",
     "chat_template_path",
+    "reshard_after_forward",
 }
 
 
@@ -209,7 +210,8 @@ def moe_dpo_run(training_config: dict) -> None:
     moe_config_dict = training_config.get("train_config", {}).get("moe_training", {})
     moe_config = MoETrainingConfig.from_dict(moe_config_dict)
     ep_size = moe_config_dict.get("expert_parallel_size", 1) or 1
-    cp_size = training_config.get("train_config", {}).get("context_parallel_size", 1)
+    train_config = training_config.get("train_config", {})
+    cp_size = train_config.get("context_parallel_size", 1)
     use_ep = ep_size > 1
     if use_ep and cp_size > 1:
         raise ValueError(
@@ -217,9 +219,7 @@ def moe_dpo_run(training_config: dict) -> None:
             "Only DP x CP is supported for context parallelism."
         )
 
-    run_name_template = training_config.get("train_config", {}).get(
-        "leap_run_name_template"
-    )
+    run_name_template = train_config.get("leap_run_name_template")
 
     if cp_size > 1:
         validate_cp_config(
@@ -228,7 +228,14 @@ def moe_dpo_run(training_config: dict) -> None:
         )
 
     is_large = is_large_moe_model_from_name(model_name)
-    fsdp_config = MOE_FSDP_CONFIG_LARGE if is_large else MOE_FSDP_CONFIG
+    reshard_after_forward = resolve_reshard_after_forward(
+        train_config,
+        default=False if use_ep else is_large,
+    )
+    fsdp_config = build_moe_fsdp_config(
+        reshard_after_forward=reshard_after_forward,
+        activation_checkpointing=is_large,
+    )
 
     excluded_keys = MOE_DPO_EXCLUDED_KEYS
     if use_ep or use_fsdp:
@@ -236,13 +243,13 @@ def moe_dpo_run(training_config: dict) -> None:
 
     train_config_filtered = {
         k: v
-        for k, v in training_config.get("train_config", {}).items()
+        for k, v in train_config.items()
         if k not in excluded_keys
     }
     requested_save_strategy = train_config_filtered.get("save_strategy", "no")
 
     wandb_logging = bool(
-        training_config.get("train_config", {}).get("wandb_logging", False)
+        train_config.get("wandb_logging", False)
     )
     init_wandb_if_enabled(job_name, wandb_logging)
 
@@ -258,16 +265,24 @@ def moe_dpo_run(training_config: dict) -> None:
     }
     if use_ep:
         config_kwargs["gradient_checkpointing"] = False
-        logger.info("EP mode: ep_size=%s, FSDP2 on dp_mesh", ep_size)
+        logger.info(
+            "EP mode: ep_size=%s, FSDP2 on dp_mesh, reshard_after_forward=%s",
+            ep_size,
+            reshard_after_forward,
+        )
     elif use_fsdp:
         config_kwargs["gradient_checkpointing"] = False
         config_kwargs["fsdp"] = fsdp_config["fsdp"]
         config_kwargs["fsdp_config"] = fsdp_config["fsdp_config"]
+        logger.info(
+            "Non-EP DPO FSDP mode: fsdp=%s reshard_after_forward=%s",
+            config_kwargs["fsdp"],
+            reshard_after_forward,
+        )
 
     training_args = DPOConfig(**config_kwargs)
 
     model_config = training_config.get("model_config")
-    train_config = training_config.get("train_config", {})
     model, tokenizer = load_model(
         model_name,
         model_config=model_config,
@@ -294,7 +309,11 @@ def moe_dpo_run(training_config: dict) -> None:
         model = apply_peft_to_model(model, peft_config)
 
     if use_ep and device_mesh is not None:
-        model = apply_fsdp2_for_ep(model, device_mesh, reshard_after_forward=False)
+        model = apply_fsdp2_for_ep(
+            model,
+            device_mesh,
+            reshard_after_forward=reshard_after_forward,
+        )
 
     if not hasattr(model, "warnings_issued"):
         model.warnings_issued = {}

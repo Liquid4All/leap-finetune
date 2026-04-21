@@ -19,6 +19,7 @@ SFT_EXCLUDED_KEYS = {
     "assistant_only_loss",
     "chat_template",
     "chat_template_path",
+    "reshard_after_forward",
 }
 
 
@@ -116,7 +117,7 @@ DEFAULT_SFT = {
 # Base MoE SFT config - distributed strategy is applied automatically in runner
 # based on PEFT presence: DeepSpeed for LoRA, FSDP for full fine-tuning
 MOE_SFT = {
-    "training_type": "sft",
+    "training_type": "moe_sft",
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 2,  # MoE models typically need fewer epochs
     "per_device_train_batch_size": 2,  # Reduced to save memory
@@ -133,25 +134,4 @@ MOE_SFT = {
     # - With PEFT: uses MOE_DEEPSPEED_CONFIG
     # - Without PEFT: uses FSDP_CONFIG
     "deepspeed": MOE_DEEPSPEED_CONFIG,
-}
-
-
-########################
-# MOE LARGE SFT CONFIG #
-########################
-
-MOE_LARGE_SFT = {
-    "training_type": "moe_sft",
-    "output_dir": SFT_OUTPUT_PATH,
-    "num_train_epochs": 2,
-    "per_device_train_batch_size": 1,
-    "gradient_accumulation_steps": 8,
-    "learning_rate": 5e-5,
-    "lr_scheduler_type": "linear",
-    "warmup_ratio": 0.2,
-    "logging_steps": 10,
-    "save_strategy": "epoch",
-    "eval_strategy": "epoch",
-    "max_grad_norm": 1.0,
-    "bf16": True,
 }

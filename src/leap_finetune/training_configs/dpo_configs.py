@@ -80,7 +80,7 @@ DEFAULT_DPO = {
 # Base MoE DPO config - distributed strategy is applied automatically in runner
 # based on PEFT presence: DeepSpeed for LoRA, FSDP for full fine-tuning
 MOE_DPO = {
-    "training_type": "dpo",
+    "training_type": "moe_dpo",
     "output_dir": DPO_OUTPUT_PATH,
     "num_train_epochs": 2,  # MoE models typically need fewer epochs
     "per_device_train_batch_size": 2,  # MoE models are larger, use smaller batch size
@@ -100,28 +100,4 @@ MOE_DPO = {
     "deepspeed": MOE_DEEPSPEED_CONFIG,
     "chat_template": None,
     "chat_template_path": None,
-}
-
-
-########################
-# MOE LARGE DPO CONFIG #
-########################
-
-MOE_LARGE_DPO = {
-    "training_type": "moe_dpo",
-    "output_dir": DPO_OUTPUT_PATH,
-    "num_train_epochs": 2,
-    "per_device_train_batch_size": 1,
-    "gradient_accumulation_steps": 8,
-    "gradient_checkpointing": True,
-    "learning_rate": 1e-6,
-    "lr_scheduler_type": "linear",
-    "beta": 0.1,
-    "loss_type": "sigmoid",
-    "warmup_ratio": 0.2,
-    "logging_steps": 10,
-    "save_strategy": "epoch",
-    "eval_strategy": "epoch",
-    "max_grad_norm": 1.0,
-    "bf16": True,
 }

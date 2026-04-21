@@ -23,7 +23,7 @@ ray:
   num_workers: 8
 
 training_config:
-  extends: "MOE_LARGE_SFT"
+  extends: "MOE_SFT"
   max_length: 65536
   packing: true
   padding_free: true
@@ -39,7 +39,6 @@ training_config:
   moe_training:
     aux_loss_coef: 0.01
     z_loss_coef: 0.001
-    router_lr_ratio: 0.1
     expert_parallel_size: 1
 
 peft_config:

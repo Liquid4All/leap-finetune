@@ -97,6 +97,7 @@ def dpo_run(training_config: dict) -> None:
         "context_parallel_size",
         "chat_template",
         "chat_template_path",
+        "reshard_after_forward",
     }
 
     train_config_filtered = {

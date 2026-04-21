@@ -1,3 +1,5 @@
+import copy
+
 ########################
 #     FSDP CONFIGS     #
 ########################
@@ -22,3 +24,27 @@ MOE_FSDP_CONFIG_LARGE = {
         "activation_checkpointing": True,
     },
 }
+
+
+def resolve_reshard_after_forward(
+    train_config: dict, default: bool
+) -> bool:
+    """Resolve reshard_after_forward from config, then default."""
+    config_value = train_config.get("reshard_after_forward")
+    if config_value is not None:
+        return bool(config_value)
+    return default
+
+
+def build_moe_fsdp_config(
+    *, reshard_after_forward: bool, activation_checkpointing: bool = False
+) -> dict:
+    """Build an HF FSDP config that mirrors the requested reshard mode."""
+    template = MOE_FSDP_CONFIG_LARGE if reshard_after_forward else MOE_FSDP_CONFIG
+    config = copy.deepcopy(template)
+    fsdp_config = config["fsdp_config"]
+    if activation_checkpointing:
+        fsdp_config["activation_checkpointing"] = True
+    else:
+        fsdp_config.pop("activation_checkpointing", None)
+    return config

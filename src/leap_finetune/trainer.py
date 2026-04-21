@@ -186,7 +186,6 @@ def ray_trainer(job_config: dict) -> None:
             "sft",
             "dpo",
             "moe_sft",
-            "moe_sft_hf",
             "moe_dpo",
         )
         train_ds, eval_ds = create_ray_datasets(

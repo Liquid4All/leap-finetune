@@ -15,7 +15,6 @@ class MoETrainingConfig:
     z_loss_coef: float = 0.001
     capacity_factor: float | None = None
     token_drop_policy: str = "probs"
-    router_lr_ratio: float = 0.1
 
     @classmethod
     def from_dict(cls, d: dict) -> "MoETrainingConfig":

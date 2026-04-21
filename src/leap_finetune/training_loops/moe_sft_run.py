@@ -11,6 +11,9 @@ from transformers import Trainer, TrainingArguments
 
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.sampling import get_length_grouped_sampler
+from leap_finetune.training_configs.distributed_configs import (
+    resolve_reshard_after_forward,
+)
 from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
 from leap_finetune.training_loops.sft_run import build_sft_data_collator
 from leap_finetune.utils.callbacks import LeapCheckpointCallback, MoEMetricsCallback
@@ -63,15 +66,6 @@ MOE_SFT_EXCLUDED_KEYS = SFT_EXCLUDED_KEYS | {
 
 def _fsdp_cpu_offload_enabled() -> bool:
     return os.getenv("LEAP_FSDP_CPU_OFFLOAD", "").lower() in {"1", "true", "yes"}
-
-
-def _fsdp_reshard_after_forward_override() -> bool | None:
-    raw = os.getenv("LEAP_FSDP_RESHARD_AFTER_FORWARD", "").strip().lower()
-    if raw in {"1", "true", "yes"}:
-        return True
-    if raw in {"0", "false", "no"}:
-        return False
-    return None
 
 
 class LFMMoeSFTTrainer(Trainer):
@@ -262,7 +256,8 @@ def moe_sft_run(training_config: dict) -> None:
     _validate_supported_moe_sft_config(moe_config_dict)
     moe_config = MoETrainingConfig.from_dict(moe_config_dict)
     ep_size = moe_config_dict.get("expert_parallel_size", 1) or 1
-    cp_size = training_config.get("train_config", {}).get("context_parallel_size", 1)
+    train_config = training_config.get("train_config", {})
+    cp_size = train_config.get("context_parallel_size", 1)
 
     use_ep = ep_size > 1
     if use_ep and cp_size > 1:
@@ -275,9 +270,7 @@ def moe_sft_run(training_config: dict) -> None:
     # Falling back to DeepSpeed here materially changes memory behavior.
     use_fsdp2 = peft_config is None and not use_ep
 
-    run_name_template = training_config.get("train_config", {}).get(
-        "leap_run_name_template"
-    )
+    run_name_template = train_config.get("leap_run_name_template")
 
     excluded_keys = MOE_SFT_EXCLUDED_KEYS | (
         {"deepspeed"} if (use_ep or use_fsdp2) else set()
@@ -285,13 +278,13 @@ def moe_sft_run(training_config: dict) -> None:
 
     train_config_filtered = {
         k: v
-        for k, v in training_config.get("train_config", {}).items()
+        for k, v in train_config.items()
         if k not in excluded_keys
     }
     requested_save_strategy = train_config_filtered.get("save_strategy", "no")
 
     wandb_logging = bool(
-        training_config.get("train_config", {}).get("wandb_logging", False)
+        train_config.get("wandb_logging", False)
     )
     init_wandb_if_enabled(job_name, wandb_logging)
 
@@ -320,7 +313,7 @@ def moe_sft_run(training_config: dict) -> None:
     training_args = TrainingArguments(**config_kwargs)
 
     if cp_size > 1:
-        max_length = training_config.get("train_config", {}).get("max_length")
+        max_length = train_config.get("max_length")
         validate_cp_config(
             cp_size,
             max_length=max_length,
@@ -329,7 +322,6 @@ def moe_sft_run(training_config: dict) -> None:
 
     init_memory_trace(training_args.output_dir, framework="leap")
     model_config = training_config.get("model_config")
-    train_config = training_config.get("train_config", {})
     model, tokenizer = load_model(
         model_name,
         model_config=model_config,
@@ -364,13 +356,24 @@ def moe_sft_run(training_config: dict) -> None:
         model = apply_peft_to_model(model, peft_config)
 
     if use_ep and device_mesh is not None:
-        model = apply_fsdp2_for_ep(model, device_mesh, reshard_after_forward=False)
+        reshard_after_forward = resolve_reshard_after_forward(
+            train_config, default=False
+        )
+        logger.info(
+            "Applying EP FSDP2 with reshard_after_forward=%s",
+            reshard_after_forward,
+        )
+        model = apply_fsdp2_for_ep(
+            model,
+            device_mesh,
+            reshard_after_forward=reshard_after_forward,
+        )
         write_memory_trace_event("after_apply_fsdp2", always=True)
         log_cuda_memory("after_apply_fsdp2", summary=True)
     elif use_fsdp2 and dp_mesh is not None:
-        reshard_after_forward = _fsdp_reshard_after_forward_override()
-        if reshard_after_forward is None:
-            reshard_after_forward = True
+        reshard_after_forward = resolve_reshard_after_forward(
+            train_config, default=True
+        )
         cpu_offload = _fsdp_cpu_offload_enabled()
         if cpu_offload:
             logger.info("Non-EP FSDP2 CPU offload enabled via LEAP_FSDP_CPU_OFFLOAD")

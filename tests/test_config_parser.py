@@ -143,12 +143,12 @@ class TestParseJobConfig:
 
     def test_parse_moe_sft_example(self, moe_sft_config_path):
         job = parse_job_config(moe_sft_config_path)
-        assert job.training_type == "sft"
+        assert job.training_type == "moe_sft"
         assert job.model_name == "LFM2-8B-A1B"
 
     def test_parse_moe_dpo_example(self, moe_dpo_config_path):
         job = parse_job_config(moe_dpo_config_path)
-        assert job.training_type == "dpo"
+        assert job.training_type == "moe_dpo"
         assert job.model_name == "LFM2-8B-A1B"
 
 
@@ -190,6 +190,33 @@ class TestExtendsResolution:
             job = parse_job_config(f.name)
             assert job.training_config.value["assistant_only_loss"] is True
             assert job.training_config.value["completion_only_loss"] is True
+        finally:
+            os.unlink(f.name)
+
+    def test_reshard_after_forward_survives_config_override(self, tmp_path):
+        config = {
+            "project_name": "test_reshard_after_forward",
+            "model_name": "LFM2-24B-A2B",
+            "training_type": "moe_sft",
+            "dataset": {
+                "path": "HuggingFaceTB/smoltalk",
+                "type": "sft",
+                "limit": 10,
+                "test_size": 0.2,
+                "subset": "all",
+            },
+            "training_config": {
+                "extends": "MOE_SFT",
+                "reshard_after_forward": False,
+            },
+            "peft_config": {"use_peft": False},
+        }
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+        try:
+            yaml.dump(config, f)
+            f.flush()
+            job = parse_job_config(f.name)
+            assert job.training_config.value["reshard_after_forward"] is False
         finally:
             os.unlink(f.name)
 

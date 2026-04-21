@@ -111,7 +111,7 @@ def parse_job_config(config_input: str) -> JobConfig:
     else:
         final_dataset_path = _resolve_local_path(ds_config.get("path"), base_dir=config_dir)
 
-    valid_types = {"sft", "dpo", "vlm_sft", "moe_sft", "moe_sft_hf", "moe_dpo"}
+    valid_types = {"sft", "dpo", "vlm_sft", "moe_sft", "moe_dpo"}
     ds_type = ds_config.get("type")
     if ds_type not in valid_types:
         raise ValueError(
@@ -150,7 +150,6 @@ def parse_job_config(config_input: str) -> JobConfig:
             "dpo": "DEFAULT_DPO",
             "vlm_sft": "DEFAULT_VLM_SFT",
             "moe_sft": "MOE_SFT",
-            "moe_sft_hf": "MOE_SFT",
             "moe_dpo": "MOE_DPO",
         }
         if training_type not in training_type_to_config:
@@ -297,7 +296,7 @@ def _validate_parallelism_config(
     if training_type in ("sft", "dpo") and is_moe_model_from_name(model_name):
         effective_training_type = f"moe_{training_type}"
 
-    if effective_training_type in ("moe_sft", "moe_sft_hf"):
+    if effective_training_type == "moe_sft":
         capacity_factor = moe_config.get("capacity_factor")
         token_drop_policy = moe_config.get("token_drop_policy")
         if capacity_factor is not None or token_drop_policy not in (None, "probs"):
@@ -315,12 +314,6 @@ def _validate_parallelism_config(
         raise ValueError(
             "expert_parallel_size > 1 cannot be combined with context_parallel_size > 1. "
             "Only DP x CP is supported for context parallelism."
-        )
-
-    if effective_training_type == "moe_sft_hf":
-        raise ValueError(
-            "expert_parallel_size requires the custom MoE loops. "
-            "moe_sft_hf is a non-EP baseline only."
         )
 
     if effective_training_type not in ("moe_sft", "moe_dpo"):

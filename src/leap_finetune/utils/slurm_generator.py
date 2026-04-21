@@ -15,7 +15,6 @@ _PASSTHROUGH_ENV_VARS = (
     "GLOO_SOCKET_IFNAME",
     "TORCH_DISTRIBUTED_DEBUG",
     "LEAP_DISABLE_DATASETS_TORCH_SHM",
-    "LEAP_SKIP_QUICK_VALIDATE",
     "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE",
     "LEAP_SOCKET_IFNAME",
 )
@@ -31,7 +30,6 @@ def _render_export_block(is_multinode: bool) -> str:
         # Multi-node defaults should prefer the working CP/FSDP transport path.
         defaults = {
             "NCCL_IB_DISABLE": "0",
-            "LEAP_SKIP_QUICK_VALIDATE": "1",
             "LEAP_DISABLE_DATASETS_TORCH_SHM": "1",
             "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE": "1",
         }
@@ -41,7 +39,6 @@ def _render_export_block(is_multinode: bool) -> str:
     for key in _PASSTHROUGH_ENV_VARS:
         if key in {
             "NCCL_IB_DISABLE",
-            "LEAP_SKIP_QUICK_VALIDATE",
             "LEAP_DISABLE_DATASETS_TORCH_SHM",
             "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE",
         } and is_multinode:

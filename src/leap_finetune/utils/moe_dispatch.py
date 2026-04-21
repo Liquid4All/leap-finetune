@@ -8,7 +8,7 @@ from torch.distributed._functional_collectives import (
     all_to_all_single_autograd,
 )
 
-from leap_finetune.utils.moe_training import (
+from leap_finetune.utils.moe_losses import (
     InjectAuxLoss,
     switch_load_balancing_loss,
     z_loss,
@@ -339,7 +339,7 @@ def patch_moe_block_for_ep(
     """Monkey-patch an Lfm2MoeSparseMoeBlock for EP-aware forward.
 
     Integrates aux loss computation (load balancing, z-loss) directly so that
-    applying EP after MoETrainingEnhancer doesn't lose the losses.
+    applying EP after the MoE loss patching path doesn't lose the losses.
 
     Args:
         block: Lfm2MoeSparseMoeBlock
@@ -426,7 +426,7 @@ def apply_ep_to_model(model: nn.Module, ep_config: dict, moe_config=None) -> Non
     """Apply EP dispatching to all MoE blocks in the model.
 
     Must be called after shard_experts(). If moe_config is provided, aux losses
-    are computed in the EP forward (replaces MoETrainingEnhancer).
+    are computed directly in the EP forward.
 
     Args:
         model: model with sharded experts

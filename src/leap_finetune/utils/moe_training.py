@@ -29,9 +29,9 @@ class MoETrainingConfig:
 class InjectAuxLoss(torch.autograd.Function):
     """Injects auxiliary loss into backward pass without affecting forward output.
 
-    The aux loss is added to the gradient of the output during backward,
-    which propagates it through the computation graph without changing
-    the forward pass values.
+    Forward returns output unchanged. Backward passes grad_output through
+    and returns gradient 1.0 for aux_loss, so autograd propagates through
+    aux_loss's computation graph (router weights get proper gradients).
     """
 
     @staticmethod
@@ -40,13 +40,9 @@ class InjectAuxLoss(torch.autograd.Function):
         return output
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None]:
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         (aux_loss,) = ctx.saved_tensors
-        aux_loss_grad = torch.ones_like(aux_loss)
-        # Scale aux loss gradient to match output shape — broadcast add to first element
-        scaled_grad = torch.zeros_like(grad_output)
-        scaled_grad.view(-1)[0] = aux_loss_grad.sum()
-        return grad_output + scaled_grad, None
+        return grad_output, torch.ones_like(aux_loss)
 
 
 # === Loss Functions ===
@@ -190,22 +186,29 @@ class MoETrainingEnhancer:
 
         def enhanced_forward(hidden_states: torch.Tensor) -> torch.Tensor:
             B, S, H = hidden_states.shape
-            x = hidden_states.view(-1, H)
+            x = hidden_states.view(-1, H)  # [B*S, H]
 
-            # === Router ===
-            router_logits = block.gate(x)
-            # Original routing — call the model's route_tokens_to_experts
+            # === 1. Router ===
+            router_logits = block.gate(x)  # [B*S, E]
+            num_experts = router_logits.shape[-1]
+
+            # === 2. Inject z-loss into router_logits (before routing) ===
+            # Losses are injected into intermediates so their backward flows
+            # through the same layer pass as the main gradient. Injecting into
+            # the final output would trigger extra FSDP operations.
+            if config.z_loss_coef > 0:
+                zl = z_loss(router_logits, config.z_loss_coef)
+                router_logits = InjectAuxLoss.apply(router_logits, zl)
+                block._moe_z_loss = zl.detach()
+
+            # === 3. Route tokens ===
             selected_experts, routing_weights = block.route_tokens_to_experts(
                 router_logits
-            )
-
-            num_experts = router_logits.shape[-1]
+            )  # [B*S, K], [B*S, K]
             top_k = selected_experts.shape[-1]
 
-            # Compute router probs for loss computation (sigmoid for LFM2 MoE)
-            router_probs = torch.sigmoid(router_logits)
-
-            # === Token dropping ===
+            # === 4. Token dropping ===
+            router_probs = torch.sigmoid(router_logits)  # [B*S, E]
             if config.capacity_factor is not None:
                 selected_experts, routing_weights = apply_router_token_dropping(
                     router_probs=router_probs,
@@ -216,12 +219,7 @@ class MoETrainingEnhancer:
                     drop_policy=config.token_drop_policy,
                 )
 
-            # === Expert computation (use original forward logic) ===
-            output = original_forward(hidden_states)
-
-            # === Aux losses ===
-            total_aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
-
+            # === 5. Inject aux loss into routing_weights (after routing) ===
             if config.aux_loss_coef > 0:
                 aux = switch_load_balancing_loss(
                     router_probs,
@@ -230,19 +228,13 @@ class MoETrainingEnhancer:
                     top_k,
                     config.aux_loss_coef,
                 )
-                total_aux_loss = total_aux_loss + aux
+                routing_weights = InjectAuxLoss.apply(routing_weights, aux)
                 block._moe_aux_loss = aux.detach()
 
-            if config.z_loss_coef > 0:
-                zl = z_loss(router_logits, config.z_loss_coef)
-                total_aux_loss = total_aux_loss + zl
-                block._moe_z_loss = zl.detach()
+            # === 6. Expert computation (original forward) ===
+            output = original_forward(hidden_states)  # [B, S, H]
 
-            # Inject loss into backward pass
-            if total_aux_loss.item() != 0.0:
-                output = InjectAuxLoss.apply(output, total_aux_loss)
-
-            # === Store metrics for callback ===
+            # === 7. Store metrics for callback ===
             with torch.no_grad():
                 tokens_per_expert = torch.zeros(
                     num_experts, device=x.device, dtype=torch.float32

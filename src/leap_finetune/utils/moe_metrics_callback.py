@@ -15,7 +15,13 @@ class MoEMetricsCallback(TrainerCallback):
     """
 
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
-        if model is None or logs is None:
+        if logs is None:
+            return
+
+        # model may be passed directly or via kwargs
+        if model is None:
+            model = kwargs.get("model")
+        if model is None:
             return
 
         metrics = self._collect_metrics(model)

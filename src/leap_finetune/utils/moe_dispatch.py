@@ -3,124 +3,106 @@ import logging
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+from torch.distributed._functional_collectives import (
+    all_to_all_single as _functional_a2a,
+    all_to_all_single_autograd,
+)
+
+from leap_finetune.utils.moe_training import (
+    InjectAuxLoss,
+    switch_load_balancing_loss,
+    z_loss,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# === AlltoAll Autograd Function ===
+# === Grouped MM Dispatch ===
 
 
-class _AllToAll(torch.autograd.Function):
-    """Autograd-compatible AlltoAll collective.
-
-    Forward: all_to_all_single with output_splits/input_splits
-    Backward: all_to_all_single with reversed splits
-    """
-
-    @staticmethod
-    def forward(
-        ctx,
-        group: dist.ProcessGroup,
-        input_: torch.Tensor,
-        output_split_sizes: list[int],
-        input_split_sizes: list[int],
-    ) -> torch.Tensor:
-        ctx.group = group
-        ctx.output_split_sizes = output_split_sizes
-        ctx.input_split_sizes = input_split_sizes
-
-        output = torch.empty(
-            sum(output_split_sizes),
-            *input_.shape[1:],
-            dtype=input_.dtype,
-            device=input_.device,
-        )
-        dist.all_to_all_single(
-            output,
-            input_,
-            output_split_sizes=output_split_sizes,
-            input_split_sizes=input_split_sizes,
-            group=group,
-        )
-        return output
-
-    @staticmethod
-    def backward(ctx, grad_output: torch.Tensor):
-        # Reverse the splits for backward
-        grad_input = torch.empty(
-            sum(ctx.input_split_sizes),
-            *grad_output.shape[1:],
-            dtype=grad_output.dtype,
-            device=grad_output.device,
-        )
-        dist.all_to_all_single(
-            grad_input,
-            grad_output,
-            output_split_sizes=ctx.input_split_sizes,
-            input_split_sizes=ctx.output_split_sizes,
-            group=ctx.group,
-        )
-        return None, grad_input, None, None
-
-
-def all_to_all(
-    group: dist.ProcessGroup,
-    input_: torch.Tensor,
-    output_split_sizes: list[int],
-    input_split_sizes: list[int],
+def _grouped_mm(
+    input_: torch.Tensor, weight: torch.Tensor, offs: torch.Tensor
 ) -> torch.Tensor:
-    return _AllToAll.apply(group, input_, output_split_sizes, input_split_sizes)
+    """Dispatch to torch.nn.functional.grouped_mm or torch._grouped_mm.
+
+    Args:
+        input_: [S, input_dim] — sorted tokens
+        weight: [n_experts, input_dim, output_dim] — pre-transposed for A @ B
+        offs: [n_experts] — cumulative token counts (int32)
+    """
+    input_ = input_.to(weight.dtype)
+    if hasattr(torch.nn.functional, "grouped_mm"):
+        return torch.nn.functional.grouped_mm(input_, weight, offs=offs)
+    return torch._grouped_mm(input_, weight, offs=offs)
 
 
 # === Token Permutation Utilities ===
 
 
+def tokens_per_expert_from_routing(
+    selected_experts: torch.Tensor, n_experts: int
+) -> torch.Tensor:
+    """Count tokens assigned to each expert via histogram (no Python loops).
+
+    Args:
+        selected_experts: [n_tokens, top_k] expert indices
+        n_experts: total number of global experts
+
+    Returns:
+        tokens_per_expert: [n_experts]
+    """
+    flat = selected_experts.reshape(-1)
+    return torch.histc(flat.float(), bins=n_experts, min=0, max=n_experts - 1).long()
+
+
 def permute_tokens(
     hidden_states: torch.Tensor,
-    routing_map: torch.Tensor,
-    probs: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Permute tokens by expert assignment for AlltoAll dispatch.
+    selected_experts: torch.Tensor,
+    routing_weights: torch.Tensor,
+    n_experts: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Sort tokens by expert assignment for AlltoAll dispatch.
+
+    Each token-expert pair (from top-k) becomes one row in the output, grouped
+    by expert index (0, 1, ..., n_experts-1).
 
     Args:
         hidden_states: [n_tokens, hidden_size]
-        routing_map: [n_tokens, n_experts] bool — which expert each token goes to
-        probs: [n_tokens, top_k] routing weights
+        selected_experts: [n_tokens, top_k] expert indices per token
+        routing_weights: [n_tokens, top_k] routing weight per assignment
+        n_experts: total number of experts
 
     Returns:
         permuted_tokens: [n_permuted, hidden_size] sorted by expert
-        permuted_probs: [n_permuted, 1] corresponding weights
-        reverse_map: [n_permuted] indices to reverse permutation
+        permuted_weights: [n_permuted, 1] routing weight per assignment
+        reverse_map: [n_permuted] original token indices for unpermutation
+        tokens_per_expert: [n_experts] count of tokens assigned to each expert
     """
-    # routing_map columns correspond to experts
-    # For each expert, gather tokens assigned to it
-    n_tokens, n_experts = routing_map.shape
+    n_tokens, top_k = selected_experts.shape
     device = hidden_states.device
 
-    token_indices = []
-    prob_values = []
+    # Flatten top-k: each (token, slot) pair → one entry
+    # token_idx[i] = which token, expert_ids[i] = which expert
+    token_idx = (
+        torch.arange(n_tokens, device=device)
+        .unsqueeze(1)
+        .expand(-1, top_k)
+        .reshape(-1)
+    )  # [n_tokens * top_k]
+    expert_ids = selected_experts.reshape(-1)  # [n_tokens * top_k]
+    flat_weights = routing_weights.reshape(-1)  # [n_tokens * top_k]
 
-    for expert_idx in range(n_experts):
-        assigned = routing_map[:, expert_idx].nonzero(as_tuple=True)[0]
-        token_indices.append(assigned)
-        # Get the prob for tokens assigned to this expert
-        # Find which top_k slot matches this expert
-        prob_values.append(torch.ones(assigned.shape[0], device=device))
+    # Sort by expert index — groups all tokens for expert 0 first, then 1, etc.
+    perm = torch.argsort(expert_ids, stable=True)
+    token_idx = token_idx[perm]
+    flat_weights = flat_weights[perm]
 
-    token_indices = torch.cat(token_indices)
-    permuted_tokens = hidden_states[token_indices]
+    permuted_tokens = hidden_states[token_idx]
+    permuted_weights = flat_weights.unsqueeze(-1)
 
-    # Build reverse map: position i in permuted → original token index
-    reverse_map = token_indices
+    tokens_per_expert = tokens_per_expert_from_routing(selected_experts, n_experts)
 
-    # Get probs — for simplicity, gather max prob per token
-    permuted_probs = (
-        probs[token_indices, 0].unsqueeze(-1)
-        if probs.dim() == 2
-        else probs[token_indices].unsqueeze(-1)
-    )
-
-    return permuted_tokens, permuted_probs, reverse_map
+    return permuted_tokens, permuted_weights, token_idx, tokens_per_expert
 
 
 def unpermute_tokens(
@@ -130,22 +112,11 @@ def unpermute_tokens(
     n_tokens: int,
     hidden_size: int,
 ) -> torch.Tensor:
-    """Reverse permutation: scatter expert outputs back to original token order.
-
-    Args:
-        hidden_states: [n_permuted, hidden_size] expert outputs
-        reverse_map: [n_permuted] original token indices
-        probs: [n_permuted, 1] routing weights for weighted sum
-        n_tokens: original number of tokens
-        hidden_size: hidden dimension
-
-    Returns:
-        output: [n_tokens, hidden_size]
-    """
+    """Scatter expert outputs back to original token order with weighted accumulation."""
+    weighted = hidden_states * probs.to(hidden_states.dtype)
     output = torch.zeros(
-        n_tokens, hidden_size, dtype=hidden_states.dtype, device=hidden_states.device
+        n_tokens, hidden_size, dtype=weighted.dtype, device=weighted.device
     )
-    weighted = hidden_states * probs
     output.scatter_add_(0, reverse_map.unsqueeze(-1).expand_as(weighted), weighted)
     return output
 
@@ -154,12 +125,12 @@ def unpermute_tokens(
 
 
 class EPTokenDispatcher:
-    """Simplified AlltoAll dispatcher for Expert Parallelism without Tensor Parallelism.
+    """AlltoAll dispatcher for Expert Parallelism.
 
-    Handles the full dispatch cycle:
-    1. preprocess: compute AlltoAll split sizes from routing decisions
-    2. token_permutation: local permute → AlltoAll → sort by local expert
-    3. token_unpermutation: unsort → reverse AlltoAll → unpermute
+    Token lifecycle:
+    1. preprocess — exchange per-expert token counts via AlltoAll
+    2. token_permutation — local sort by expert → AlltoAll → re-sort by local expert
+    3. token_unpermutation — undo re-sort → reverse AlltoAll → unpermute
     """
 
     def __init__(
@@ -178,222 +149,289 @@ class EPTokenDispatcher:
         self.ep_size = ep_size
         self.ep_group = ep_group
 
-        # Set during preprocess
+        # Set during preprocess/permutation
         self.input_splits: list[int] = []
         self.output_splits: list[int] = []
+        self.tokens_per_local_expert: torch.Tensor | None = None
         self._reverse_map: torch.Tensor | None = None
+        self._permuted_weights: torch.Tensor | None = None
+        self._unsort_indices: torch.Tensor | None = None
         self._n_tokens: int = 0
         self._hidden_size: int = 0
 
-    def preprocess(self, routing_map: torch.Tensor) -> None:
-        """Compute AlltoAll split sizes from routing map.
+    def preprocess(self, tokens_per_expert: torch.Tensor) -> None:
+        """Exchange per-expert token counts across EP ranks.
+
+        Uses functional collectives (async, composable with FSDP2) instead of
+        blocking dist.all_to_all_single which conflicts with FSDP2's scheduling.
 
         Args:
-            routing_map: [n_tokens, n_experts] bool tensor
+            tokens_per_expert: [n_experts] — counts from this rank's routing
         """
-        # tokens_per_expert: [n_experts] count of local tokens going to each expert
-        tokens_per_expert = routing_map.sum(dim=0).long()
-
-        # input_splits: tokens sent TO each EP rank
-        # Each EP rank owns n_local_experts consecutive experts
+        # tokens_per_expert[e] = how many of MY tokens go to global expert e
+        # Reshape to [ep_size, n_local_experts]: row r = counts for rank r's experts
         tpe_by_rank = tokens_per_expert.reshape(self.ep_size, self.n_local_experts)
-        self.input_splits = tpe_by_rank.sum(dim=1).tolist()
 
-        # Gather output_splits from all EP ranks (how many tokens we receive)
-        input_splits_tensor = torch.tensor(
-            self.input_splits, device=routing_map.device, dtype=torch.long
-        )
-        output_splits_tensor = torch.zeros_like(input_splits_tensor)
-        dist.all_to_all_single(
-            output_splits_tensor, input_splits_tensor, group=self.ep_group
-        )
-        self.output_splits = output_splits_tensor.tolist()
+        with torch.no_grad():
+            # === 1. Exchange per-rank totals ===
+            input_splits_t = tpe_by_rank.sum(dim=1).contiguous()
+            output_splits_t = _functional_a2a(
+                input_splits_t, None, None, group=self.ep_group
+            )
+            output_splits_t = torch.ops._c10d_functional.wait_tensor(output_splits_t)
+            self.input_splits = input_splits_t.tolist()
+            self.output_splits = output_splits_t.tolist()
+
+            # === 2. Exchange per-expert counts ===
+            expert_split = [self.n_local_experts] * self.ep_size
+            tpe_flat = tpe_by_rank.flatten().contiguous()
+            received_flat = _functional_a2a(
+                tpe_flat, expert_split, expert_split, group=self.ep_group
+            )
+            received_flat = torch.ops._c10d_functional.wait_tensor(received_flat)
+
+        # _received_tpe[r][e] = tokens from rank r for my local expert e
+        self._received_tpe = received_flat.reshape(self.ep_size, self.n_local_experts)
+        self.tokens_per_local_expert = self._received_tpe.sum(dim=0)
 
     def token_permutation(
         self,
         hidden_states: torch.Tensor,
-        probs: torch.Tensor,
-        routing_map: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Permute tokens → AlltoAll → sort by local expert.
+        selected_experts: torch.Tensor,
+        routing_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        """Sort tokens by expert → AlltoAll → re-sort by local expert.
 
         Args:
             hidden_states: [n_tokens, hidden_size]
-            probs: [n_tokens, top_k] routing weights
-            routing_map: [n_tokens, n_experts] bool
+            selected_experts: [n_tokens, top_k]
+            routing_weights: [n_tokens, top_k]
 
         Returns:
-            global_tokens: [n_received, hidden_size] tokens for local experts
-            global_probs: [n_received, 1] corresponding weights
-            tokens_per_local_expert: [n_local_experts] count per local expert
+            expert_input: [n_received, hidden_size] sorted by local expert
         """
         self._n_tokens = hidden_states.shape[0]
         self._hidden_size = hidden_states.shape[1]
 
-        # === 1. Local permute by expert assignment ===
-        permuted, permuted_probs, self._reverse_map = permute_tokens(
-            hidden_states, routing_map, probs
+        # === 1. Local permute: sort by global expert index ===
+        permuted, weights, self._reverse_map, _ = permute_tokens(
+            hidden_states, selected_experts, routing_weights, self.n_experts
+        )
+        self._permuted_weights = weights
+
+        # === 2. AlltoAll: send tokens to owning EP rank ===
+        # Uses functional collective (async, composable with FSDP2).
+        global_tokens = all_to_all_single_autograd(
+            permuted, self.output_splits, self.input_splits, self.ep_group
         )
 
-        # === 2. AlltoAll across EP ranks ===
-        global_tokens = all_to_all(
-            self.ep_group, permuted, self.output_splits, self.input_splits
+        # === 3. Re-sort received tokens by local expert ===
+        # After AlltoAll, tokens arrive as [from_rank0, from_rank1, ...].
+        # Within each source chunk, tokens are sorted by local expert.
+        # Re-sort so ALL tokens for expert 0 are contiguous, then expert 1, etc.
+        # Always run resort even on empty tokens — branch divergence between DP
+        # ranks causes NCCL operation ordering drift and deadlock at dp_size=2.
+        global_tokens, self._unsort_indices = self._resort_by_expert(global_tokens)
+
+        return global_tokens
+
+    def _resort_by_expert(
+        self, tokens: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Re-sort received tokens so each local expert's tokens are contiguous.
+
+        Builds expert-id labels from _received_tpe using repeat_interleave
+        (vectorized, no Python loops), then argsorts to group by expert.
+        """
+        # _received_tpe: [ep_size, n_local_experts] — counts per (source_rank, expert)
+        # Flatten to [ep_size * n_local_experts], with expert ids cycling 0..E-1
+        device = tokens.device
+        counts = self._received_tpe.flatten()  # [ep_size * n_local_experts]
+        expert_ids = torch.arange(
+            self.n_local_experts, device=device
+        ).repeat(self.ep_size)  # [0,1,..,E-1, 0,1,..,E-1, ...]
+        expert_labels = expert_ids.repeat_interleave(counts)
+
+        resort_indices = expert_labels.argsort(stable=True)
+        unsort_indices = torch.empty_like(resort_indices)
+        unsort_indices[resort_indices] = torch.arange(
+            len(resort_indices), device=device
         )
-        global_probs = all_to_all(
-            self.ep_group, permuted_probs, self.output_splits, self.input_splits
-        )
 
-        # === 3. Compute tokens per local expert ===
-        # After AlltoAll, tokens are ordered by sending rank, then by expert within rank.
-        # We need to count how many tokens each local expert received.
-        total_received = sum(self.output_splits)
-        tokens_per_local_expert = torch.zeros(
-            self.n_local_experts, device=hidden_states.device, dtype=torch.long
-        )
+        return tokens[resort_indices], unsort_indices
 
-        # Each sender sends tokens grouped by expert. For simplicity, distribute evenly
-        # based on the routing map gathered during preprocess.
-        # In practice, tokens arrive sorted by (source_rank, expert_idx), so we split accordingly.
-        if total_received > 0 and self.n_local_experts > 1:
-            # Approximate: evenly distribute among local experts
-            per_expert = total_received // self.n_local_experts
-            remainder = total_received % self.n_local_experts
-            for i in range(self.n_local_experts):
-                tokens_per_local_expert[i] = per_expert + (1 if i < remainder else 0)
-        elif total_received > 0:
-            tokens_per_local_expert[0] = total_received
-
-        return global_tokens, global_probs, tokens_per_local_expert
-
-    def token_unpermutation(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """Reverse: AlltoAll back → unpermute to original token order.
+    def token_unpermutation(self, expert_output: torch.Tensor) -> torch.Tensor:
+        """Undo re-sort → reverse AlltoAll → unpermute with routing weights.
 
         Args:
-            hidden_states: [n_received, hidden_size] expert outputs
+            expert_output: [n_received, hidden_size] from local expert compute
 
         Returns:
-            output: [n_tokens, hidden_size]
+            output: [n_tokens, hidden_size] in original token order
         """
-        # Dummy probs for unpermute (already applied during expert compute)
-        probs = torch.ones(
-            hidden_states.shape[0],
-            1,
-            device=hidden_states.device,
-            dtype=hidden_states.dtype,
+        # === 1. Undo expert re-sort (back to source-rank order) ===
+        # Always run unsort to avoid branch divergence between DP ranks.
+        if self._unsort_indices is not None:
+            expert_output = expert_output[self._unsort_indices]
+
+        # === 2. Reverse AlltoAll: send outputs back to originating ranks ===
+        local_tokens = all_to_all_single_autograd(
+            expert_output, self.input_splits, self.output_splits, self.ep_group
         )
 
-        # === 1. Reverse AlltoAll ===
-        local_tokens = all_to_all(
-            self.ep_group, hidden_states, self.input_splits, self.output_splits
-        )
-
-        # === 2. Unpermute to original token order ===
+        # === 3. Unpermute to original token order with routing weights ===
         output = unpermute_tokens(
-            local_tokens, self._reverse_map, probs, self._n_tokens, self._hidden_size
+            local_tokens,
+            self._reverse_map,
+            self._permuted_weights,
+            self._n_tokens,
+            self._hidden_size,
         )
-
         return output
+
+
+# === Local Expert Compute ===
+
+
+def compute_local_experts(
+    experts: nn.Module,
+    tokens: torch.Tensor,
+    tokens_per_expert: torch.Tensor,
+) -> torch.Tensor:
+    """Run tokens through local experts using grouped_mm.
+
+    Uses torch grouped_mm to batch all local experts into two kernel launches
+    (gate_up + down) instead of looping per expert.
+
+    Args:
+        experts: Lfm2MoeExperts with sharded weights
+            gate_up_proj: [n_local, 2*intermediate, hidden]
+            down_proj: [n_local, hidden, intermediate]
+        tokens: [n_tokens, hidden_size] sorted by expert
+        tokens_per_expert: [n_local_experts]
+    """
+    # Always run grouped_mm — branch divergence between DP ranks causes
+    # NCCL operation ordering drift and deadlock at dp_size=2.
+    # Offsets: cumulative token counts per expert — [n_local_experts] int32
+    offsets = torch.cumsum(tokens_per_expert, dim=0, dtype=torch.int32)
+
+    # gate_up_proj: [n_local, 2*intermediate, hidden] → transpose to [n_local, hidden, 2*intermediate]
+    # grouped_mm: [S, hidden] @ [n_local, hidden, 2*intermediate] → [S, 2*intermediate]
+    gate_up_out = _grouped_mm(
+        tokens, experts.gate_up_proj.transpose(-2, -1), offsets
+    )
+    gate, up = gate_up_out.chunk(2, dim=-1)
+    activated = experts.act_fn(gate) * up
+
+    # down_proj: [n_local, hidden, intermediate] → transpose to [n_local, intermediate, hidden]
+    # grouped_mm: [S, intermediate] @ [n_local, intermediate, hidden] → [S, hidden]
+    return _grouped_mm(activated, experts.down_proj.transpose(-2, -1), offsets)
 
 
 # === EP-Enhanced MoE Forward Patch ===
 
 
-def patch_moe_block_for_ep(block: nn.Module, dispatcher: EPTokenDispatcher) -> None:
+def patch_moe_block_for_ep(
+    block: nn.Module,
+    dispatcher: EPTokenDispatcher,
+    moe_config=None,
+) -> None:
     """Monkey-patch an Lfm2MoeSparseMoeBlock for EP-aware forward.
 
-    The patched forward:
-    1. Routes tokens (same as original)
-    2. Dispatches via AlltoAll to distribute tokens across EP ranks
-    3. Computes only local experts
-    4. Unpermutes via reverse AlltoAll
+    Integrates aux loss computation (load balancing, z-loss) directly so that
+    applying EP after MoETrainingEnhancer doesn't lose the losses.
 
     Args:
-        block: Lfm2MoeSparseMoeBlock module
-        dispatcher: EPTokenDispatcher configured for this model
+        block: Lfm2MoeSparseMoeBlock
+        dispatcher: EPTokenDispatcher
+        moe_config: MoETrainingConfig (optional, for aux losses)
     """
+    experts = block.experts
 
     def ep_moe_forward(hidden_states: torch.Tensor) -> torch.Tensor:
         B, S, H = hidden_states.shape
-        x = hidden_states.view(-1, H)
+        x = hidden_states.view(-1, H)  # [n_tokens, H]
 
-        # === Router ===
-        router_logits = block.gate(x)
-        selected_experts, routing_weights = block.route_tokens_to_experts(router_logits)
+        # === 1. Router ===
+        router_logits = block.gate(x)  # [n_tokens, E]
 
-        num_experts = router_logits.shape[-1]
+        n_experts = router_logits.shape[-1]
 
-        # === Build routing map [n_tokens, n_experts] ===
-        routing_map = torch.zeros(
-            x.shape[0], num_experts, dtype=torch.bool, device=x.device
+        # === 2. Inject aux losses into intermediates (BEFORE expert dispatch) ===
+        # Losses are injected into router_logits/routing_weights so their backward
+        # flows through the same layer pass as the main gradient. Injecting into
+        # the final output would trigger extra FSDP all-gathers after the layer's
+        # reduce-scatter, desyncing DP ranks.
+        if moe_config is not None:
+            if moe_config.z_loss_coef > 0:
+                zl = z_loss(router_logits, moe_config.z_loss_coef)
+                router_logits = InjectAuxLoss.apply(router_logits, zl)
+                block._moe_z_loss = zl.detach()
+
+        selected_experts, routing_weights = block.route_tokens_to_experts(
+            router_logits
+        )  # [n_tokens, K], [n_tokens, K]
+        top_k = selected_experts.shape[-1]
+
+        if moe_config is not None:
+            if moe_config.aux_loss_coef > 0:
+                router_probs = torch.sigmoid(router_logits)
+                aux = switch_load_balancing_loss(
+                    router_probs,
+                    selected_experts,
+                    n_experts,
+                    top_k,
+                    moe_config.aux_loss_coef,
+                )
+                routing_weights = InjectAuxLoss.apply(routing_weights, aux)
+                block._moe_aux_loss = aux.detach()
+
+        # === 3. EP dispatch: permute → AlltoAll → re-sort ===
+        tpe = tokens_per_expert_from_routing(selected_experts, n_experts)
+        dispatcher.preprocess(tpe)
+        global_tokens = dispatcher.token_permutation(
+            x, selected_experts, routing_weights
         )
-        routing_map.scatter_(1, selected_experts, True)
 
-        # === EP dispatch ===
-        dispatcher.preprocess(routing_map)
-        permuted_tokens, permuted_probs, tpe = dispatcher.token_permutation(
-            x, routing_weights, routing_map
+        # === 4. Local expert compute (grouped_mm) ===
+        # Always run — branch divergence causes NCCL ordering drift at dp_size=2.
+        expert_output = compute_local_experts(
+            experts, global_tokens, dispatcher.tokens_per_local_expert
         )
 
-        # === Local expert compute ===
-        if permuted_tokens.shape[0] > 0:
-            expert_output = _compute_local_experts(
-                block, permuted_tokens, permuted_probs, tpe
-            )
-        else:
-            expert_output = permuted_tokens
-
-        # === EP unpermutation ===
+        # === 5. Gather outputs: unsort → AlltoAll → unpermute ===
         output = dispatcher.token_unpermutation(expert_output)
+        output = output.view(B, S, H)
 
-        return output.view(B, S, H)
+        # === 6. Metrics ===
+        if moe_config is not None:
+            with torch.no_grad():
+                tokens_per_expert = torch.zeros(
+                    n_experts, device=x.device, dtype=torch.float32
+                )
+                ones = torch.ones_like(selected_experts[:, 0], dtype=torch.float32)
+                for k in range(top_k):
+                    tokens_per_expert.scatter_add_(0, selected_experts[:, k], ones)
+                block._moe_tokens_per_expert = tokens_per_expert
+                block._moe_router_logits_mean = router_logits.mean().item()
+                block._moe_router_logits_std = router_logits.std().item()
+                block._moe_num_experts = n_experts
+
+        return output
 
     block.forward = ep_moe_forward
 
 
-def _compute_local_experts(
-    block: nn.Module,
-    tokens: torch.Tensor,
-    probs: torch.Tensor,
-    tokens_per_expert: torch.Tensor,
-) -> torch.Tensor:
-    """Run tokens through local experts only.
-
-    Args:
-        block: MoE block with sharded experts
-        tokens: [n_tokens, hidden_size]
-        probs: [n_tokens, 1] routing weights
-        tokens_per_expert: [n_local_experts] count per expert
-
-    Returns:
-        output: [n_tokens, hidden_size]
-    """
-    outputs = []
-    offset = 0
-
-    for i, expert in enumerate(block.experts):
-        n = tokens_per_expert[i].item()
-        if n == 0:
-            continue
-        expert_input = tokens[offset : offset + n]
-        expert_output = expert(expert_input)
-        # Weight by routing prob
-        expert_probs = probs[offset : offset + n]
-        outputs.append(expert_output * expert_probs)
-        offset += n
-
-    if outputs:
-        return torch.cat(outputs, dim=0)
-    return tokens
-
-
-def apply_ep_to_model(model: nn.Module, ep_config: dict) -> None:
+def apply_ep_to_model(model: nn.Module, ep_config: dict, moe_config=None) -> None:
     """Apply EP dispatching to all MoE blocks in the model.
 
-    Must be called after shard_experts() so experts ModuleList is local-only.
+    Must be called after shard_experts(). If moe_config is provided, aux losses
+    are computed in the EP forward (replaces MoETrainingEnhancer).
 
     Args:
         model: model with sharded experts
-        ep_config: dict from create_ep_process_groups()
+        ep_config: dict from create_ep_mesh()
+        moe_config: MoETrainingConfig for aux loss computation
     """
     patched = 0
 
@@ -401,7 +439,6 @@ def apply_ep_to_model(model: nn.Module, ep_config: dict) -> None:
         if type(module).__name__ != "Lfm2MoeSparseMoeBlock":
             continue
 
-        # Determine top_k from the model config
         top_k = getattr(module, "top_k", 2)
 
         dispatcher = EPTokenDispatcher(
@@ -413,7 +450,7 @@ def apply_ep_to_model(model: nn.Module, ep_config: dict) -> None:
             ep_group=ep_config["ep_group"],
         )
 
-        patch_moe_block_for_ep(module, dispatcher)
+        patch_moe_block_for_ep(module, dispatcher, moe_config=moe_config)
         patched += 1
 
     logger.info(f"Applied EP dispatch to {patched} MoE blocks")

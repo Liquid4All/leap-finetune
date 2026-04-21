@@ -48,17 +48,27 @@ class LFMSFTTrainer(Trainer):
             collate_fn=self.data_collator,
         )
 
-    def training_step(self, model, inputs, **kwargs):
+    def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
         if self.cp_config and self.cp_config["cp_size"] > 1:
             inputs = split_batch_for_cp(
                 inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
             )
-        loss = super().training_step(model, inputs, **kwargs)
+        loss = super().training_step(model, inputs, num_items_in_batch, **kwargs)
         if self.cp_config and self.cp_config["cp_size"] > 1:
             loss = aggregate_cp_loss(
                 loss, self.cp_config["cp_group"], self.cp_config["cp_size"]
             )
         return loss
+
+
+def build_sft_data_collator(tokenizer, train_config: dict):
+    padding_free = train_config.get("padding_free", train_config.get("packing", False))
+    completion_only_loss = bool(train_config.get("completion_only_loss", False))
+    return DataCollatorForLanguageModeling(
+        pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+        completion_only_loss=completion_only_loss,
+        padding_free=padding_free,
+    )
 
 
 def sft_run(training_config: dict) -> None:
@@ -117,9 +127,15 @@ def sft_run(training_config: dict) -> None:
     # === Context Parallelism setup ===
     cp_size = training_config.get("train_config", {}).get("context_parallel_size", 1)
     model_config = training_config.get("model_config")
+    train_config = training_config.get("train_config", {})
 
     # Load model + tokenizer on worker
-    model, tokenizer = load_model(model_name, model_config=model_config)
+    model, tokenizer = load_model(
+        model_name,
+        model_config=model_config,
+        chat_template=train_config.get("chat_template"),
+        chat_template_path=train_config.get("chat_template_path"),
+    )
 
     cp_config = None
     if cp_size > 1:
@@ -134,10 +150,8 @@ def sft_run(training_config: dict) -> None:
         model = apply_peft_to_model(model, peft_config)
 
     # Collator handles labels, padding, and padding-free mode (position_ids from seq_lengths)
-    packing = training_config.get("train_config", {}).get("packing", False)
-    data_collator = DataCollatorForLanguageModeling(
-        pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-        padding_free=packing,
+    data_collator = build_sft_data_collator(
+        tokenizer, training_config.get("train_config", {})
     )
 
     trainer = LFMSFTTrainer(

@@ -164,6 +164,72 @@ class TestExtendsResolution:
         assert config["training_type"] == "sft"
         assert "deepspeed" in config
 
+    def test_sft_loss_mask_flags_survive_config_override(self, tmp_path):
+        config = {
+            "project_name": "test_mask_flags",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {
+                "path": "HuggingFaceTB/smoltalk",
+                "type": "sft",
+                "limit": 10,
+                "test_size": 0.2,
+                "subset": "all",
+            },
+            "training_config": {
+                "extends": "DEFAULT_SFT",
+                "assistant_only_loss": True,
+                "completion_only_loss": True,
+            },
+            "peft_config": {"use_peft": False},
+        }
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+        try:
+            yaml.dump(config, f)
+            f.flush()
+            job = parse_job_config(f.name)
+            assert job.training_config.value["assistant_only_loss"] is True
+            assert job.training_config.value["completion_only_loss"] is True
+        finally:
+            os.unlink(f.name)
+
+    def test_relative_local_paths_resolve_from_config_dir(self, tmp_path):
+        data_dir = tmp_path / "data"
+        templates_dir = tmp_path / "templates"
+        data_dir.mkdir()
+        templates_dir.mkdir()
+
+        dataset_path = data_dir / "tiny.jsonl"
+        dataset_path.write_text(
+            '{"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"y"}]}\n'
+        )
+        template_path = templates_dir / "chat.jinja"
+        template_path.write_text("{{ bos_token }}")
+
+        config_path = tmp_path / "relative_paths.yaml"
+        config = {
+            "project_name": "relative_paths",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {
+                "path": "./data/tiny.jsonl",
+                "type": "sft",
+                "test_size": 0.2,
+            },
+            "training_config": {
+                "extends": "DEFAULT_SFT",
+                "chat_template_path": "./templates/chat.jinja",
+            },
+            "peft_config": {"use_peft": False},
+        }
+        config_path.write_text(yaml.safe_dump(config))
+
+        job = parse_job_config(str(config_path))
+        assert job.dataset.dataset_path == str(dataset_path.resolve())
+        assert job.training_config.value["chat_template_path"] == str(
+            template_path.resolve()
+        )
+
     def test_extends_moe_sft(self, moe_sft_config_path):
         job = parse_job_config(moe_sft_config_path)
         config = job.training_config.value
@@ -300,6 +366,37 @@ class TestInvalidConfigs:
             yaml.dump(config, f)
             f.flush()
             with pytest.raises(ValueError, match="Unknown training type"):
+                parse_job_config(f.name)
+        finally:
+            os.unlink(f.name)
+
+    def test_ep_and_cp_together_raise(self):
+        config = {
+            "project_name": "mixed_parallelism",
+            "model_name": "LFM2-8B-A1B",
+            "training_type": "sft",
+            "dataset": {
+                "path": "HuggingFaceTB/smoltalk",
+                "type": "sft",
+                "limit": 10,
+                "test_size": 0.2,
+                "subset": "all",
+            },
+            "training_config": {
+                "extends": "DEFAULT_SFT",
+                "context_parallel_size": 2,
+                "moe_training": {"expert_parallel_size": 2},
+            },
+            "peft_config": {"use_peft": False},
+        }
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+        try:
+            yaml.dump(config, f)
+            f.flush()
+            with pytest.raises(
+                ValueError,
+                match="expert_parallel_size > 1 cannot be combined with context_parallel_size > 1",
+            ):
                 parse_job_config(f.name)
         finally:
             os.unlink(f.name)

@@ -124,7 +124,37 @@ def create_vlm_collate_fn(processor):
 # === SFT Tokenization ===
 
 
-def tokenize_sft(row: dict, tokenizer, max_length: int) -> dict:
+def _final_assistant_span_mask(assistant_masks: list[int]) -> list[int]:
+    """Keep only the last contiguous assistant span."""
+    if not assistant_masks:
+        return assistant_masks
+
+    end = None
+    for idx in range(len(assistant_masks) - 1, -1, -1):
+        if assistant_masks[idx]:
+            end = idx
+            break
+
+    if end is None:
+        return [0] * len(assistant_masks)
+
+    start = end
+    while start > 0 and assistant_masks[start - 1]:
+        start -= 1
+
+    output = [0] * len(assistant_masks)
+    for idx in range(start, end + 1):
+        output[idx] = 1
+    return output
+
+
+def tokenize_sft(
+    row: dict,
+    tokenizer,
+    max_length: int,
+    assistant_only_loss: bool = False,
+    completion_only_loss: bool = False,
+) -> dict:
     """
     Tokenize a single SFT row for use in ray_ds.map().
 
@@ -133,12 +163,23 @@ def tokenize_sft(row: dict, tokenizer, max_length: int) -> dict:
       - Plain text: row has "text" → tokenizer()
     """
     if "messages" in row:
+        need_masks = assistant_only_loss or completion_only_loss
         result = tokenizer.apply_chat_template(
-            row["messages"], tokenize=True, truncation=True, max_length=max_length
+            row["messages"],
+            tokenize=True,
+            truncation=True,
+            max_length=max_length,
+            return_dict=need_masks,
+            return_assistant_tokens_mask=need_masks,
         )
         # apply_chat_template returns BatchEncoding (Mapping, not dict)
         input_ids = result["input_ids"] if hasattr(result, "keys") else result
     elif "text" in row:
+        if assistant_only_loss or completion_only_loss:
+            raise ValueError(
+                "assistant_only_loss/completion_only_loss require conversational "
+                "SFT rows with a 'messages' column"
+            )
         input_ids = tokenizer(row["text"], truncation=True, max_length=max_length)[
             "input_ids"
         ]
@@ -147,7 +188,19 @@ def tokenize_sft(row: dict, tokenizer, max_length: int) -> dict:
             f"Row must have 'messages' or 'text' column, got: {list(row.keys())}"
         )
 
-    return {"input_ids": list(input_ids)}
+    output = {"input_ids": list(input_ids), "length": len(input_ids)}
+    if "messages" in row and (assistant_only_loss or completion_only_loss):
+        assistant_masks = list(result["assistant_masks"])
+        if len(assistant_masks) != len(output["input_ids"]):
+            raise ValueError(
+                "assistant mask length mismatch after chat template tokenization"
+            )
+        if assistant_only_loss:
+            output["assistant_masks"] = assistant_masks
+        if completion_only_loss:
+            output["completion_mask"] = _final_assistant_span_mask(assistant_masks)
+
+    return output
 
 
 def tokenize_and_pack_sft(
@@ -155,6 +208,8 @@ def tokenize_and_pack_sft(
     tokenizer,
     max_length: int,
     packing: bool = False,
+    assistant_only_loss: bool = False,
+    completion_only_loss: bool = False,
 ) -> ray.data.Dataset:
     """
     Tokenize and optionally pack an SFT dataset.
@@ -167,18 +222,34 @@ def tokenize_and_pack_sft(
     # === 1. Distributed tokenization ===
     ds = ds.map(
         tokenize_sft,
-        fn_kwargs={"tokenizer": tokenizer, "max_length": max_length},
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "max_length": max_length,
+            "assistant_only_loss": assistant_only_loss,
+            "completion_only_loss": completion_only_loss,
+        },
     )
 
     # === 2. Pack or truncate ===
     if packing:
         # Packing requires full materialization into an HF Dataset
-        rows = list(ds.iter_rows())
-        features = Features({"input_ids": Sequence(Value("int64"))})
+        rows = []
+        features_dict = {"input_ids": Sequence(Value("int64"))}
+        for row in ds.iter_rows():
+            packed_row = {"input_ids": row["input_ids"]}
+            if "assistant_masks" in row:
+                packed_row["assistant_masks"] = row["assistant_masks"]
+                features_dict["assistant_masks"] = Sequence(Value("int64"))
+            if "completion_mask" in row:
+                packed_row["completion_mask"] = row["completion_mask"]
+                features_dict["completion_mask"] = Sequence(Value("int64"))
+            rows.append(packed_row)
+        features = Features(features_dict)
         hf_ds = Dataset.from_list(rows, features=features)
         console.print(f"[dim]Tokenized {len(hf_ds):,} rows[/dim]")
         console.print(f"[dim]Packing sequences (BFD, max_length={max_length})...[/dim]")
         hf_ds = pack_dataset(hf_ds, seq_length=max_length, strategy="bfd")
+        hf_ds = hf_ds.map(lambda row: {"length": len(row["input_ids"])})
         console.print(f"[dim]Packed into {len(hf_ds):,} rows[/dim]")
         return ray.data.from_arrow(hf_ds.data.table)
 
@@ -233,6 +304,10 @@ def tokenize_dpo(
         "prompt_input_ids": list(prompt_input_ids),
         "chosen_input_ids": list(chosen_input_ids),
         "rejected_input_ids": list(rejected_input_ids),
+        "length": max(
+            len(prompt_input_ids) + len(chosen_input_ids),
+            len(prompt_input_ids) + len(rejected_input_ids),
+        ),
     }
 
 
@@ -264,6 +339,7 @@ def tokenize_dpo_dataset(
             "prompt_input_ids": Sequence(Value("int64")),
             "chosen_input_ids": Sequence(Value("int64")),
             "rejected_input_ids": Sequence(Value("int64")),
+            "length": Value("int64"),
         }
     )
     hf_ds = Dataset.from_list(rows, features=features)

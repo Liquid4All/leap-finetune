@@ -68,6 +68,8 @@ DEFAULT_DPO = {
     "eval_strategy": "epoch",
     "ddp_find_unused_parameters": False,
     "deepspeed": DEEPSPEED_CONFIG,
+    "chat_template": None,
+    "chat_template_path": None,
 }
 
 
@@ -96,6 +98,8 @@ MOE_DPO = {
     # - With PEFT: uses MOE_DEEPSPEED_CONFIG
     # - Without PEFT: uses FSDP_CONFIG
     "deepspeed": MOE_DEEPSPEED_CONFIG,
+    "chat_template": None,
+    "chat_template_path": None,
 }
 
 

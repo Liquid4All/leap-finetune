@@ -1,5 +1,6 @@
 import logging
-from pathlib import Path
+import os
+import pathlib
 
 import torch
 from transformers import (
@@ -11,6 +12,8 @@ from transformers import (
 )
 from transformers.image_utils import PILImageResampling
 from transformers.utils import is_flash_attn_2_available
+
+from leap_finetune.utils.loss_utils import install_memory_efficient_causal_lm_loss
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +29,118 @@ def _get_attn_implementation() -> str:
 
 def _resolve_model_id(model_name: str) -> str:
     """Resolve model_name to a local path or HuggingFace model ID."""
-    model_path = Path(model_name)
+    model_path = pathlib.Path(model_name)
     if model_path.exists() and model_path.is_dir():
         return model_name
     return f"LiquidAI/{model_name}"
 
 
-def load_tokenizer(model_name: str) -> AutoTokenizer:
+def _resolve_chat_template(
+    chat_template: str | None = None,
+    chat_template_path: str | None = None,
+) -> str | None:
+    if chat_template and chat_template_path:
+        raise ValueError("Specify either chat_template or chat_template_path, not both")
+
+    if chat_template_path:
+        return pathlib.Path(chat_template_path).expanduser().read_text()
+
+    return chat_template
+
+
+def _apply_chat_template_override(
+    tokenizer: AutoTokenizer,
+    *,
+    chat_template: str | None = None,
+    chat_template_path: str | None = None,
+) -> AutoTokenizer:
+    resolved = _resolve_chat_template(chat_template, chat_template_path)
+    if resolved:
+        tokenizer.chat_template = resolved
+        logger.info("Applied tokenizer chat template override")
+    return tokenizer
+
+
+def _normalize_model_config_overrides(
+    config: AutoConfig,
+    model_config: dict | None,
+) -> dict:
+    """Normalize user overrides to the config schema expected by the model."""
+    if not model_config:
+        return {}
+
+    normalized = dict(model_config)
+
+    # LFM2 / LFM2-MoE expect rope_parameters, while older job configs still use
+    # rope_scaling. YaRN also requires rope_theta to be present explicitly.
+    if (
+        getattr(config, "model_type", "") in {"lfm2", "lfm2_moe"}
+        and "rope_scaling" in normalized
+        and "rope_parameters" not in normalized
+    ):
+        rope_parameters = dict(normalized["rope_scaling"])
+        if "rope_theta" not in rope_parameters or rope_parameters["rope_theta"] is None:
+            rope_parameters["rope_theta"] = normalized.get(
+                "rope_theta",
+                getattr(config, "default_theta", None),
+            )
+        normalized["rope_parameters"] = rope_parameters
+
+    if (
+        getattr(config, "model_type", "") in {"lfm2", "lfm2_moe"}
+        and "rope_parameters" in normalized
+    ):
+        rope_parameters = dict(normalized["rope_parameters"])
+        if "rope_theta" not in rope_parameters or rope_parameters["rope_theta"] is None:
+            rope_parameters["rope_theta"] = normalized.get(
+                "rope_theta",
+                getattr(config, "default_theta", None),
+            )
+        normalized["rope_parameters"] = rope_parameters
+
+    return normalized
+
+
+def _is_moe_model(model: AutoModelForCausalLM) -> bool:
+    model_type = getattr(model.config, "model_type", "")
+    architectures = getattr(model.config, "architectures", []) or []
+    return "moe" in model_type.lower() or any("Moe" in arch for arch in architectures)
+
+
+def _maybe_enable_grouped_mm(model: AutoModelForCausalLM) -> None:
+    """Enable grouped_mm only for MoE models that expose the hook."""
+    if os.getenv("LEAP_ENABLE_GROUPED_MM", "1") == "0":
+        logger.info("Skipping grouped_mm expert implementation override")
+        return
+    if not hasattr(model, "set_experts_implementation") or not _is_moe_model(model):
+        return
+    model.set_experts_implementation("grouped_mm")
+
+
+def load_tokenizer(
+    model_name: str,
+    *,
+    chat_template: str | None = None,
+    chat_template_path: str | None = None,
+) -> AutoTokenizer:
     """Load only the tokenizer (lightweight, no model weights)."""
     model_id = _resolve_model_id(model_name)
-    return AutoTokenizer.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    return _apply_chat_template_override(
+        tokenizer,
+        chat_template=chat_template,
+        chat_template_path=chat_template_path,
+    )
 
 
 def load_model(
     model_name: str,
     model_config: dict | None = None,
+    *,
+    chat_template: str | None = None,
+    chat_template_path: str | None = None,
+    install_memory_efficient_loss: bool = True,
+    enable_grouped_mm: bool = True,
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """Load a model from the Hugging Face Hub or from a local path.
 
@@ -51,14 +151,16 @@ def load_model(
     """
     attn_impl = _get_attn_implementation()
     model_id = _resolve_model_id(model_name)
-    print(f"Loading model: {model_id}")
+    logger.info(f"Loading model: {model_id}")
 
-    # Load config first so we can apply overrides (rope_scaling, etc.)
     config = AutoConfig.from_pretrained(model_id)
-    if model_config:
-        for key, value in model_config.items():
+    normalized_model_config = _normalize_model_config_overrides(config, model_config)
+    if normalized_model_config:
+        for key, value in normalized_model_config.items():
             setattr(config, key, value)
-        logger.info(f"Applied model config overrides: {list(model_config.keys())}")
+        logger.info(
+            f"Applied model config overrides: {list(normalized_model_config.keys())}"
+        )
 
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
@@ -66,19 +168,32 @@ def load_model(
         dtype=torch.bfloat16,
         attn_implementation=attn_impl,
     )
-    # Disable use_cache for training compatibility (gradient checkpointing requires this)
     model.config.use_cache = False
+    if install_memory_efficient_loss and os.getenv(
+        "LEAP_INSTALL_MEMORY_EFFICIENT_LOSS", "1"
+    ) == "1":
+        install_memory_efficient_causal_lm_loss(model)
+    else:
+        logger.info("Skipping memory-efficient causal LM loss install")
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer = _apply_chat_template_override(
+        tokenizer,
+        chat_template=chat_template,
+        chat_template_path=chat_template_path,
+    )
 
-    # Use grouped_mm expert routing for MoE (requires torch>=2.9.0)
-    if hasattr(model, "set_experts_implementation"):
-        model.set_experts_implementation("grouped_mm")
+    if enable_grouped_mm:
+        _maybe_enable_grouped_mm(model)
+    else:
+        logger.info("Skipping grouped_mm expert implementation override")
 
-    print(f"Architecture: {model.config.architectures[0]}")
-    print(f"Model type: {model.config.model_type}")
-    print(f"Layers: {model.config.num_hidden_layers}, Dim: {model.config.hidden_size}")
-    print(f"Vocab size: {model.config.vocab_size}")
+    logger.info(f"Architecture: {model.config.architectures[0]}")
+    logger.info(f"Model type: {model.config.model_type}")
+    logger.info(
+        f"Layers: {model.config.num_hidden_layers}, Dim: {model.config.hidden_size}"
+    )
+    logger.info(f"Vocab size: {model.config.vocab_size}")
 
     return model, tokenizer
 

@@ -1,7 +1,8 @@
 from leap_finetune.utils.constants import SFT_OUTPUT_PATH
 
-# Keys that exist in SFTConfig but not in TrainingArguments.
-# Must be filtered out when building TrainingArguments for plain Trainer.
+# Keys that do not belong in TrainingArguments.
+# Some of these are still consumed by preprocessing/collation (for example
+# assistant/completion-only loss masking) and must not be dropped upstream.
 SFT_EXCLUDED_KEYS = {
     "training_type",
     "wandb_logging",
@@ -16,6 +17,8 @@ SFT_EXCLUDED_KEYS = {
     "dataset_num_proc",
     "completion_only_loss",
     "assistant_only_loss",
+    "chat_template",
+    "chat_template_path",
 }
 
 
@@ -143,7 +146,6 @@ MOE_LARGE_SFT = {
     "num_train_epochs": 2,
     "per_device_train_batch_size": 1,
     "gradient_accumulation_steps": 8,
-    "gradient_checkpointing": True,
     "learning_rate": 5e-5,
     "lr_scheduler_type": "linear",
     "warmup_ratio": 0.2,

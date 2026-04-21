@@ -56,12 +56,12 @@ class LFMDPOTrainer(DPOTrainer):
             collate_fn=self.data_collator,
         )
 
-    def training_step(self, model, inputs, **kwargs):
+    def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
         if self.cp_config and self.cp_config["cp_size"] > 1:
             inputs = split_batch_for_cp(
                 inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
             )
-        loss = super().training_step(model, inputs, **kwargs)
+        loss = super().training_step(model, inputs, num_items_in_batch, **kwargs)
         if self.cp_config and self.cp_config["cp_size"] > 1:
             loss = aggregate_cp_loss(
                 loss, self.cp_config["cp_group"], self.cp_config["cp_size"]
@@ -95,6 +95,8 @@ def dpo_run(training_config: dict) -> None:
         "leap_run_name_template",
         "model_config",
         "context_parallel_size",
+        "chat_template",
+        "chat_template_path",
     }
 
     train_config_filtered = {
@@ -128,7 +130,13 @@ def dpo_run(training_config: dict) -> None:
     model_config = training_config.get("model_config")
 
     # Load model after config is created
-    model, tokenizer = load_model(model_name, model_config=model_config)
+    train_config = training_config.get("train_config", {})
+    model, tokenizer = load_model(
+        model_name,
+        model_config=model_config,
+        chat_template=train_config.get("chat_template"),
+        chat_template_path=train_config.get("chat_template_path"),
+    )
 
     cp_config = None
     if cp_size > 1:

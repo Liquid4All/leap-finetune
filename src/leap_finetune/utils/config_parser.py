@@ -8,6 +8,21 @@ from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 from leap_finetune.training_configs import PeftConfig, TrainingConfig
 from leap_finetune.training_configs.job_config import JobConfig
 from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
+from leap_finetune.utils.model_utils import is_moe_model_from_name
+
+
+def _resolve_local_path(value: str | None, *, base_dir: pathlib.Path) -> str | None:
+    if not value:
+        return value
+
+    expanded = pathlib.Path(value).expanduser()
+    if expanded.is_absolute():
+        return str(expanded.resolve())
+
+    if value.startswith(("./", "../")) or (base_dir / value).exists():
+        return str((base_dir / value).resolve())
+
+    return value
 
 
 def resolve_config_path(config_input: str) -> pathlib.Path:
@@ -83,6 +98,7 @@ def generate_run_name(
 
 def parse_job_config(config_input: str) -> JobConfig:
     path_obj = resolve_config_path(config_input)
+    config_dir = path_obj.parent
 
     with open(path_obj) as f:
         config_dict = yaml.safe_load(f)
@@ -90,9 +106,12 @@ def parse_job_config(config_input: str) -> JobConfig:
     # === Dataset ===
     ds_config = config_dict.get("dataset", {})
     dataset_path_env = os.getenv("DATASET_PATH")
-    final_dataset_path = dataset_path_env if dataset_path_env else ds_config.get("path")
+    if dataset_path_env:
+        final_dataset_path = _resolve_local_path(dataset_path_env, base_dir=pathlib.Path.cwd())
+    else:
+        final_dataset_path = _resolve_local_path(ds_config.get("path"), base_dir=config_dir)
 
-    valid_types = {"sft", "dpo", "vlm_sft", "moe_sft", "moe_dpo"}
+    valid_types = {"sft", "dpo", "vlm_sft", "moe_sft", "moe_sft_hf", "moe_dpo"}
     ds_type = ds_config.get("type")
     if ds_type not in valid_types:
         raise ValueError(
@@ -131,6 +150,7 @@ def parse_job_config(config_input: str) -> JobConfig:
             "dpo": "DEFAULT_DPO",
             "vlm_sft": "DEFAULT_VLM_SFT",
             "moe_sft": "MOE_SFT",
+            "moe_sft_hf": "MOE_SFT",
             "moe_dpo": "MOE_DPO",
         }
         if training_type not in training_type_to_config:
@@ -149,6 +169,10 @@ def parse_job_config(config_input: str) -> JobConfig:
     # Merge base config with YAML overrides
     final_training_config = base_train_config.override(**train_config_dict)
     final_train_values = final_training_config.value
+    final_train_values["chat_template_path"] = _resolve_local_path(
+        final_train_values.get("chat_template_path"),
+        base_dir=config_dir,
+    )
 
     # === PEFT config with extends support ===
     peft_dict = config_dict.get("peft_config", {})
@@ -240,6 +264,13 @@ def parse_job_config(config_input: str) -> JobConfig:
     # === Model config (rope_scaling, max_position_embeddings, etc.) ===
     model_config = config_dict.get("model_config")
 
+    # === Parallelism validation ===
+    _validate_parallelism_config(
+        final_train_values,
+        training_type,
+        config_dict.get("model_name", "LFM2-1.2B"),
+    )
+
     return JobConfig(
         job_name=project_name,
         model_name=config_dict.get("model_name", "LFM2-1.2B"),
@@ -248,4 +279,55 @@ def parse_job_config(config_input: str) -> JobConfig:
         training_config=final_training_config,
         peft_config=peft_config,
         model_config=model_config,
+        ray_config=config_dict.get("ray"),
     )
+
+
+def _validate_parallelism_config(
+    training_config: dict,
+    training_type: str,
+    model_name: str,
+) -> None:
+    """Validate EP parallelism constraints before job submission."""
+    moe_config = training_config.get("moe_training", {})
+    if not moe_config:
+        return
+
+    effective_training_type = training_type
+    if training_type in ("sft", "dpo") and is_moe_model_from_name(model_name):
+        effective_training_type = f"moe_{training_type}"
+
+    if effective_training_type in ("moe_sft", "moe_sft_hf"):
+        capacity_factor = moe_config.get("capacity_factor")
+        token_drop_policy = moe_config.get("token_drop_policy")
+        if capacity_factor is not None or token_drop_policy not in (None, "probs"):
+            raise ValueError(
+                "MoE SFT currently supports uncapped routing only. "
+                "Remove capacity_factor/token_drop_policy from moe_training."
+            )
+
+    ep_size = moe_config.get("expert_parallel_size", 1) or 1
+    cp_size = training_config.get("context_parallel_size", 1) or 1
+    if ep_size <= 1:
+        return
+
+    if cp_size > 1:
+        raise ValueError(
+            "expert_parallel_size > 1 cannot be combined with context_parallel_size > 1. "
+            "Only DP x CP is supported for context parallelism."
+        )
+
+    if effective_training_type == "moe_sft_hf":
+        raise ValueError(
+            "expert_parallel_size requires the custom MoE loops. "
+            "moe_sft_hf is a non-EP baseline only."
+        )
+
+    if effective_training_type not in ("moe_sft", "moe_dpo"):
+        raise ValueError(
+            f"expert_parallel_size={ep_size} requires training_type 'moe_sft' or 'moe_dpo', "
+            f"got '{training_type}'"
+        )
+
+    if ep_size & (ep_size - 1) != 0:
+        raise ValueError(f"expert_parallel_size must be a power of 2, got {ep_size}")

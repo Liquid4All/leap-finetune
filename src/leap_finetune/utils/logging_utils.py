@@ -80,6 +80,11 @@ def worker_process_setup_hook() -> None:
     logging.getLogger("ray").setLevel(logging.ERROR)
     warnings.filterwarnings("ignore")
 
+    for key in ("TMPDIR", "TORCH_EXTENSIONS_DIR", "TRITON_CACHE_DIR"):
+        path = os.environ.get(key)
+        if path:
+            Path(path).mkdir(parents=True, exist_ok=True)
+
 
 def setup_worker_logging() -> None:
     """
@@ -105,6 +110,7 @@ def setup_training_environment() -> None:
     os.environ.setdefault("DS_DISABLE_CONFIG_PRINT", "1")
     os.environ.setdefault("DEEPSPEED_LOG_LEVEL", "ERROR")
     os.environ.setdefault("RAY_DATA_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE", "1")
     # Skip noisy duplicate logs from workers (NCCL warnings, object store warnings, SplitCoordinator)
     os.environ.setdefault(
         "RAY_DEDUP_LOGS_SKIP_REGEX",
@@ -115,11 +121,12 @@ def setup_training_environment() -> None:
     if "WANDB_API_KEY" not in os.environ and "WANDB_MODE" not in os.environ:
         os.environ["WANDB_MODE"] = "offline"
 
-    # Use per-process cache directories to avoid permission errors with multiple Ray workers
+    # Keep JIT/compiler caches under the worker temp root instead of /tmp.
     pid = os.getpid()
-    cache = f"/tmp/triton_cache_{pid}"
-    os.makedirs(cache, exist_ok=True)
-    os.environ["TRITON_CACHE_DIR"] = cache
+    temp_root = os.environ.get("TMPDIR", str(Path.home() / "tmp-ray"))
+    cache = Path(temp_root) / f"triton_cache_{pid}"
+    cache.mkdir(parents=True, exist_ok=True)
+    os.environ["TRITON_CACHE_DIR"] = str(cache)
 
     # Disable DeepSpeed Triton autotune to prevent /dev/shm permission errors
     os.environ.setdefault("DS_TRITON_AUTOTUNE", "0")
@@ -154,24 +161,33 @@ def setup_training_environment() -> None:
 
 def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
     """Environment variables passed to ray.init runtime_env.env_vars"""
+    torch_extensions_dir = os.path.join(ray_temp_dir, "torch_extensions")
+    triton_cache_dir = os.path.join(ray_temp_dir, "triton_cache")
     env_vars = {
         "TMPDIR": ray_temp_dir,
         "TEMP": ray_temp_dir,
         "TMP": ray_temp_dir,
-        "NCCL_IB_DISABLE": "1",
+        "TORCH_EXTENSIONS_DIR": torch_extensions_dir,
+        "TRITON_CACHE_DIR": triton_cache_dir,
         "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
-        "NCCL_SOCKET_IFNAME": "lo",
         "TORCH_NCCL_BLOCKING_WAIT": "1",
-        "NCCL_TIMEOUT": "300",  # 5 minute safe timeout
         "RAY_DISABLE_IMPORT_WARNING": "1",
         "RAY_memory_monitor_refresh_ms": "0",
         "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
         "RAY_IGNORE_UNHANDLED_ERRORS": "1",
+        "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE": os.environ.get(
+            "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE", "1"
+        ),
         # Reduce Ray logging verbosity
         "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver (reduce terminal noise)
         "RAY_DEDUP_LOGS": "1",  # Keep deduplication enabled (shows ... for repeated messages)
         "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
     }
+
+    for key in ("NCCL_IB_DISABLE", "NCCL_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME", "NCCL_SOCKET_FAMILY"):
+        value = os.environ.get(key)
+        if value:
+            env_vars[key] = value
 
     wandb_api_key = os.environ.get("WANDB_API_KEY")
     wandb_mode = os.environ.get("WANDB_MODE")
@@ -233,13 +249,8 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
         candidates.append(env_tmp)
     if preferred:
         candidates.append(preferred)
-    home_default = str(Path.home() / "ray_temp")
-    candidates.extend(
-        [
-            "/tmp/ray",
-            home_default,
-        ]
-    )
+    home_default = str(Path.home() / "tmp-ray")
+    candidates.append(home_default)
 
     best_path = home_default
     best_ratio = -1.0
@@ -280,10 +291,11 @@ def _paths_with_free_space(
 def select_object_spilling_dir(ray_temp_dir: str | None = None) -> str:
     """Choose a directory with enough free space for Ray object spilling."""
     home = str(Path.home())
+    temp_root = ray_temp_dir or str(Path.home() / "tmp-ray")
     candidates = [
-        os.path.join(ray_temp_dir or home, "spill"),
-        "/tmp/ray_spill",  # Usually disk-based, survives reboots
-        f"{home}/ray_spill",  # Fallback on user's home filesystem
+        os.path.join(temp_root, "spill"),
+        os.path.join(home, "tmp-ray", "spill"),
+        os.path.join(home, "ray_spill"),
     ]
     good = _paths_with_free_space(candidates, min_free_ratio=0.10)
     target = good[0] if good else candidates[-1]
@@ -291,5 +303,26 @@ def select_object_spilling_dir(ray_temp_dir: str | None = None) -> str:
     return target
 
 
-def should_connect_existing_cluster(*args, **kwargs):  # simple check
-    return bool(os.environ.get("RAY_ADDRESS"))
+def get_requested_ray_address(ray_config: dict | None = None) -> str | None:
+    """Resolve a requested external Ray cluster address.
+
+    Precedence:
+    1. `LEAP_RAY_ADDRESS`
+    2. `RAY_ADDRESS`
+    3. `ray.address` from config
+    """
+    for key in ("LEAP_RAY_ADDRESS", "RAY_ADDRESS"):
+        value = os.environ.get(key)
+        if value:
+            return value
+
+    if ray_config:
+        value = ray_config.get("address")
+        if value:
+            return str(value)
+
+    return None
+
+
+def should_connect_existing_cluster(ray_config: dict | None = None) -> bool:
+    return bool(get_requested_ray_address(ray_config))

@@ -14,11 +14,14 @@ from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 class JobConfig:
     job_name: str
     model_name: str = "LFM2-1.2B"
-    training_type: Literal["sft", "dpo", "vlm_sft", "moe_sft", "moe_dpo"] = "sft"
+    training_type: Literal[
+        "sft", "dpo", "vlm_sft", "moe_sft", "moe_sft_hf", "moe_dpo"
+    ] = "sft"
     dataset: DatasetLoader | tuple[Dataset, Dataset] | None = None
     training_config: TrainingConfig = TrainingConfig.DEFAULT_SFT
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
     model_config: dict | None = None
+    ray_config: dict | None = None
 
     def __post_init__(self):
         self._validate_job_name()
@@ -39,6 +42,7 @@ class JobConfig:
                 # Allow MoE training types to use base SFT/DPO configs
                 compatible = {
                     "moe_sft": ("sft", "moe_sft"),
+                    "moe_sft_hf": ("sft", "moe_sft"),
                     "moe_dpo": ("dpo", "moe_dpo"),
                 }
                 allowed = compatible.get(self.training_type, (self.training_type,))
@@ -59,6 +63,7 @@ class JobConfig:
             "dataset": dataset_to_use,
             "peft_config": self.peft_config.value if self.peft_config else None,
             "model_config": self.model_config,
+            "ray_config": self.ray_config,
         }
 
     def print_config_summary(self):

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import os
 
 import ray.data
 from datasets import Dataset
@@ -13,6 +14,14 @@ from .tokenize_data import tokenize_and_pack_sft, tokenize_dpo_dataset
 from .validate_loader import get_row_filter, normalize_columns
 
 logger = logging.getLogger(__name__)
+
+
+def _should_skip_quick_validate() -> bool:
+    return os.environ.get("LEAP_SKIP_QUICK_VALIDATE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 # === Tokenization Cache ===
@@ -41,6 +50,10 @@ def _build_cache_key(
     if dataset_type == "sft":
         key["max_length"] = training_config.get("max_length", 2048)
         key["packing"] = training_config.get("packing", False)
+        key["assistant_only_loss"] = training_config.get("assistant_only_loss", False)
+        key["completion_only_loss"] = training_config.get(
+            "completion_only_loss", False
+        )
     elif dataset_type == "dpo":
         key["max_prompt_length"] = training_config.get("max_prompt_length")
         key["max_completion_length"] = training_config.get("max_completion_length")
@@ -132,7 +145,8 @@ def create_ray_datasets(
 
     # === Full pipeline: load → filter → normalize → shuffle → split → tokenize ===
 
-    loader.quick_validate()
+    if not _should_skip_quick_validate():
+        loader.quick_validate()
     ds = loader.to_ray_dataset()
 
     if loader.preprocess_fn is not None:
@@ -184,13 +198,27 @@ def create_ray_datasets(
         if dataset_type == "sft":
             max_length = training_config.get("max_length", 2048)
             packing = training_config.get("packing", False)
+            assistant_only_loss = training_config.get("assistant_only_loss", False)
+            completion_only_loss = training_config.get("completion_only_loss", False)
 
             console.print(
                 f"[dim]Tokenizing SFT (max_length={max_length}, packing={packing})...[/dim]"
             )
-            train_ds = tokenize_and_pack_sft(train_ds, tokenizer, max_length, packing)
+            train_ds = tokenize_and_pack_sft(
+                train_ds,
+                tokenizer,
+                max_length,
+                packing,
+                assistant_only_loss=assistant_only_loss,
+                completion_only_loss=completion_only_loss,
+            )
             eval_ds = tokenize_and_pack_sft(
-                eval_ds, tokenizer, max_length, packing=False
+                eval_ds,
+                tokenizer,
+                max_length,
+                packing=False,
+                assistant_only_loss=assistant_only_loss,
+                completion_only_loss=completion_only_loss,
             )
 
         elif dataset_type == "dpo":

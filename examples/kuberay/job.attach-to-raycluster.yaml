@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: leap-launcher
+  namespace: default
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: leap-launcher
+          image: your-registry.com/leap-finetune:latest
+          command:
+            - /bin/bash
+            - -lc
+            - >-
+              uv run leap-finetune job_configs/long_context_moe_sft_example.yaml
+          env:
+            - name: RAY_ADDRESS
+              value: ray://leap-gpu-cluster-head-svc:10001
+            - name: LEAP_RAY_NUM_WORKERS
+              value: "8"
+          volumeMounts:
+            - name: outputs
+              mountPath: /outputs
+      volumes:
+        - name: outputs
+          persistentVolumeClaim:
+            claimName: training-outputs

@@ -91,6 +91,119 @@ To monitor your SLURM jobs in a TUI:
 uv run turm --me
 ```
 
+### External Ray Clusters
+
+`leap-finetune` now supports attaching to an existing Ray cluster instead of forcing single-node local Ray.
+
+You can provide the cluster address in either:
+
+```bash
+export RAY_ADDRESS=<head-ip>:6379
+export LEAP_RAY_NUM_WORKERS=16
+uv run leap-finetune <path_to_config.yaml>
+```
+
+or in config:
+
+```yaml
+ray:
+  address: "<head-ip>:6379"
+  num_workers: 16
+  resources_per_worker:
+    GPU: 1
+```
+
+Precedence is `LEAP_RAY_ADDRESS`, then `RAY_ADDRESS`, then `ray.address` in YAML. If no address is provided, `leap-finetune` starts a local single-node Ray runtime like before.
+
+This makes non-SLURM environments such as Nebius or any custom launcher workable as long as they:
+
+1. Start a Ray head node and workers however they want.
+2. Export `RAY_ADDRESS` or `LEAP_RAY_ADDRESS` for the driver.
+3. Optionally set `LEAP_RAY_NUM_WORKERS` if the cluster has more GPUs than the job should consume.
+
+For convenience there is a generic helper script:
+
+```bash
+scripts/run_with_ray_cluster.sh <path_to_config.yaml>
+```
+
+### Multi-Node SLURM
+
+Generated SLURM scripts now bootstrap a Ray cluster automatically when `slurm.nodes > 1`. They use [job_configs/slurms/utils/slurm_ray.sh](/home/alay/leap-finetune-24b/job_configs/slurms/utils/slurm_ray.sh) to:
+
+1. Start the Ray head on the first allocated node.
+2. Start Ray workers on the remaining nodes.
+3. Wait for the cluster to register all GPUs.
+4. Export `RAY_ADDRESS` before launching `leap-finetune`.
+
+That keeps the single-node path simple while making the multi-node path explicit.
+
+### Docker Path
+
+A basic CUDA image is available in [Dockerfile](/home/alay/leap-finetune-24b/Dockerfile). It is meant for the same external-cluster contract: the container only needs to receive `RAY_ADDRESS` and, optionally, `LEAP_RAY_NUM_WORKERS`.
+
+Example:
+
+```bash
+docker build -t leap-finetune:latest .
+docker run --rm --gpus all --network host \
+  -e RAY_ADDRESS=<head-ip>:6379 \
+  -e LEAP_RAY_NUM_WORKERS=16 \
+  -v "$(pwd)":/workspace \
+  leap-finetune:latest job_configs/long_context_moe_sft_example.yaml
+```
+
+For orchestration systems like Tangle, the important part is not Docker specifically; it is that the driver process can see the repo and gets the Ray address injected. The same contract works in bare-metal, VM, or container launchers.
+
+### KubeRay / Kubernetes
+
+`leap-finetune` can also submit a KubeRay `RayJob` directly when the YAML config contains a `kuberay:` section.
+
+This path is built on the same external-Ray contract described above. The KubeRay helper does two things:
+
+1. It creates a `RayCluster` spec with a head pod plus a fixed GPU worker pool.
+2. It writes the resolved training config into a ConfigMap and injects `ray.address: "auto"` and `ray.num_workers` so the driver attaches to that cluster instead of starting local Ray.
+
+That means the image belongs in the KubeRay pod templates, not in per-node imperative setup. For orchestrators like Tangle, the Kubernetes-native options are:
+
+1. Have Tangle create a `RayJob` directly.
+2. Have Tangle manage a persistent `RayCluster` and run `leap-finetune` with `RAY_ADDRESS` or `LEAP_RAY_ADDRESS`.
+
+Minimal example:
+
+```yaml
+kuberay:
+  image: "your-registry.com/leap-finetune:latest"
+  namespace: "default"
+  worker_replicas: 2
+  gpus_per_worker: 4
+  head_cpu: 4
+  head_memory: "16Gi"
+  worker_cpu: 8
+  worker_memory: "64Gi"
+  output_pvc: "training-outputs"
+```
+
+Then submit with the normal CLI:
+
+```bash
+uv run leap-finetune your_config_with_kuberay.yaml
+```
+
+That path creates a ConfigMap for the resolved training config, submits a `RayJob`, and exits after printing the `kubectl` commands to monitor it. It supports both:
+
+1. Non-Docker workflows, where you clone the repo locally, run `uv sync`, and point `kubectl` at an existing cluster.
+2. Docker workflows, where the `kuberay.image` points at a built image from [Dockerfile](/home/alay/leap-finetune-24b/Dockerfile) or an equivalent image that already contains `leap-finetune`.
+
+The dispatcher first tries local kubeconfig and then in-cluster config, so the same code works from a developer machine, a CI runner, or a control pod.
+
+Notes:
+
+1. `worker_replicas * gpus_per_worker` should match the intended global worker count for the job because `leap-finetune` schedules one Ray worker per GPU by default.
+2. The head pod does not need GPUs unless you explicitly set `head_gpu_count`.
+3. If you do not want the helper to create the cluster, skip the `kuberay:` section entirely and just set `ray.address` or `RAY_ADDRESS` to an existing KubeRay head service such as `ray://<cluster>-head-svc:10001` or the in-cluster `"auto"` path for submitted Ray jobs.
+4. Concrete manifests for both patterns live in [examples/kuberay](/home/alay/leap-finetune-24b/examples/kuberay): a self-contained `RayJob`, a persistent `RayCluster`, and a launcher `Job` that attaches with `RAY_ADDRESS`.
+
 ### 3. (Optional) Experiment Tracking with Weights & Biases
 
 Set `wandb_logging: true` in your YAML config's `training_config` section. By default logs are saved locally to `./wandb/`. To sync to [wandb.ai](https://wandb.ai), set `WANDB_API_KEY`:

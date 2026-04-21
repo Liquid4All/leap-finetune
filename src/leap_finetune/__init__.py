@@ -33,17 +33,11 @@ def check_and_handle_slurm(config_path_arg: str) -> bool:
         from leap_finetune.utils.slurm_generator import generate_slurm_script
 
         output_dir = config_path.parent / "slurms"
-        script_path = output_dir / f"{config_path.stem}.sh"
 
-        if script_path.exists():
-            print(
-                f"Config contains SLURM settings - using existing script: {script_path}"
-            )
-        else:
-            print("Config contains SLURM settings - generating SLURM script...")
-            script_path = generate_slurm_script(
-                config_path, config_dict, output_dir, auto_submit=False
-            )
+        print("Config contains SLURM settings - generating SLURM script...")
+        script_path = generate_slurm_script(
+            config_path, config_dict, output_dir, auto_submit=False
+        )
 
         print("Submitting SLURM job...")
         result = subprocess.run(
@@ -59,6 +53,16 @@ def check_and_handle_slurm(config_path_arg: str) -> bool:
     except Exception as e:
         print(f"Error checking SLURM config: {e}")
         return False
+
+
+def check_and_handle_submission_backends(config_path_arg: str) -> bool:
+    from leap_finetune.backends import check_and_handle_kuberay
+
+    if check_and_handle_kuberay(config_path_arg):
+        return True
+    if check_and_handle_slurm(config_path_arg):
+        return True
+    return False
 
 
 def main() -> None:
@@ -114,14 +118,15 @@ def main() -> None:
         generate_slurm_script(config_path, config_dict, output_dir, auto_submit=False)
         return
 
-    # Check for SLURM config BEFORE importing heavy dependencies
-    if check_and_handle_slurm(config_path_arg):
+    # Check for submission backends BEFORE importing heavy dependencies.
+    if check_and_handle_submission_backends(config_path_arg):
         return
 
     if not config_path_arg:
         print("No config file provided. Please provide a path to a YAML config file.")
         print("Usage: leap-finetune <path_to_config.yaml>")
         print("   or: leap-finetune slurm <path_to_config.yaml>")
+        print("   or: leap-finetune <path_to_config.yaml> with a kuberay: section")
         sys.exit(1)
 
     # Heavy imports deferred to here to keep slurm codepath fast

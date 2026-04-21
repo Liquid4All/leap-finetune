@@ -1,0 +1,68 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: leap-gpu-cluster
+  namespace: default
+spec:
+  rayVersion: "2.48.0"
+  headGroupSpec:
+    serviceType: ClusterIP
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+    template:
+      spec:
+        containers:
+          - name: ray-head
+            image: your-registry.com/leap-finetune:latest
+            resources:
+              requests:
+                cpu: "4"
+                memory: "16Gi"
+              limits:
+                cpu: "4"
+                memory: "16Gi"
+            volumeMounts:
+              - name: outputs
+                mountPath: /outputs
+              - name: dshm
+                mountPath: /dev/shm
+        volumes:
+          - name: outputs
+            persistentVolumeClaim:
+              claimName: training-outputs
+          - name: dshm
+            emptyDir:
+              medium: Memory
+  workerGroupSpecs:
+    - groupName: gpu-workers
+      replicas: 2
+      minReplicas: 2
+      maxReplicas: 2
+      rayStartParams:
+        num-gpus: "4"
+      template:
+        spec:
+          containers:
+            - name: ray-worker
+              image: your-registry.com/leap-finetune:latest
+              resources:
+                requests:
+                  cpu: "8"
+                  memory: "64Gi"
+                  nvidia.com/gpu: "4"
+                limits:
+                  cpu: "8"
+                  memory: "64Gi"
+                  nvidia.com/gpu: "4"
+              volumeMounts:
+                - name: outputs
+                  mountPath: /outputs
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: outputs
+              persistentVolumeClaim:
+                claimName: training-outputs
+            - name: dshm
+              emptyDir:
+                medium: Memory

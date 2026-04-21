@@ -1,0 +1,81 @@
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: leap-long-context-cp2-64k
+  namespace: default
+spec:
+  submissionMode: K8sJobMode
+  entrypoint: >-
+    env RAY_ADDRESS=auto uv run leap-finetune
+    job_configs/long_context_moe_sft_example.yaml
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 300
+  rayClusterSpec:
+    rayVersion: "2.48.0"
+    headGroupSpec:
+      serviceType: ClusterIP
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+      template:
+        spec:
+          containers:
+            - name: ray-head
+              image: your-registry.com/leap-finetune:latest
+              resources:
+                requests:
+                  cpu: "4"
+                  memory: "16Gi"
+                limits:
+                  cpu: "4"
+                  memory: "16Gi"
+              env:
+                - name: LEAP_RAY_NUM_WORKERS
+                  value: "8"
+              volumeMounts:
+                - name: outputs
+                  mountPath: /outputs
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: outputs
+              persistentVolumeClaim:
+                claimName: training-outputs
+            - name: dshm
+              emptyDir:
+                medium: Memory
+    workerGroupSpecs:
+      - groupName: gpu-workers
+        replicas: 2
+        minReplicas: 2
+        maxReplicas: 2
+        rayStartParams:
+          num-gpus: "4"
+        template:
+          spec:
+            containers:
+              - name: ray-worker
+                image: your-registry.com/leap-finetune:latest
+                resources:
+                  requests:
+                    cpu: "8"
+                    memory: "64Gi"
+                    nvidia.com/gpu: "4"
+                  limits:
+                    cpu: "8"
+                    memory: "64Gi"
+                    nvidia.com/gpu: "4"
+                env:
+                  - name: LEAP_RAY_NUM_WORKERS
+                    value: "8"
+                volumeMounts:
+                  - name: outputs
+                    mountPath: /outputs
+                  - name: dshm
+                    mountPath: /dev/shm
+            volumes:
+              - name: outputs
+                persistentVolumeClaim:
+                  claimName: training-outputs
+              - name: dshm
+                emptyDir:
+                  medium: Memory

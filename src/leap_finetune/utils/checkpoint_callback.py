@@ -6,6 +6,8 @@ from ray import train
 from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 
+from leap_finetune.utils.model_utils import current_checkpoint_output_dir
+
 
 _CLOUD_PREFIXES = ("s3://", "gs://", "az://", "abfs://", "abfss://", "hdfs://")
 
@@ -28,10 +30,16 @@ class LeapCheckpointCallback(TrainerCallback):
             "LFM2-1.2B-sft-smoltalk-1000-lr2e005-w0p2-lora_a-20250217_143022"
     """
 
-    def __init__(self, run_name_template: str | None = None) -> None:
+    def __init__(
+        self,
+        run_name_template: str | None = None,
+        *,
+        manual_sharded: bool = False,
+    ) -> None:
         super().__init__()
         self.metrics: dict = {}
         self.run_name_template = run_name_template
+        self.manual_sharded = manual_sharded
 
     def on_log(
         self,
@@ -51,12 +59,22 @@ class LeapCheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> None:
+        checkpoint_path = current_checkpoint_output_dir(
+            output_dir=args.output_dir,
+            run_name_template=self.run_name_template,
+            epoch=state.epoch,
+            step=state.global_step,
+            manual_sharded=self.manual_sharded,
+        )
         if train.get_context().get_world_rank() == 0:
-            checkpoint_path = f"{args.output_dir}/checkpoint-{state.global_step}"
             print(f"Checkpoint saved: {checkpoint_path}")
             print(f"   Metrics: {self.metrics}")
 
-            if self.run_name_template and _is_local_path(args.output_dir):
+            if (
+                self.run_name_template
+                and _is_local_path(args.output_dir)
+                and not self.manual_sharded
+            ):
                 self._rename_checkpoint(args, state)
 
         # Report metrics only — HF Trainer already saved checkpoint to output_dir.

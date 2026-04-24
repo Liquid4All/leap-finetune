@@ -115,6 +115,63 @@ def save_fsdp2_trainer_checkpoint(
             rotate_named_checkpoints(run_dir, trainer.args.save_total_limit)
 
 
+def save_manual_sharded_model_checkpoint(
+    *,
+    model: torch.nn.Module,
+    accelerator,
+    output_dir: str,
+    processing_class,
+    data_collator,
+    training_args,
+    ep_group: dist.ProcessGroup | None = None,
+) -> None:
+    """Save either EP or non-EP manual-sharded model checkpoints."""
+    if ep_group is not None:
+        save_ep_model_checkpoint(
+            model=model,
+            accelerator=accelerator,
+            output_dir=output_dir,
+            processing_class=processing_class,
+            data_collator=data_collator,
+            training_args=training_args,
+            ep_group=ep_group,
+        )
+        return
+
+    save_fsdp2_model_checkpoint(
+        model=model,
+        accelerator=accelerator,
+        output_dir=output_dir,
+        processing_class=processing_class,
+        data_collator=data_collator,
+        training_args=training_args,
+    )
+
+
+def save_manual_sharded_trainer_checkpoint(
+    *,
+    trainer,
+    model: torch.nn.Module,
+    trial,
+    ep_group: dist.ProcessGroup | None = None,
+) -> None:
+    """Save either EP or non-EP manual-sharded trainer checkpoints."""
+    if ep_group is not None:
+        save_ep_trainer_checkpoint(
+            trainer=trainer,
+            model=model,
+            trial=trial,
+            ep_group=ep_group,
+        )
+        return
+
+    save_fsdp2_trainer_checkpoint(
+        trainer=trainer,
+        model=model,
+        trial=trial,
+    )
+
+
 def format_checkpoint_dir_name(
     run_name_template: str | None, epoch: float | None, step: int
 ) -> str:
@@ -142,6 +199,44 @@ def resolve_checkpoint_output_dir(
     return os.path.join(
         run_dir, format_checkpoint_dir_name(run_name_template, epoch, step)
     )
+
+
+def current_checkpoint_output_dir(
+    *,
+    output_dir: str,
+    run_name_template: str | None,
+    epoch: float | None,
+    step: int,
+    manual_sharded: bool,
+) -> str:
+    """Return the expected checkpoint directory for the current save event."""
+    if manual_sharded:
+        return resolve_checkpoint_output_dir(
+            run_dir=output_dir,
+            run_name_template=run_name_template,
+            epoch=epoch,
+            step=step,
+        )
+    return os.path.join(output_dir, f"{PREFIX_CHECKPOINT_DIR}-{step}")
+
+
+def should_run_final_manual_sharded_save(
+    *,
+    trainer,
+    requested_save_strategy: str,
+) -> bool:
+    """Whether a final explicit manual-sharded save should run after training."""
+    if requested_save_strategy == "no":
+        return False
+
+    output_dir = current_checkpoint_output_dir(
+        output_dir=trainer._get_output_dir(trial=None),
+        run_name_template=getattr(trainer, "run_name_template", None),
+        epoch=trainer.state.epoch,
+        step=trainer.state.global_step,
+        manual_sharded=True,
+    )
+    return not os.path.isdir(output_dir)
 
 
 def rotate_named_checkpoints(output_dir: str, limit: int) -> None:

@@ -20,6 +20,7 @@ SFT_EXCLUDED_KEYS = {
     "chat_template",
     "chat_template_path",
     "reshard_after_forward",
+    "fsdp_cpu_offload",
 }
 
 

@@ -1,6 +1,4 @@
 import logging
-import os
-
 import ray.train
 import torch
 import torch.distributed as dist
@@ -12,6 +10,7 @@ from transformers import Trainer, TrainingArguments
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.sampling import get_length_grouped_sampler
 from leap_finetune.training_configs.distributed_configs import (
+    resolve_fsdp_cpu_offload,
     resolve_reshard_after_forward,
 )
 from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
@@ -36,11 +35,13 @@ from leap_finetune.utils.memory_trace import (
     wrap_optimizer_step,
     write_memory_trace_event,
 )
+from leap_finetune.utils.manual_sharded_trainer import (
+    ManualShardedTrainerMixin,
+    validate_manual_sharded_training_args,
+)
 from leap_finetune.utils.model_utils import (
-    save_ep_model_checkpoint,
-    save_ep_trainer_checkpoint,
-    save_fsdp2_model_checkpoint,
-    save_fsdp2_trainer_checkpoint,
+    save_manual_sharded_trainer_checkpoint,
+    should_run_final_manual_sharded_save,
 )
 from leap_finetune.utils.moe_losses import MoETrainingConfig, apply_moe_losses
 from leap_finetune.utils.moe_parallel import (
@@ -63,12 +64,7 @@ MOE_SFT_EXCLUDED_KEYS = SFT_EXCLUDED_KEYS | {
     "context_parallel_size",
 }
 
-
-def _fsdp_cpu_offload_enabled() -> bool:
-    return os.getenv("LEAP_FSDP_CPU_OFFLOAD", "").lower() in {"1", "true", "yes"}
-
-
-class LFMMoeSFTTrainer(Trainer):
+class LFMMoeSFTTrainer(ManualShardedTrainerMixin, Trainer):
     """SFT Trainer for MoE models with EP/FSDP2 support."""
 
     def __init__(
@@ -78,81 +74,10 @@ class LFMMoeSFTTrainer(Trainer):
         cp_config: dict | None = None,
         **kwargs,
     ):
-        self.manual_fsdp2 = manual_fsdp2
+        self.manual_sharded = manual_fsdp2
         super().__init__(**kwargs)
         self.ep_config = ep_config
         self.cp_config = cp_config
-
-    def create_accelerator_and_postprocess(self):
-        super().create_accelerator_and_postprocess()
-        if getattr(self, "manual_fsdp2", False):
-
-            def _ep_prepare_model(model, device_placement=None, evaluation_mode=False):
-                self.accelerator._models.append(model)
-                return model
-
-            self.accelerator.prepare_model = _ep_prepare_model
-
-    def save_model(self, output_dir: str | None = None, _internal_call: bool = False):
-        if not getattr(self, "manual_fsdp2", False):
-            return super().save_model(output_dir, _internal_call)
-
-        output_dir = output_dir or self.args.output_dir
-        if self.ep_config is not None:
-            logger.info("EP trainer save_model start output_dir=%s", output_dir)
-            save_ep_model_checkpoint(
-                model=self.model,
-                accelerator=self.accelerator,
-                output_dir=output_dir,
-                processing_class=self.processing_class,
-                data_collator=self.data_collator,
-                training_args=self.args,
-                ep_group=self.ep_config["ep_group"],
-            )
-            logger.info("EP trainer save_model end output_dir=%s", output_dir)
-        else:
-            logger.info("FSDP2 trainer save_model start output_dir=%s", output_dir)
-            save_fsdp2_model_checkpoint(
-                model=self.model,
-                accelerator=self.accelerator,
-                output_dir=output_dir,
-                processing_class=self.processing_class,
-                data_collator=self.data_collator,
-                training_args=self.args,
-            )
-            logger.info("FSDP2 trainer save_model end output_dir=%s", output_dir)
-
-    def _save_checkpoint(self, model, trial) -> None:
-        if not getattr(self, "manual_fsdp2", False):
-            return super()._save_checkpoint(model, trial)
-
-        step = getattr(getattr(self, "state", None), "global_step", None)
-        output_dir = getattr(getattr(self, "args", None), "output_dir", None)
-        if self.ep_config is not None:
-            logger.info(
-                "EP trainer _save_checkpoint start step=%s output_dir=%s",
-                step,
-                output_dir,
-            )
-            save_ep_trainer_checkpoint(
-                trainer=self,
-                model=model,
-                trial=trial,
-                ep_group=self.ep_config["ep_group"],
-            )
-            logger.info("EP trainer _save_checkpoint end step=%s", step)
-        else:
-            logger.info(
-                "FSDP2 trainer _save_checkpoint start step=%s output_dir=%s",
-                step,
-                output_dir,
-            )
-            save_fsdp2_trainer_checkpoint(
-                trainer=self,
-                model=model,
-                trial=trial,
-            )
-            logger.info("FSDP2 trainer _save_checkpoint end step=%s", step)
 
     def get_train_dataloader(self):
         sampler_generator = None
@@ -301,9 +226,8 @@ def moe_sft_run(training_config: dict) -> None:
     }
 
     if use_ep or use_fsdp2:
-        config_kwargs["gradient_checkpointing"] = False
+        validate_manual_sharded_training_args(config_kwargs)
         if use_ep:
-            config_kwargs["save_strategy"] = "no"
             logger.info("EP mode: ep_size=%s, FSDP2 on dp_mesh", ep_size)
         else:
             logger.info(
@@ -374,9 +298,7 @@ def moe_sft_run(training_config: dict) -> None:
         reshard_after_forward = resolve_reshard_after_forward(
             train_config, default=True
         )
-        cpu_offload = _fsdp_cpu_offload_enabled()
-        if cpu_offload:
-            logger.info("Non-EP FSDP2 CPU offload enabled via LEAP_FSDP_CPU_OFFLOAD")
+        cpu_offload = resolve_fsdp_cpu_offload(train_config)
         logger.info(
             "Applying non-EP FSDP2 with reshard_after_forward=%s cpu_offload=%s",
             reshard_after_forward,
@@ -409,8 +331,12 @@ def moe_sft_run(training_config: dict) -> None:
     trainer.run_name_template = run_name_template
 
     trainer.callback_handler.callbacks.insert(0, MoEMetricsCallback())
-    if not (use_ep or use_fsdp2):
-        trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
+    trainer.add_callback(
+        LeapCheckpointCallback(
+            run_name_template=run_name_template,
+            manual_sharded=(use_ep or use_fsdp2),
+        )
+    )
     trainer = prepare_trainer(trainer)
 
     if cp_size > 1:
@@ -424,15 +350,18 @@ def moe_sft_run(training_config: dict) -> None:
         logger.info("Starting trainer.train() for MoE SFT")
         trainer.train()
         logger.info("trainer.train() returned for MoE SFT")
-        if use_ep and requested_save_strategy != "no":
-            logger.info("Running explicit final EP checkpoint save")
-            save_ep_trainer_checkpoint(
+        if (use_ep or use_fsdp2) and should_run_final_manual_sharded_save(
+            trainer=trainer,
+            requested_save_strategy=requested_save_strategy,
+        ):
+            logger.info("Running explicit final manual-sharded checkpoint save")
+            save_manual_sharded_trainer_checkpoint(
                 trainer=trainer,
                 model=trainer.model,
                 trial=None,
-                ep_group=ep_config["ep_group"],
+                ep_group=ep_config["ep_group"] if ep_config is not None else None,
             )
-            logger.info("Explicit final EP checkpoint save completed")
+            logger.info("Explicit final manual-sharded checkpoint save completed")
         logger.info("MoE SFT training completed successfully")
     except RuntimeError as e:
         error_msg = str(e)

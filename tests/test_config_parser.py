@@ -5,6 +5,9 @@ import tempfile
 import pytest
 import yaml
 
+from leap_finetune.utils.manual_sharded_trainer import (
+    validate_manual_sharded_training_args,
+)
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.config_parser import (
     generate_run_name,
@@ -12,6 +15,7 @@ from leap_finetune.utils.config_parser import (
     resolve_config_path,
 )
 from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
+from leap_finetune.utils.model_utils import should_run_final_manual_sharded_save
 
 
 # === Fixtures ===
@@ -217,6 +221,33 @@ class TestExtendsResolution:
             f.flush()
             job = parse_job_config(f.name)
             assert job.training_config.value["reshard_after_forward"] is False
+        finally:
+            os.unlink(f.name)
+
+    def test_fsdp_cpu_offload_survives_config_override(self, tmp_path):
+        config = {
+            "project_name": "test_fsdp_cpu_offload",
+            "model_name": "LFM2-24B-A2B",
+            "training_type": "moe_sft",
+            "dataset": {
+                "path": "HuggingFaceTB/smoltalk",
+                "type": "sft",
+                "limit": 10,
+                "test_size": 0.2,
+                "subset": "all",
+            },
+            "training_config": {
+                "extends": "MOE_SFT",
+                "fsdp_cpu_offload": True,
+            },
+            "peft_config": {"use_peft": False},
+        }
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+        try:
+            yaml.dump(config, f)
+            f.flush()
+            job = parse_job_config(f.name)
+            assert job.training_config.value["fsdp_cpu_offload"] is True
         finally:
             os.unlink(f.name)
 
@@ -441,6 +472,68 @@ class TestLeapCheckpointCallback:
     def test_create_with_template(self):
         cb = LeapCheckpointCallback(run_name_template="test-run-20250101")
         assert cb.run_name_template == "test-run-20250101"
+
+    def test_create_manual_sharded(self):
+        cb = LeapCheckpointCallback(
+            run_name_template="test-run-20250101",
+            manual_sharded=True,
+        )
+        assert cb.manual_sharded is True
+
+
+class TestManualShardedHelpers:
+    def test_validate_manual_sharded_training_args_rejects_gradient_checkpointing(
+        self,
+    ):
+        with pytest.raises(
+            ValueError,
+            match="gradient_checkpointing=True is not supported",
+        ):
+            validate_manual_sharded_training_args({"gradient_checkpointing": True})
+
+    def test_validate_manual_sharded_training_args_allows_default_config(self):
+        validate_manual_sharded_training_args({"bf16": True})
+
+    def test_should_run_final_manual_sharded_save_skips_when_disabled(self, tmp_path):
+        trainer = type(
+            "TrainerStub",
+            (),
+            {
+                "_get_output_dir": lambda self, trial=None: str(tmp_path),
+                "run_name_template": "run-20250101",
+                "state": type("StateStub", (), {"epoch": 1.0, "global_step": 10})(),
+            },
+        )()
+        assert (
+            should_run_final_manual_sharded_save(
+                trainer=trainer,
+                requested_save_strategy="no",
+            )
+            is False
+        )
+
+    def test_should_run_final_manual_sharded_save_detects_existing_checkpoint(
+        self, tmp_path
+    ):
+        run_dir = tmp_path / "outputs"
+        run_dir.mkdir()
+        (run_dir / "run-e1s10-20250101").mkdir()
+        trainer = type(
+            "TrainerStub",
+            (),
+            {
+                "_get_output_dir": lambda self, trial=None: str(run_dir),
+                "run_name_template": "run-20250101",
+                "state": type("StateStub", (), {"epoch": 1.0, "global_step": 10})(),
+            },
+        )()
+        assert (
+            should_run_final_manual_sharded_save(
+                trainer=trainer,
+                requested_save_strategy="epoch",
+            )
+            is False
+        )
 
 
 # === SLURM generation ===

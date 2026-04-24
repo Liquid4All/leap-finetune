@@ -36,6 +36,16 @@ def resolve_reshard_after_forward(
     return default
 
 
+def resolve_fsdp_cpu_offload(
+    train_config: dict, default: bool = False
+) -> bool:
+    """Resolve fsdp_cpu_offload from config, then default."""
+    config_value = train_config.get("fsdp_cpu_offload")
+    if config_value is not None:
+        return bool(config_value)
+    return default
+
+
 def build_moe_fsdp_config(
     *, reshard_after_forward: bool, activation_checkpointing: bool = False
 ) -> dict:

@@ -20,6 +20,7 @@ class JobConfig:
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
     model_config: dict | None = None
     ray_config: dict | None = None
+    benchmark_configs: dict | None = None
 
     def __post_init__(self):
         self._validate_job_name()
@@ -61,6 +62,7 @@ class JobConfig:
             "peft_config": self.peft_config.value if self.peft_config else None,
             "model_config": self.model_config,
             "ray_config": self.ray_config,
+            "benchmark_configs": self.benchmark_configs,
         }
 
     def print_config_summary(self):

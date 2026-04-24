@@ -1,12 +1,17 @@
-import torch.distributed as dist
+import logging
+
 import ray.train
-from torch.utils.data import DataLoader
+import torch.distributed as dist
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import Trainer, TrainingArguments
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
-from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
+from leap_finetune.evaluation import (
+    BenchmarkEvalCallback,
+    create_llm_benchmarks_from_config,
+)
+from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.context_parallel import (
     aggregate_cp_loss,
@@ -17,36 +22,23 @@ from leap_finetune.utils.context_parallel import (
 )
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
-    init_wandb_if_enabled,
+    finish_tracker,
+    init_tracker,
     is_rank_zero,
     setup_worker_logging,
 )
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
+from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
+
+logger = logging.getLogger(__name__)
 
 
-class LFMSFTTrainer(Trainer):
-    """Trainer that bypasses DistributedSampler since Ray already shards data."""
+class LFMSFTTrainer(RayDataLoaderMixin, Trainer):
+    """SFT trainer with Ray-sharded data loaders and optional CP loss handling."""
 
     def __init__(self, cp_config: dict | None = None, **kwargs):
         super().__init__(**kwargs)
         self.cp_config = cp_config
-
-    def get_train_dataloader(self):
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self._train_batch_size,
-            collate_fn=self.data_collator,
-            shuffle=True,
-        )
-
-    def get_eval_dataloader(self, eval_dataset=None):
-        if eval_dataset is None:
-            eval_dataset = self.eval_dataset
-        return DataLoader(
-            eval_dataset,
-            batch_size=self.args.per_device_eval_batch_size,
-            collate_fn=self.data_collator,
-        )
 
     def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
         if self.cp_config and self.cp_config["cp_size"] > 1:
@@ -72,10 +64,9 @@ def build_sft_data_collator(tokenizer, train_config: dict):
 
 
 def sft_run(training_config: dict) -> None:
-    """SFT training loop — pre-tokenized data + plain Trainer."""
+    """SFT training loop for Ray-pretokenized datasets."""
     setup_worker_logging()
 
-    # === Get pre-tokenized shards for this worker ===
     train_ds_ray = ray.train.get_dataset_shard("train")
     eval_ds_ray = ray.train.get_dataset_shard("eval")
     train_dataset = ray_dataset_to_hf(train_ds_ray)
@@ -84,52 +75,48 @@ def sft_run(training_config: dict) -> None:
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
     job_name = training_config.get("job_name", "leap-ft-run")
+    train_config = training_config.get("train_config", {})
+    run_name_template = train_config.get("leap_run_name_template")
+    resume_from = train_config.get("resume_from_checkpoint")
+    output_dir = train_config.get("output_dir", "")
+    if resume_from:
+        logger.info("Resuming from checkpoint: %s", resume_from)
 
-    # Extract run name template before filtering
-    run_name_template = training_config.get("train_config", {}).get(
-        "leap_run_name_template"
-    )
-
-    # Filter out SFT-specific keys that don't belong in TrainingArguments
     excluded_keys = SFT_EXCLUDED_KEYS | {
         "leap_run_name_template",
         "model_config",
         "context_parallel_size",
     }
-
     train_config_filtered = {
-        k: v
-        for k, v in training_config.get("train_config").items()
-        if k not in excluded_keys
+        k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
-    # Configure wandb reporting if enabled via config
-    wandb_logging = bool(
-        training_config.get("train_config", {}).get("wandb_logging", False)
+    tracker = train_config.get("tracker", "none")
+    if tracker == "none" and train_config.get("wandb_logging", False):
+        tracker = "wandb"
+    init_tracker(
+        job_name,
+        tracker,
+        train_config.get("trackio_space_id"),
+        output_dir=output_dir if output_dir else None,
+        resume_from_checkpoint=resume_from,
     )
-    init_wandb_if_enabled(job_name, wandb_logging)
 
-    # Default eval batch size to train batch size to avoid OOM during eval
     if "per_device_eval_batch_size" not in train_config_filtered:
         train_config_filtered["per_device_eval_batch_size"] = train_config_filtered.get(
             "per_device_train_batch_size", 1
         )
 
-    # Build training args
     config_kwargs = {
-        "report_to": "wandb" if wandb_logging else "none",
+        "report_to": tracker,
         "run_name": job_name,
         "remove_unused_columns": False,
         **train_config_filtered,
     }
     training_args = TrainingArguments(**config_kwargs)
 
-    # === Context Parallelism setup ===
-    cp_size = training_config.get("train_config", {}).get("context_parallel_size", 1)
+    cp_size = train_config.get("context_parallel_size", 1)
     model_config = training_config.get("model_config")
-    train_config = training_config.get("train_config", {})
-
-    # Load model + tokenizer on worker
     model, tokenizer = load_model(
         model_name,
         model_config=model_config,
@@ -139,9 +126,11 @@ def sft_run(training_config: dict) -> None:
 
     cp_config = None
     if cp_size > 1:
-        max_length = training_config.get("train_config", {}).get("max_length")
+        max_length = train_config.get("max_length")
         validate_cp_config(
-            cp_size, max_length=max_length, world_size=dist.get_world_size()
+            cp_size,
+            max_length=max_length,
+            world_size=dist.get_world_size(),
         )
         cp_config = create_parallel_process_groups(cp_size)
         apply_cp_to_model(model, cp_config)
@@ -149,11 +138,7 @@ def sft_run(training_config: dict) -> None:
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
 
-    # Collator handles labels, padding, and padding-free mode (position_ids from seq_lengths)
-    data_collator = build_sft_data_collator(
-        tokenizer, training_config.get("train_config", {})
-    )
-
+    data_collator = build_sft_data_collator(tokenizer, train_config)
     trainer = LFMSFTTrainer(
         cp_config=cp_config,
         model=model,
@@ -163,30 +148,20 @@ def sft_run(training_config: dict) -> None:
         eval_dataset=eval_dataset,
         data_collator=data_collator,
     )
-
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
+
+    benchmark_configs = training_config.get("benchmark_configs")
+    if benchmark_configs and benchmark_configs.get("benchmarks"):
+        benchmarks = create_llm_benchmarks_from_config(benchmark_configs, tokenizer)
+        if benchmarks:
+            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
+
     trainer = prepare_trainer(trainer)
+    run_training_safely(trainer, resume_from_checkpoint=resume_from)
 
-    try:
-        trainer.train()
-        print("Training completed successfully")
-    except RuntimeError as e:
-        error_msg = str(e)
-        if any(
-            keyword in error_msg.lower()
-            for keyword in ["cuda error", "ecc error", "nccl", "collective", "timeout"]
-        ):
-            print(
-                f"Training completed but hit distributed communication error during cleanup: {error_msg}"
-            )
-            print(
-                "Training was successful - error occurred in post-training synchronization"
-            )
-        else:
-            raise e
-
-    # Save PEFT model if applicable
     if peft_config and is_rank_zero():
         merge_and_save_peft_model(
             model, tokenizer, training_args.output_dir, run_name_template
         )
+
+    finish_tracker(tracker)

@@ -1,13 +1,24 @@
-# leap-finetune
+<div align="center">
+  <img
+    src="./banner.png"
+    alt="leap-finetune"
+    style="width: 100%; max-width: 100%; height: auto; display: inline-block; margin-bottom: 0.5em; margin-top: 0.5em;"
+  />
+  <div style="display: flex; justify-content: center; gap: 0.5em;">
+    <a href="https://playground.liquid.ai/"><strong>Try LFM</strong></a> •
+    <a href="https://docs.liquid.ai/lfm"><strong>Documentation</strong></a> •
+    <a href="https://leap.liquid.ai/"><strong>LEAP</strong></a>
+  </div>
+  <br/>
+  <a href="https://discord.com/invite/liquid-ai"><img src="https://img.shields.io/discord/1385439864920739850?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Join Discord"></a>
+</div>
+</br>
 
-A minimal fine-tuning repo for LFM2, fully built on Open Source.
+<p align="center">
+<a href="#-setup">Setup</a> · <a href="#-quickstart">Quickstart</a> · <a href="#-expected-dataset-formats">Dataset Formats</a> · <a href="#-tool-calling-datasets">Tool Calling</a> · <a href="#-resuming-training">Resuming Training</a> · <a href="#-evaluation-benchmarks">Benchmarks</a> · <a href="#-advanced-configuration">Advanced Config</a>
+</p>
 
-> **⚠️ Important**
->
-> - **Hardware:** We tested this tool on H100 80GB GPU. Multi-GPU parallelization has been tested up to 8 such GPUs.
-> - **Operating system:** This tool currently supports Linux machines with the x86_64 architecture.
-> - **Python:** Make sure you are running Python >= 3.12.
-> - **Access token:** Make sure you are logged in on Hugging Face to access models and datasets.
+LEAP-Finetune is a minimal fine-tuning repo for LFM2, fully built on Open Source. It handles multi-gpu orchestration, dataset formatting and validation, and model checkpointing. We support different acceleration backends, including GPU nodes of 8xH100 80GB (both single node and multi node) as well as Modal (H100, H200, B200, ..) in case you don't have your own GPUs.
 
 For feature requests or if you have a different setup, reach out to [support@liquid.ai](mailto:support@liquid.ai) and tell us about your specific configuration.
 
@@ -75,7 +86,53 @@ uv run leap-finetune <path_to_config.yaml>
 
 It uses Ray Train + Accelerate for distributed training.
 
-Unless you overwrote `output_dir`, results will be stored in `outputs/training_type/job_name/`
+Unless you overwrote `output_dir`, results will be stored in `outputs/{project_name}/{run_name}/`. Each run gets its own directory with a unique name based on model, dataset, LR, and timestamp.
+
+### Modal Support
+
+You can run training jobs on Modal's serverless GPUs directly from your Mac or laptop — no local GPU required.
+
+**One-time setup:**
+
+```bash
+huggingface-cli login   # required — used for model downloads and trackio
+modal setup              # configure Modal credentials
+```
+
+**Add a `modal:` section to any config:**
+
+```yaml
+modal:
+  gpu: "H100:4"
+  timeout: 86400
+  output_volume: "leap-finetune"
+  output_dir: "/outputs"
+  detach: false
+```
+
+**Run:**
+
+```bash
+uv run leap-finetune job_configs/sft_example_modal.yaml
+```
+
+That's it. The CLI will:
+
+1. Build the container image (~5 min on first run, cached after that)
+2. Auto-create a `huggingface-secret` on Modal from your local HF token
+3. Stream build and training logs to your terminal in real-time
+4. Save checkpoints to a Modal Volume
+
+**Retrieving checkpoints:**
+
+```bash
+modal volume ls leap-finetune                                        # list saved checkpoints
+modal volume get leap-finetune <checkpoint-name> ./local-outputs     # download to local
+```
+
+**Detached mode:** Set `detach: true` in the modal config to submit and disconnect. Monitor with `modal app logs leap-finetune`.
+
+See [`job_configs/sft_example_modal.yaml`](./job_configs/sft_example_modal.yaml) for all available options.
 
 ### SLURM Support
 
@@ -204,12 +261,48 @@ Notes:
 3. If you do not want the helper to create the cluster, skip the `kuberay:` section entirely and just set `ray.address` or `RAY_ADDRESS` to an existing KubeRay head service such as `ray://<cluster>-head-svc:10001` or the in-cluster `"auto"` path for submitted Ray jobs.
 4. Concrete manifests for both patterns live in [examples/kuberay](/home/alay/leap-finetune-24b/examples/kuberay): a self-contained `RayJob`, a persistent `RayCluster`, and a launcher `Job` that attaches with `RAY_ADDRESS`.
 
-### 3. (Optional) Experiment Tracking with Weights & Biases
+### 3. (Optional) Experiment Tracking
 
-Set `wandb_logging: true` in your YAML config's `training_config` section. By default logs are saved locally to `./wandb/`. To sync to [wandb.ai](https://wandb.ai), set `WANDB_API_KEY`:
+Add `tracker` to your `training_config`:
+
+```yaml
+training_config:
+  tracker: "trackio" # or "wandb"
+```
+
+#### Trackio
+
+[Trackio](https://huggingface.co/blog/trackio) is a free experiment tracker that logs to a HuggingFace Space.
+
+```yaml
+training_config:
+  tracker: "trackio"
+  trackio_space_id: "username/my-dashboard" # auto-created if it doesn't exist
+```
+
+Requires a HF token (via `huggingface-cli login`). On Modal, the token is auto-injected — no extra setup needed. View your dashboard at `https://huggingface.co/spaces/<trackio_space_id>`.
+
+#### Weights & Biases
+
+[Weights & Biases](https://wandb.ai) is a popular experiment tracking platform.
+
+```yaml
+training_config:
+  tracker: "wandb"
+```
+
+Set your API key locally with `export WANDB_API_KEY=your_key`. On Modal, add a secret:
 
 ```bash
-export WANDB_API_KEY=your_api_key
+modal secret create wandb-secret WANDB_API_KEY=your_key
+```
+
+Then add it to your Modal config:
+
+```yaml
+modal:
+  secrets:
+    - "wandb-secret"
 ```
 
 ### 4. Bundle Checkpoint for LEAP
@@ -269,6 +362,80 @@ When training is done, you can bundle your output checkpoint with `leap-bundle` 
 ```
 
 > **Note**: VLM datasets commonly have images in a separate row and are referenced in the messages column. If your image URLs or Paths are in a separate column from your messages, you'll need to merge the images into the 'messages' section like above.
+
+### 🔧 Tool Calling Datasets
+
+Tool calls use LFM bracket notation pre-baked in the assistant `content` field. Tool definitions go in the system prompt, and tool responses use `role: "tool"`.
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "List of tools: [{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get weather for a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\"}},\"required\":[\"location\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"search_web\",\"description\":\"Search the web\",\"parameters\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"send_email\",\"description\":\"Send an email\",\"parameters\":{\"type\":\"object\",\"properties\":{\"to\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"}},\"required\":[\"to\",\"body\"]}}}]"
+    },
+    { "role": "user", "content": "What's the weather in Boston?" },
+    {
+      "role": "assistant",
+      "content": "<|tool_call_start|>[get_weather(location=\"Boston\")]<|tool_call_end|>"
+    },
+    {
+      "role": "tool",
+      "content": "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    },
+    { "role": "assistant", "content": "It's 72°F and sunny in Boston." }
+  ]
+}
+```
+
+- Tool calls must be pre-baked in `content` using `<|tool_call_start|>[func(args)]<|tool_call_end|>` bracket notation
+- Structured `tool_calls` fields (OpenAI format) are auto-converted if present
+- Foreign formats (e.g. `<tool_call>` XML) are rejected with an actionable error
+- Do not include `<|tool_response_start|>` / `<|tool_response_end|>` markers in `role: "tool"` messages — the LFM2 chat template adds these automatically during tokenization
+- **LFM2 models** additionally expect `<|tool_list_start|>` / `<|tool_list_end|>` around tool definitions in the system prompt. Include these in your data if training an LFM2 model; omit them for LFM2.5. The pipeline warns on mismatches and auto-strips `<|tool_list_start|>` when training LFM2.5.
+
+## 🔄 Resuming Training
+
+If a run is interrupted (GPU timeout, crash, SLURM preemption, etc.), you can resume from the last checkpoint with full optimizer state, LR schedule, and wandb continuity.
+
+Add `resume_from_checkpoint` to your `training_config`:
+
+```yaml
+training_config:
+  resume_from_checkpoint: "latest" # resumes from the most recent checkpoint
+```
+
+This finds the most recent run directory under `outputs/{project_name}/` and resumes from its latest checkpoint. To resume from a specific checkpoint instead:
+
+```yaml
+training_config:
+  resume_from_checkpoint: "/path/to/outputs/my_project/run_name/checkpoint-step-8000"
+```
+
+**What gets restored:** model weights, optimizer states, LR scheduler position, training step counter, and RNG states. **In order to resume a run,** `save_only_model` **\*needs to be set to** `False`.
+
+**Wandb continuity:** The wandb run ID is saved to `<run_dir>/.wandb_run_id` automatically. On resume, it restores the same wandb run. Fresh runs always get a new wandb run.
+
+## 📈 Evaluation Benchmarks
+
+Run benchmarks automatically during training at every `eval_steps`. Add a `benchmarks` section to your YAML config:
+
+```yaml
+benchmarks:
+  max_new_tokens: 128
+  benchmarks:
+    - name: "mmmu_val"
+      path: "/data/mmmu_val.jsonl"
+      metric: "short_answer"
+
+    - name: "imagenette"
+      path: "/data/imagenette_eval.jsonl"
+      metric: "logprob_zero_shot"
+```
+
+Benchmark data uses the **same format as training data** (HF messages schema). Available metrics: `short_answer`, `grounding_iou`, `mcq_gen`, `logprob_zero_shot`. Results are logged to wandb at `benchmark/{name}/score`.
+
+See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data format examples, YAML reference, and how to add custom metrics.
 
 ## 🧪 Advanced Configuration
 

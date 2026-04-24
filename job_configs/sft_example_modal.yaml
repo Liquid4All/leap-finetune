@@ -1,0 +1,32 @@
+project_name: "my_sft_project"
+model_name: "LFM2-1.2B"
+training_type: "sft"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  limit: 10000
+  test_size: 0.2
+  subset: "all"
+
+training_config:
+  extends: "DEFAULT_SFT"
+  num_train_epochs: 3
+  per_device_train_batch_size: 2
+  learning_rate: 2e-5
+  tracker: "trackio"                        # optional, "wandb" or "trackio"
+  trackio_space_id: "username/my-dashboard"  # required if tracker is "trackio"
+
+peft_config:
+  extends: "DEFAULT_LORA"
+  use_peft: true
+
+modal:
+  app_name: "leap-finetune"
+  gpu: "H100:4"
+  timeout: 86400                         # 24 hours
+  output_volume: "leap-finetune"         # Modal Volume, created automatically
+  output_dir: "/outputs"                 # mount point inside the container
+  detach: false                          # true = fire-and-forget, false = streams logs
+  # secrets:
+  #   - "wandb-secret"                   # optional, WANDB_API_KEY for experiment tracking

@@ -1,3 +1,5 @@
+import importlib
+import logging
 import os
 import pathlib
 from datetime import datetime
@@ -7,8 +9,10 @@ import yaml
 from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 from leap_finetune.training_configs import PeftConfig, TrainingConfig
 from leap_finetune.training_configs.job_config import JobConfig
-from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
+from leap_finetune.utils.config_resolver import resolve_config_path
 from leap_finetune.utils.model_utils import is_moe_model_from_name
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_local_path(value: str | None, *, base_dir: pathlib.Path) -> str | None:
@@ -23,34 +27,6 @@ def _resolve_local_path(value: str | None, *, base_dir: pathlib.Path) -> str | N
         return str((base_dir / value).resolve())
 
     return value
-
-
-def resolve_config_path(config_input: str) -> pathlib.Path:
-    input_path = pathlib.Path(config_input)
-
-    # Auto-append .yaml if no extension provided
-    candidates = [config_input]
-    if not input_path.suffix:
-        candidates.append(config_input + ".yaml")
-
-    for candidate in candidates:
-        candidate_path = pathlib.Path(candidate)
-
-        # 1. Absolute or CWD-relative path
-        if candidate_path.exists():
-            return candidate_path.resolve()
-
-        # 2. Look in ./job_configs/
-        local_job_configs = pathlib.Path.cwd() / "job_configs" / candidate
-        if local_job_configs.exists():
-            return local_job_configs.resolve()
-
-        # 3. Look in repo job_configs/
-        repo_job_configs = LEAP_FINETUNE_DIR / "job_configs" / candidate
-        if repo_job_configs.exists():
-            return repo_job_configs.resolve()
-
-    raise FileNotFoundError(f"Config file not found at: {input_path}")
 
 
 def generate_run_name(
@@ -83,17 +59,34 @@ def generate_run_name(
     else:
         warmup_str = "w_def"
 
-    if use_peft:
-        lora_str = f"lora_{lora_type}" if lora_type else "lora_a"
-    else:
-        lora_str = "no_lora"
-
+    lora_str = f"lora_{lora_type}" if use_peft else "no_lora"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    slurm_id = os.environ.get("SLURM_JOB_ID", "")
 
-    return (
+    name = (
         f"{safe_model_name}-{training_type}-{dataset_name}-{limit_str}"
         f"-{lr_str}-{warmup_str}-{lora_str}-{timestamp}"
     )
+    if slurm_id:
+        name += f"-j{slurm_id}"
+    return name
+
+
+def _import_callable(dotted_path: str):
+    try:
+        module_path, func_name = dotted_path.rsplit(".", 1)
+    except ValueError as exc:
+        raise ValueError(
+            f"preprocess_fn must be a dotted path like 'my_module.func', got: {dotted_path}"
+        ) from exc
+
+    module = importlib.import_module(module_path)
+    fn = getattr(module, func_name, None)
+    if fn is None:
+        raise ValueError(f"Function '{func_name}' not found in module '{module_path}'")
+    if not callable(fn):
+        raise ValueError(f"'{dotted_path}' is not callable")
+    return fn
 
 
 def parse_job_config(config_input: str) -> JobConfig:
@@ -103,39 +96,56 @@ def parse_job_config(config_input: str) -> JobConfig:
     with open(path_obj) as f:
         config_dict = yaml.safe_load(f)
 
-    # === Dataset ===
     ds_config = config_dict.get("dataset", {})
     dataset_path_env = os.getenv("DATASET_PATH")
     if dataset_path_env:
-        final_dataset_path = _resolve_local_path(dataset_path_env, base_dir=pathlib.Path.cwd())
+        final_dataset_path = _resolve_local_path(
+            dataset_path_env,
+            base_dir=pathlib.Path.cwd(),
+        )
     else:
-        final_dataset_path = _resolve_local_path(ds_config.get("path"), base_dir=config_dir)
+        final_dataset_path = _resolve_local_path(
+            ds_config.get("path"),
+            base_dir=config_dir,
+        )
 
-    valid_types = {"sft", "dpo", "vlm_sft", "moe_sft", "moe_dpo"}
     ds_type = ds_config.get("type")
+    dataset_type_aliases = {
+        "moe_sft": "sft",
+        "moe_dpo": "dpo",
+    }
+    ds_type = dataset_type_aliases.get(ds_type, ds_type)
+    valid_types = {"sft", "dpo", "vlm_sft"}
     if ds_type not in valid_types:
         raise ValueError(
             f"Invalid dataset type: '{ds_type}'. Must be one of: {sorted(valid_types)}"
         )
 
+    preprocess_fn = None
+    preprocess_fn_path = ds_config.get("preprocess_fn")
+    if preprocess_fn_path:
+        preprocess_fn = _import_callable(preprocess_fn_path)
+
+    model_name = config_dict.get("model_name", "LFM2-1.2B")
     dataset = DatasetLoader(
         dataset_path=final_dataset_path,
         dataset_type=ds_type,
+        model_name=model_name,
         limit=ds_config.get("limit"),
+        split=ds_config.get("split", "train"),
         test_size=ds_config.get("test_size", 0.2),
         subset=ds_config.get("subset"),
         image_root=ds_config.get("image_root"),
         cache_dataset=ds_config.get("cache_dataset", False),
+        preprocess_fn=preprocess_fn,
     )
 
-    # === Training config with extends support ===
     train_config_dict = config_dict.get("training_config", {})
     training_type = config_dict.get("training_type", "sft")
 
     base_config_name = train_config_dict.pop("extends", None) or train_config_dict.pop(
         "base", None
     )
-
     if base_config_name:
         base_config_map = {member.name: member for member in TrainingConfig}
         if base_config_name not in base_config_map:
@@ -154,18 +164,15 @@ def parse_job_config(config_input: str) -> JobConfig:
         }
         if training_type not in training_type_to_config:
             raise ValueError(f"Unknown training type: {training_type}")
-
         config_name = training_type_to_config[training_type]
-        base_config_map = {member.name: member for member in TrainingConfig}
-        base_train_config = base_config_map[config_name]
+        base_train_config = {member.name: member for member in TrainingConfig}[
+            config_name
+        ]
 
-    # Ensure learning_rate is float
-    if "learning_rate" in train_config_dict:
-        lr_val = train_config_dict["learning_rate"]
-        if isinstance(lr_val, str):
-            train_config_dict["learning_rate"] = float(lr_val)
+    for float_key in ("learning_rate", "weight_decay"):
+        if float_key in train_config_dict and isinstance(train_config_dict[float_key], str):
+            train_config_dict[float_key] = float(train_config_dict[float_key])
 
-    # Merge base config with YAML overrides
     final_training_config = base_train_config.override(**train_config_dict)
     final_train_values = final_training_config.value
     final_train_values["chat_template_path"] = _resolve_local_path(
@@ -173,11 +180,8 @@ def parse_job_config(config_input: str) -> JobConfig:
         base_dir=config_dir,
     )
 
-    # === PEFT config with extends support ===
     peft_dict = config_dict.get("peft_config", {})
-
     use_peft = peft_dict.get("use_peft", None) if peft_dict else None
-
     if use_peft is False:
         peft_config = None
     else:
@@ -196,7 +200,6 @@ def parse_job_config(config_input: str) -> JobConfig:
                 )
 
             base_peft_config = base_peft_map[base_peft_name]
-
             from peft import LoraConfig
 
             base_config_value = base_peft_config.value
@@ -219,12 +222,8 @@ def parse_job_config(config_input: str) -> JobConfig:
 
                 peft_config = _CustomPeftConfig(peft_config_obj)
         else:
-            if use_peft is True:
-                peft_config = PeftConfig.DEFAULT_LORA
-            else:
-                peft_config = None
+            peft_config = PeftConfig.DEFAULT_LORA if use_peft is True else None
 
-    # === Project / output dir ===
     yaml_project_name = config_dict.get("project_name")
     yaml_job_name = config_dict.get("job_name")
     project_name = (
@@ -234,7 +233,7 @@ def parse_job_config(config_input: str) -> JobConfig:
     )
 
     run_name = generate_run_name(
-        model_name=config_dict.get("model_name", "LFM2-1.2B"),
+        model_name=model_name,
         training_type=training_type,
         dataset_path=final_dataset_path,
         dataset_limit=ds_config.get("limit"),
@@ -244,41 +243,65 @@ def parse_job_config(config_input: str) -> JobConfig:
         lora_type="a",
     )
 
-    default_project_dir = f"./outputs/{project_name}"
-    project_dir = os.getenv("OUTPUT_DIR", default_project_dir)
-    final_output_dir = pathlib.Path(project_dir).resolve()
+    resume_from = final_train_values.get("resume_from_checkpoint")
+    base_project_dir = os.getenv("OUTPUT_DIR", f"./outputs/{project_name}")
+    if resume_from and resume_from != "latest":
+        resume_path = pathlib.Path(resume_from).resolve()
+        if not resume_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {resume_from}")
+        final_output_dir = resume_path.parent
+    elif resume_from == "latest":
+        project_path = pathlib.Path(base_project_dir).resolve()
+        run_dirs = (
+            [
+                d
+                for d in project_path.iterdir()
+                if d.is_dir() and (d / "latest").exists()
+            ]
+            if project_path.exists()
+            else []
+        )
+        if run_dirs:
+            final_output_dir = max(run_dirs, key=lambda d: d.stat().st_mtime)
+            latest_link = final_output_dir / "latest"
+            resume_from = str(latest_link.resolve())
+            final_training_config.value["resume_from_checkpoint"] = resume_from
+        else:
+            final_output_dir = project_path / run_name
+            final_training_config.value.pop("resume_from_checkpoint", None)
+    else:
+        final_output_dir = pathlib.Path(base_project_dir).resolve() / run_name
 
     try:
         final_output_dir.mkdir(parents=True, exist_ok=True)
     except PermissionError:
-        print(
-            f"Permission denied creating {final_output_dir}, falling back to local ./outputs"
+        logger.warning(
+            "Permission denied creating %s, falling back to local ./outputs",
+            final_output_dir,
         )
-        final_output_dir = pathlib.Path.cwd() / "outputs" / project_name
+        final_output_dir = pathlib.Path.cwd() / "outputs" / project_name / run_name
         final_output_dir.mkdir(parents=True, exist_ok=True)
 
     final_training_config.value["output_dir"] = str(final_output_dir)
     final_training_config.value["leap_run_name_template"] = run_name
 
-    # === Model config (rope_scaling, max_position_embeddings, etc.) ===
     model_config = config_dict.get("model_config")
-
-    # === Parallelism validation ===
     _validate_parallelism_config(
         final_train_values,
         training_type,
-        config_dict.get("model_name", "LFM2-1.2B"),
+        model_name,
     )
 
     return JobConfig(
         job_name=project_name,
-        model_name=config_dict.get("model_name", "LFM2-1.2B"),
+        model_name=model_name,
         training_type=training_type,
         dataset=dataset,
         training_config=final_training_config,
         peft_config=peft_config,
         model_config=model_config,
         ray_config=config_dict.get("ray"),
+        benchmark_configs=config_dict.get("benchmarks"),
     )
 
 
@@ -287,7 +310,6 @@ def _validate_parallelism_config(
     training_type: str,
     model_name: str,
 ) -> None:
-    """Validate EP parallelism constraints before job submission."""
     moe_config = training_config.get("moe_training", {})
     if not moe_config:
         return

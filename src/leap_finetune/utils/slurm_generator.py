@@ -103,11 +103,15 @@ def generate_slurm_script(
     for directive in additional_directives:
         script_content += f"#SBATCH {directive}\n"
 
+    setup_commands = slurm_config.get("setup_commands", [])
+    setup_block = "\n".join(setup_commands) + "\n" if setup_commands else ""
+
     script_content += f"""
 cd {project_root}
 
 source .venv/bin/activate
 
+{setup_block}
 {_render_export_block(is_multinode=int(slurm_settings["nodes"]) > 1)}
 """
 

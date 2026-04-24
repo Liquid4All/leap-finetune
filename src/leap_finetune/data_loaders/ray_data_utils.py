@@ -11,6 +11,7 @@ from leap_finetune.utils.constants import TOKENIZATION_CACHE_DIR
 
 from .dataset_loader import DatasetLoader
 from .tokenize_data import tokenize_and_pack_sft, tokenize_dpo_dataset
+from .tool_call_utils import get_tool_normalizer
 from .validate_loader import get_row_filter, normalize_columns
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ def create_ray_datasets(
     """
     Create validated, shuffled, split Ray Datasets from a DatasetLoader.
 
-    Pipeline: quick_validate → load → [preprocess] → normalize → filter → shuffle → split → [tokenize/pack]
+    Pipeline: quick_validate → load → normalize → filter → shuffle → split → [tokenize/pack]
 
     When tokenizer is provided, tokenization and optional packing happen
     centrally before sharding, producing equal-length shards (±1 row).
@@ -118,9 +119,7 @@ def create_ray_datasets(
 
     # === Check tokenization cache ===
     use_pretokenize = tokenizer is not None and training_config is not None
-    can_cache = (
-        use_pretokenize and loader.cache_dataset and loader.preprocess_fn is None
-    )
+    can_cache = use_pretokenize and loader.cache_dataset
     fingerprint = None
     key_dict = None
 
@@ -149,14 +148,18 @@ def create_ray_datasets(
         loader.quick_validate()
     ds = loader.to_ray_dataset()
 
-    if loader.preprocess_fn is not None:
-        console.print("[dim]Applying preprocessing...[/dim]")
-        ds = loader.preprocess_fn(ds)
-
     # Normalize column names/formats before filtering
     # (handles JSON string conversations, column renames, image_root prefix)
     normalizer = normalize_columns(loader.dataset_type, image_root=loader.image_root)
     ds = ds.map(normalizer)
+
+    # Normalize tool call format (strip wrong markers, convert structured tool_calls)
+    if loader.model_name and loader.dataset_type in ("sft", "dpo"):
+        from leap_finetune.utils.model_utils import get_model_family
+
+        model_family = get_model_family(loader.model_name)
+        tool_normalizer = get_tool_normalizer(model_family)
+        ds = ds.map(tool_normalizer)
 
     # Filter invalid rows using Ray's native filter (pure Python, Ray handles Arrow)
     if loader.dataset_type == "vlm_sft":

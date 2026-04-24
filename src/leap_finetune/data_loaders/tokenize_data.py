@@ -28,7 +28,7 @@ def _find_template(seq, template):
 def create_vlm_collate_fn(processor):
     """Create a collate function with assistant-only label masking.
 
-    Only assistant content + <|im_end|> contribute to loss (matching liquid-vlm).
+    Only assistant content + <|im_end|> contribute to loss.
     Images are loaded as PIL and passed to the processor for resize/tiling.
     Bad samples are skipped with a warning instead of crashing the batch.
     """

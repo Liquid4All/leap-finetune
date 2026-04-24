@@ -33,38 +33,100 @@ def is_rank_zero() -> bool:
         return True
 
 
-def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
-    """Initialize wandb with project and run name if logging is enabled.
-
-    This must be called BEFORE creating the trainer to ensure training metrics are logged.
+def init_tracker(
+    job_name: str,
+    tracker: str,
+    space_id: str | None = None,
+    output_dir: str | None = None,
+    resume_from_checkpoint: str | None = None,
+) -> None:
+    """Initialize experiment tracker. Must be called BEFORE creating the trainer.
 
     Args:
-        job_name: Name for the wandb run (defaults to job_name from config)
-        wandb_logging: Whether wandb logging is enabled
+        job_name: Name for the run
+        tracker: "wandb", "trackio", or "none"
+        space_id: HF Space ID for trackio (required when tracker is "trackio")
+        output_dir: Training output directory — used to persist/restore wandb run ID
+        resume_from_checkpoint: If set, restore the saved wandb run ID for continuity
     """
-    if not wandb_logging:
+    if tracker == "none":
         return
 
     try:
-        import wandb
+        if tracker == "trackio":
+            import trackio as wandb
+
+            if not space_id:
+                raise ValueError(
+                    "trackio requires 'trackio_space_id' in training_config"
+                )
+        else:
+            import wandb
 
         if is_rank_zero():
             project = os.environ.get("WANDB_PROJECT", "leap-finetune")
 
-            wandb.init(
-                project=project,
-                name=job_name,
-                resume="allow",  # Allow resuming if run exists (replaces deprecated reinit=True)
-                settings=wandb.Settings(
-                    _disable_stats=False,  # Enable stats collection
-                ),
+            # Auto-read saved run ID from previous run if resuming.
+            # Stored per job_name to avoid collisions between different runs.
+            run_id = None
+            run_id_file = (
+                Path(output_dir) / f".wandb_run_id_{job_name}" if output_dir else None
             )
+            if resume_from_checkpoint and run_id_file and run_id_file.exists():
+                run_id = run_id_file.read_text().strip() or None
+
+            init_kwargs = {
+                "project": project,
+                "name": job_name,
+                "resume": "allow",
+            }
+            if run_id:
+                init_kwargs["id"] = run_id
+            if tracker == "wandb":
+                init_kwargs["settings"] = wandb.Settings(_disable_stats=False)
+            if space_id:
+                init_kwargs["space_id"] = space_id
+
+            run = wandb.init(**init_kwargs)
+            if hasattr(run, "url") and run.url:
+                print(f"\nTracker URL: {run.url}")
+
+            # Persist run ID so resumed runs can continue logging to the same run
+            if wandb.run and run_id_file:
+                run_id_file.write_text(wandb.run.id)
     except ImportError:
         pass
     except Exception as e:
-        import warnings
+        warnings.warn(f"Failed to initialize {tracker}: {e}", UserWarning)
 
-        warnings.warn(f"Failed to initialize wandb: {e}", UserWarning)
+
+def finish_tracker(tracker: str) -> None:
+    """Cleanly finish the tracker run so it shows as 'Completed'.
+
+    Must only be called after all training steps have finished successfully.
+    Only acts on rank 0 (the process that owns the run).
+    """
+    if tracker == "none" or not is_rank_zero():
+        return
+    try:
+        if tracker == "trackio":
+            import trackio as wandb
+        else:
+            import wandb
+
+        if wandb.run is not None:
+            wandb.finish()
+    except Exception:
+        pass
+
+
+def init_wandb_if_enabled(job_name: str, wandb_logging: bool) -> None:
+    """Backward-compatible helper for older training loops."""
+    init_tracker(job_name, "wandb" if wandb_logging else "none")
+
+
+# Backward-compatible alias
+finish_wandb_if_enabled = finish_tracker
 
 
 def worker_process_setup_hook() -> None:
@@ -179,7 +241,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
             "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE", "1"
         ),
         # Reduce Ray logging verbosity
-        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver (reduce terminal noise)
+        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver
         "RAY_DEDUP_LOGS": "1",  # Keep deduplication enabled (shows ... for repeated messages)
         "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
     }
@@ -250,7 +312,14 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
     if preferred:
         candidates.append(preferred)
     home_default = str(Path.home() / "tmp-ray")
-    candidates.append(home_default)
+    user = os.environ.get("USER", "default")
+    candidates.extend(
+        [
+            f"/tmp/{user}/ray",
+            home_default,
+            "/tmp/ray",
+        ]
+    )
 
     best_path = home_default
     best_ratio = -1.0

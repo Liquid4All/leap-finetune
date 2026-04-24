@@ -1,0 +1,23 @@
+project_name: "e2e_dpo_lora"
+model_name: "LFM2-1.2B"
+training_type: "dpo"
+
+dataset:
+  path: "mlabonne/orpo-dpo-mix-40k"
+  type: "dpo"
+  limit: 500
+  test_size: 0.2
+  subset: "default"
+
+training_config:
+  extends: "DEFAULT_DPO"
+  num_train_epochs: 1
+  per_device_train_batch_size: 2
+  learning_rate: 1e-6
+  save_strategy: "no"
+  eval_strategy: "epoch"
+  logging_steps: 5
+
+peft_config:
+  extends: "DEFAULT_LORA"
+  use_peft: true

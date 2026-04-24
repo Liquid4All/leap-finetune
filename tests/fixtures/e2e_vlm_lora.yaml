@@ -1,0 +1,22 @@
+project_name: "e2e_vlm_lora"
+model_name: "LFM2-VL-1.6B"
+training_type: "vlm_sft"
+
+dataset:
+  path: "alay2shah/example-vlm-sft-dataset"
+  type: "vlm_sft"
+  limit: 500
+  test_size: 0.2
+
+training_config:
+  extends: "DEFAULT_VLM_SFT"
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  learning_rate: 1e-5
+  save_strategy: "no"
+  eval_strategy: "epoch"
+  logging_steps: 5
+
+peft_config:
+  extends: "DEFAULT_VLM_LORA"
+  use_peft: true

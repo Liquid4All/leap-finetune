@@ -1,0 +1,23 @@
+project_name: "e2e_moe_sft_full"
+model_name: "LFM2-8B-A1B"
+training_type: "sft"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  limit: 500
+  test_size: 0.2
+  subset: "all"
+
+training_config:
+  extends: "MOE_SFT"
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  learning_rate: 5e-5
+  gradient_checkpointing: true
+  save_strategy: "epoch"
+  eval_strategy: "epoch"
+  logging_steps: 5
+
+peft_config:
+  use_peft: false

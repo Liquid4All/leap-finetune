@@ -10,6 +10,12 @@ import pyarrow.parquet as pq
 from datasets import Dataset, load_dataset
 from rich.console import Console
 
+from leap_finetune.data_loaders.validate_tool_calls import (
+    has_foreign_tool_markers,
+    validate_tool_calls_dpo,
+    validate_tool_calls_in_messages,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,7 +43,10 @@ def _get_source_type(dataset_path: str) -> str:
             return "azure"
         return "cloud"
     elif Path(dataset_path).exists() or dataset_path.startswith(("./", "/", "~")):
+        p = Path(dataset_path)
         if path_lower.endswith(".parquet"):
+            return "parquet"
+        elif p.is_dir() and (list(p.glob("*.parquet")) or list(p.glob("*.pq"))):
             return "parquet"
         else:
             return "jsonl"
@@ -52,12 +61,12 @@ def quick_validate_schema(
     split: str = "train",
     num_samples: int = 10,
     image_root: str | None = None,
+    model_name: str | None = None,
 ) -> None:
     """
     Fast schema validation on small sample. Fails fast on obvious errors.
     Runs in main process before Ray starts.
 
-    Uses the same thorough validation as full validation, just on fewer samples.
     Applies normalization first (column renames, JSON parsing, image_root) so
     raw dataset formats are accepted.
     """
@@ -79,6 +88,29 @@ def quick_validate_schema(
 
     # Use the same validation as full validation
     validate_dataset_format(sample_ds, dataset_type)
+
+    # === Tool call format validation ===
+    if model_name and dataset_type in ("sft", "dpo"):
+        from .tool_call_utils import detect_tool_format, validate_tool_format
+        from leap_finetune.utils.model_utils import get_model_family
+
+        samples = [sample_ds[i] for i in range(len(sample_ds))]
+        format_info = detect_tool_format(samples)
+
+        if format_info.has_tool_calls:
+            model_family = get_model_family(model_name)
+            issues = validate_tool_format(format_info, model_family)
+
+            for issue in issues:
+                if issue.severity == "error":
+                    raise ValueError(
+                        f"Tool call format error: {issue.message}\n"
+                        f"Fix: {issue.fix_hint}"
+                    )
+                elif issue.severity == "warning":
+                    console.print(f"[yellow]⚠ Tool format:[/yellow] {issue.message}")
+                else:
+                    console.print(f"[dim]ℹ Tool format: {issue.message}[/dim]")
 
     console.print("[green]✓ Schema validated[/green]")
 
@@ -108,15 +140,31 @@ def _load_sample_dataset(
                 return Dataset.from_list(rows)
 
         elif source_type in ("parquet", "jsonl"):
-            # Local file - use HuggingFace
-            path_lower = dataset_path.lower()
-            if path_lower.endswith(".parquet"):
-                file_type = "parquet"
+            # Local file or directory
+            p = Path(dataset_path)
+            if source_type == "parquet":
+                if p.is_dir():
+                    # Directory of parquets: read first shard
+                    parquet_files = sorted(p.glob("*.parquet")) + sorted(p.glob("*.pq"))
+                    if not parquet_files:
+                        raise ValueError(
+                            f"No parquet files found in directory: {dataset_path}"
+                        )
+                    pf = pq.ParquetFile(parquet_files[0])
+                    batch = next(pf.iter_batches(batch_size=num_samples))
+                    return Dataset.from_pandas(batch.to_pandas())
+                else:
+                    return load_dataset(
+                        "parquet",
+                        data_files=dataset_path,
+                        split=f"{split}[:{num_samples}]",
+                    )
             else:
-                file_type = "json"
-            return load_dataset(
-                file_type, data_files=dataset_path, split=f"{split}[:{num_samples}]"
-            )
+                return load_dataset(
+                    "json",
+                    data_files=dataset_path,
+                    split=f"{split}[:{num_samples}]",
+                )
 
         else:
             # HuggingFace Hub - use streaming then convert to Dataset
@@ -155,7 +203,21 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
             return False
 
         first = messages[0]
-        return isinstance(first, dict) and "role" in first and "content" in first
+        if not (isinstance(first, dict) and "role" in first and "content" in first):
+            return False
+
+        # Check for foreign tool call markers or unsupported tool_calls field
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "assistant":
+                if "tool_calls" in msg:
+                    return False
+                content = msg.get("content", "")
+                if isinstance(content, str) and ("<" in content or "[" in content):
+                    if has_foreign_tool_markers(content):
+                        return False
+        return True
 
     def is_valid_dpo(row: dict) -> bool:
         """Check if row has valid DPO format."""
@@ -165,7 +227,28 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
         if not chosen or not rejected:
             return False
 
-        return chosen != rejected
+        if chosen == rejected:
+            return False
+
+        # Check for foreign tool call markers
+        for data in (chosen, rejected):
+            if isinstance(data, str):
+                if ("<" in data or "[" in data) and has_foreign_tool_markers(data):
+                    return False
+            elif isinstance(data, list):
+                for msg in data:
+                    if not isinstance(msg, dict):
+                        continue
+                    if msg.get("role") == "assistant":
+                        if "tool_calls" in msg:
+                            return False
+                        content = msg.get("content", "")
+                        if isinstance(content, str) and (
+                            "<" in content or "[" in content
+                        ):
+                            if has_foreign_tool_markers(content):
+                                return False
+        return True
 
     def is_valid_vlm_sft(row: dict) -> bool:
         """Check if row has valid VLM SFT format with loadable images.
@@ -414,6 +497,10 @@ def validate_sft_format(dataset: Dataset) -> Dataset:
         msg += "). Each message must have 'role' and 'content' fields."
         raise ValueError(msg)
 
+    # === Validate tool call formatting ===
+    for i in range(len(dataset)):
+        validate_tool_calls_in_messages(dataset[i][conv_col], i)
+
     # Rename column if needed
     if conv_col != "messages":
         return dataset.rename_column(conv_col, "messages")
@@ -477,6 +564,10 @@ def validate_dpo_format(dataset: Dataset) -> Dataset:
             f"Found {len(identical_indices)} samples where chosen == rejected "
             f"(indices: {shown}{'...' if len(identical_indices) > 5 else ''})"
         )
+
+    # === Validate tool call formatting ===
+    for i in range(len(dataset)):
+        validate_tool_calls_dpo(dataset[i]["chosen"], dataset[i]["rejected"], i)
 
     # Add prompt if missing
     if "prompt" in columns:

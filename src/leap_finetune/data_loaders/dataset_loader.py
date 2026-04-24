@@ -17,6 +17,7 @@ class DatasetLoader:
 
     dataset_path: str
     dataset_type: Literal["sft", "dpo", "vlm_sft"]
+    model_name: str | None = None
     limit: int | None = None
     split: str = "train"
     test_size: float = 0.2
@@ -27,6 +28,7 @@ class DatasetLoader:
     # Optional preprocessing function: takes Ray Dataset, returns Ray Dataset
     # Applied before validation - use for custom filtering, transforms, joins, etc.
     preprocess_fn: Callable | None = field(default=None, repr=False)
+    _validated: bool = field(default=False, repr=False)
 
     def __post_init__(self):
         if not (0 < self.test_size < 1):
@@ -35,7 +37,9 @@ class DatasetLoader:
             )
 
     def quick_validate(self) -> None:
-        """Fast validation on ~10 samples. Raises ValueError on issues."""
+        """Fast validation on ~10 samples. Raises ValueError on issues. No-ops if already called."""
+        if self._validated:
+            return
         quick_validate_schema(
             dataset_path=self.dataset_path,
             dataset_type=self.dataset_type,
@@ -43,7 +47,9 @@ class DatasetLoader:
             split=self.split,
             num_samples=10,
             image_root=self.image_root,
+            model_name=self.model_name,
         )
+        self._validated = True
 
     def to_ray_dataset(self):
         """Create a lazy Ray Dataset from the source."""
@@ -54,9 +60,16 @@ class DatasetLoader:
         path = self.dataset_path
 
         if self._is_local_file(path):
+            p = Path(path)
             if path.endswith((".parquet", ".pq")):
                 console.print(f"[dim]Reading parquet: {path}[/dim]")
                 ds = ray.data.read_parquet(path)
+            elif p.is_dir() and any(p.glob("*.parquet")):
+                parquet_files = sorted(str(f) for f in p.glob("*.parquet"))
+                console.print(
+                    f"[dim]Reading {len(parquet_files)} parquet shards from: {path}[/dim]"
+                )
+                ds = ray.data.read_parquet(parquet_files)
             else:
                 console.print(f"[dim]Reading JSONL: {path}[/dim]")
                 ds = ray.data.read_json(path)

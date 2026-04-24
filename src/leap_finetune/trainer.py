@@ -210,6 +210,7 @@ def ray_trainer(job_config: dict) -> None:
         "train_config": training_config,
         "peft_config": job_config["peft_config"],
         "model_config": job_config.get("model_config"),
+        "benchmark_configs": job_config.get("benchmark_configs"),
     }
 
     moe_training = training_config.get("moe_training", {})
@@ -251,7 +252,7 @@ def ray_trainer(job_config: dict) -> None:
         dataset_config=dataset_config,
     )
 
-    trainer.fit()
+    result = trainer.fit()
 
     print_next_steps_panel(output_dir)
     # Ensure Ray cleans up resources promptly to avoid post-training hangs
@@ -259,3 +260,5 @@ def ray_trainer(job_config: dict) -> None:
         ray.shutdown()
     except Exception:
         pass
+
+    return result

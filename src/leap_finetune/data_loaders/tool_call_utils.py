@@ -212,9 +212,18 @@ def _tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
         name = func["name"]
         args = func.get("arguments", {})
         if isinstance(args, str):
-            args = json.loads(args)
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                rendered_args = args.strip()
+                calls.append(f"{name}({rendered_args})")
+                continue
         # skip malformed tool calls instead of failur error
         if not isinstance(args, dict):
+            if isinstance(args, str):
+                rendered_args = args.strip()
+                calls.append(f"{name}({rendered_args})")
+                continue
             logger.warning(
                 "Skipping tool_call with non-dict arguments (got %s): name=%s",
                 type(args).__name__,
@@ -267,9 +276,12 @@ def normalize_tool_format(row: dict, model_family: str) -> dict:
                     new_msg["content"] = f"{pythonic}\n{existing_content}"
                 else:
                     new_msg["content"] = pythonic
-                # Remove the tool_calls field so template doesn't try to process it
-                new_msg.pop("tool_calls", None)
                 modified = True
+        # Always remove tool_calls after normalization so chat templating
+        # only sees the baked LFM text representation.
+        if "tool_calls" in new_msg:
+            new_msg.pop("tool_calls", None)
+            modified = True
 
         new_messages.append(new_msg)
 

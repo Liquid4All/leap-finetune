@@ -174,6 +174,9 @@ class _FakeRayDataset:
         fn_kwargs = fn_kwargs or {}
         return _FakeRayDataset([fn(row, **fn_kwargs) for row in self._rows])
 
+    def filter(self, fn):
+        return _FakeRayDataset([row for row in self._rows if fn(row)])
+
     def iter_rows(self):
         yield from self._rows
 
@@ -212,3 +215,48 @@ def test_tokenize_and_pack_sft_preserves_assistant_masks(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["input_ids"] == [1, 2, 3, 4, 5]
     assert rows[0]["assistant_masks"] == [0, 1, 1, 0, 1]
+
+
+class _VariableLengthTokenizer(_FakeTokenizer):
+    def apply_chat_template(
+        self,
+        messages,
+        tokenize=True,
+        truncation=True,
+        max_length=None,
+        return_dict=False,
+        return_assistant_tokens_mask=False,
+    ):
+        del tokenize
+        length = int(messages[0]["content"])
+        input_ids = list(range(length))
+        if truncation and max_length is not None:
+            input_ids = input_ids[:max_length]
+        output = {"input_ids": input_ids}
+        if return_assistant_tokens_mask:
+            output["assistant_masks"] = [1] * len(input_ids)
+        return output if return_dict else output["input_ids"]
+
+
+def test_tokenize_and_pack_sft_can_drop_overlength_without_truncating():
+    tokenizer = _VariableLengthTokenizer()
+    ds = _FakeRayDataset(
+        [
+            {"messages": [{"role": "user", "content": "3"}]},
+            {"messages": [{"role": "user", "content": "6"}]},
+        ]
+    )
+
+    filtered = tokenize_and_pack_sft(
+        ds,
+        tokenizer,
+        max_length=4,
+        packing=False,
+        assistant_only_loss=True,
+        drop_overlength=True,
+    )
+
+    rows = list(filtered.iter_rows())
+    assert len(rows) == 1
+    assert rows[0]["input_ids"] == [0, 1, 2]
+    assert rows[0]["assistant_masks"] == [1, 1, 1]

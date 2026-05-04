@@ -412,6 +412,109 @@ class TestTrainingConfigOverrides:
             template_path.resolve()
         )
 
+    def test_missing_test_size_disables_eval(self, tmp_path):
+        config = {
+            "project_name": "no_eval_dataset",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {
+                "path": "HuggingFaceTB/smoltalk",
+                "type": "sft",
+                "limit": 10,
+                "subset": "all",
+            },
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.dataset.test_size is None
+        assert job.dataset.has_eval_dataset() is False
+        assert job.training_config.value["eval_strategy"] == "no"
+
+    def test_same_path_explicit_train_and_val_splits(self, tmp_path):
+        config = {
+            "project_name": "split_eval_dataset",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {
+                "path": "HuggingFaceTB/smoltalk",
+                "type": "sft",
+                "subset": "all",
+                "train_split": "train",
+                "val_split": "test",
+            },
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.dataset.dataset_path == "HuggingFaceTB/smoltalk"
+        assert job.dataset.split == "train"
+        assert job.dataset.val_dataset_path is None
+        assert job.dataset.val_split == "test"
+        assert job.dataset.test_size is None
+
+    def test_separate_train_and_val_paths(self, tmp_path):
+        config = {
+            "project_name": "separate_eval_dataset",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {
+                "train_path": "train/source",
+                "val_path": "val/source",
+                "type": "sft",
+                "train_split": "train",
+                "val_split": "validation",
+            },
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.dataset.dataset_path == "train/source"
+        assert job.dataset.val_dataset_path == "val/source"
+        assert job.dataset.val_split == "validation"
+
+    def test_test_size_cannot_mix_with_explicit_eval(self, tmp_path):
+        config = {
+            "project_name": "invalid_eval_mix",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {
+                "path": "HuggingFaceTB/smoltalk",
+                "type": "sft",
+                "test_size": 0.2,
+                "val_split": "validation",
+            },
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": {"use_peft": False},
+        }
+        with pytest.raises(
+            ValueError,
+            match="dataset.test_size cannot be combined",
+        ):
+            parse_job_config(write_config(config, tmp_path))
+
+    def test_eval_strategy_requires_eval_dataset_when_explicit(self, tmp_path):
+        config = {
+            "project_name": "explicit_eval_without_dataset",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {
+                "path": "HuggingFaceTB/smoltalk",
+                "type": "sft",
+                "limit": 10,
+            },
+            "training_config": {
+                "extends": "DEFAULT_SFT",
+                "eval_strategy": "epoch",
+            },
+            "peft_config": {"use_peft": False},
+        }
+        with pytest.raises(
+            ValueError,
+            match="eval_strategy requires a validation dataset",
+        ):
+            parse_job_config(write_config(config, tmp_path))
+
 
 # === All example configs ===
 

@@ -5,6 +5,9 @@ from typing import Callable, Literal
 from datasets import Dataset, load_dataset
 
 from .validate_loader import (
+    find_local_files,
+    get_source_type,
+    is_cloud_path,
     quick_validate_schema,
     validate_data_loader,
     validate_dataset_format,
@@ -20,8 +23,11 @@ class DatasetLoader:
     model_name: str | None = None
     limit: int | None = None
     split: str = "train"
-    test_size: float = 0.2
+    test_size: float | None = 0.2
     subset: str | None = None
+    val_dataset_path: str | None = None
+    val_split: str | None = None
+    val_subset: str | None = None
     # Prepended to relative image paths in VLM datasets (e.g. "/data/images")
     image_root: str | None = None
     cache_dataset: bool = False
@@ -31,17 +37,40 @@ class DatasetLoader:
     _validated: bool = field(default=False, repr=False)
 
     def __post_init__(self):
-        if not (0 < self.test_size < 1):
+        if self.test_size is not None and not (0 < self.test_size < 1):
             raise ValueError(
                 f"test_size must be between 0 and 1 (exclusive), got {self.test_size}"
             )
+        if self.test_size is not None and (
+            self.val_dataset_path is not None or self.val_split is not None
+        ):
+            raise ValueError(
+                "test_size cannot be combined with explicit validation dataset settings"
+            )
+
+    def has_eval_dataset(self) -> bool:
+        return (
+            self.test_size is not None
+            or self.val_dataset_path is not None
+            or self.val_split is not None
+        )
+
+    def get_train_path(self) -> str:
+        return self.dataset_path
+
+    def get_eval_path(self) -> str | None:
+        if self.val_dataset_path is not None:
+            return self.val_dataset_path
+        if self.val_split is not None:
+            return self.dataset_path
+        return None
 
     def quick_validate(self) -> None:
         """Fast validation on ~10 samples. Raises ValueError on issues. No-ops if already called."""
         if self._validated:
             return
         quick_validate_schema(
-            dataset_path=self.dataset_path,
+            dataset_path=self.get_train_path(),
             dataset_type=self.dataset_type,
             subset=self.subset,
             split=self.split,
@@ -49,51 +78,62 @@ class DatasetLoader:
             image_root=self.image_root,
             model_name=self.model_name,
         )
+        eval_path = self.get_eval_path()
+        if eval_path is not None:
+            quick_validate_schema(
+                dataset_path=eval_path,
+                dataset_type=self.dataset_type,
+                subset=self.val_subset if self.val_split is not None else self.subset,
+                split=self.val_split or "train",
+                num_samples=10,
+                image_root=self.image_root,
+                model_name=self.model_name,
+            )
         self._validated = True
 
-    def to_ray_dataset(self):
+    def to_ray_dataset(
+        self,
+        *,
+        dataset_path: str | None = None,
+        subset: str | None = None,
+        split: str | None = None,
+    ):
         """Create a lazy Ray Dataset from the source."""
         import ray.data
         from rich.console import Console
 
         console = Console()
-        path = self.dataset_path
+        path = dataset_path or self.dataset_path
+        subset = self.subset if subset is None else subset
+        split = self.split if split is None else split
+        source_type = get_source_type(path)
 
-        if self._is_local_file(path):
-            p = Path(path)
-            if path.endswith((".parquet", ".pq")):
-                console.print(f"[dim]Reading parquet: {path}[/dim]")
-                ds = ray.data.read_parquet(path)
-            elif p.is_dir() and any(p.glob("*.parquet")):
-                parquet_files = sorted(str(f) for f in p.glob("*.parquet"))
+        if source_type == "parquet":
+            local_parquet_files = find_local_files(path, "*.parquet", "*.pq")
+            if local_parquet_files:
+                parquet_files = [str(file) for file in local_parquet_files]
                 console.print(
                     f"[dim]Reading {len(parquet_files)} parquet shards from: {path}[/dim]"
                 )
                 ds = ray.data.read_parquet(parquet_files)
             else:
-                console.print(f"[dim]Reading JSONL: {path}[/dim]")
-                ds = ray.data.read_json(path)
-        elif self._is_cloud_path(path):
-            # Cloud storage: S3, GCS, Azure
+                console.print(f"[dim]Reading parquet: {path}[/dim]")
+                ds = ray.data.read_parquet(path)
+        elif source_type in {"s3", "gcs", "azure", "cloud"}:
             cloud_type = self._get_cloud_type(path)
-            if ".parquet" in path or ".pq" in path:
+            if path.lower().endswith((".parquet", ".pq")):
                 console.print(f"[dim]Reading parquet from {cloud_type}: {path}[/dim]")
                 ds = ray.data.read_parquet(path)
             else:
                 console.print(f"[dim]Reading JSON from {cloud_type}: {path}[/dim]")
                 ds = ray.data.read_json(path)
         else:
-            ds = self._load_huggingface_as_ray()
+            ds = self._load_dataset_via_hf(path=path, subset=subset, split=split)
 
         if self.limit:
             ds = ds.limit(self.limit)
 
         return ds
-
-    def _is_cloud_path(self, path: str) -> bool:
-        """Check if path is a cloud storage path."""
-        cloud_prefixes = ("s3://", "gs://", "az://", "abfs://", "abfss://")
-        return path.startswith(cloud_prefixes)
 
     def _get_cloud_type(self, path: str) -> str:
         """Get human-readable cloud provider name."""
@@ -105,8 +145,8 @@ class DatasetLoader:
             return "Azure"
         return "cloud"
 
-    def _load_huggingface_as_ray(self):
-        """Load HuggingFace dataset into Ray Data via streaming."""
+    def _load_huggingface_as_ray(self, path: str, subset: str | None, split: str):
+        """Load a HuggingFace Hub dataset into Ray Data via streaming."""
         import ray
         import ray.data
         import pandas as pd
@@ -120,13 +160,13 @@ class DatasetLoader:
         )
 
         console = Console()
-        console.print(f"[dim]Streaming from HuggingFace: {self.dataset_path}[/dim]")
+        console.print(f"[dim]Streaming from HuggingFace: {path}[/dim]")
 
         # Use HF streaming to avoid loading full dataset into memory
         hf_stream = load_dataset(
-            self.dataset_path,
-            self.subset,
-            split=self.split,
+            path,
+            subset,
+            split=split,
             streaming=True,
         )
 
@@ -157,10 +197,33 @@ class DatasetLoader:
 
         return ray.data.from_pandas_refs(refs)
 
-    def _is_local_file(self, path: str) -> bool:
-        """Check if path is local file or directory."""
-        p = Path(path).expanduser()
-        return p.exists() or path.startswith(("./", "/", "~"))
+    def _load_dataset_via_hf(self, *, path: str, subset: str | None, split: str):
+        """Load non-parquet sources via Hugging Face datasets and convert to Ray."""
+        import ray.data
+        from rich.console import Console
+
+        console = Console()
+        source_type = get_source_type(path)
+
+        if source_type == "huggingface":
+            return self._load_huggingface_as_ray(path, subset, split)
+
+        console.print(f"[dim]Loading via datasets: {path}[/dim]")
+
+        if source_type == "directory":
+            dataset = load_dataset(path, subset, split=split)
+        else:
+            builder_by_type = {
+                "json": "json",
+                "csv": "csv",
+                "arrow": "arrow",
+            }
+            builder_name = builder_by_type.get(source_type)
+            if builder_name is None:
+                raise ValueError(f"Unsupported dataset source for path '{path}'")
+            dataset = load_dataset(builder_name, data_files=path, split=split)
+
+        return ray.data.from_huggingface(dataset)
 
     @validate_data_loader
     def load(self) -> tuple[Dataset, Dataset]:
@@ -170,21 +233,21 @@ class DatasetLoader:
             split_str = f"{self.split}[:{self.limit}]"
 
         # Load dataset from either local file or HuggingFace
-        if Path(self.dataset_path).exists() or self.dataset_path.startswith(
-            ("./", "/")
-        ):
+        source_type = get_source_type(self.dataset_path)
+        if source_type != "huggingface":
             try:
-                # Detect file type from extension
-                path_lower = self.dataset_path.lower()
-                if path_lower.endswith(".parquet"):
-                    file_type = "parquet"
-                elif path_lower.endswith((".json", ".jsonl")):
-                    file_type = "json"
+                if source_type == "directory":
+                    dataset = load_dataset(self.dataset_path, self.subset, split=split_str)
                 else:
-                    file_type = "json"  # Default fallback
-                dataset = load_dataset(
-                    file_type, data_files=self.dataset_path, split=split_str
-                )
+                    file_type = {
+                        "parquet": "parquet",
+                        "json": "json",
+                        "csv": "csv",
+                        "arrow": "arrow",
+                    }.get(source_type, "json")
+                    dataset = load_dataset(
+                        file_type, data_files=self.dataset_path, split=split_str
+                    )
             except Exception as e:
                 raise ValueError(
                     f"Failed to load local dataset '{self.dataset_path}': {e}"
@@ -200,6 +263,12 @@ class DatasetLoader:
 
         # Validate dataset format
         dataset = validate_dataset_format(dataset, self.dataset_type)
+
+        if self.test_size is None:
+            raise ValueError(
+                "DatasetLoader.load() requires test_size; use to_ray_dataset()/create_ray_datasets() "
+                "for configurations without eval splits."
+            )
 
         # Split dataset
         split_dataset = dataset.train_test_split(test_size=self.test_size)

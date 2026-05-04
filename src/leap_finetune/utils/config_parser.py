@@ -89,32 +89,17 @@ def _import_callable(dotted_path: str):
     return fn
 
 
-def parse_job_config(config_input: str) -> JobConfig:
-    path_obj = resolve_config_path(config_input)
-    config_dir = path_obj.parent
-
-    with open(path_obj) as f:
-        config_dict = yaml.safe_load(f)
-
-    ds_config = config_dict.get("dataset", {})
-    dataset_path_env = os.getenv("DATASET_PATH")
-    if dataset_path_env:
-        final_dataset_path = _resolve_local_path(
-            dataset_path_env,
-            base_dir=pathlib.Path.cwd(),
-        )
-    else:
-        final_dataset_path = _resolve_local_path(
-            ds_config.get("path"),
-            base_dir=config_dir,
-        )
-
-    ds_type = ds_config.get("type")
+def _parse_dataset_loader(
+    ds_config: dict,
+    *,
+    config_dir: pathlib.Path,
+    model_name: str,
+) -> DatasetLoader:
     dataset_type_aliases = {
         "moe_sft": "sft",
         "moe_dpo": "dpo",
     }
-    ds_type = dataset_type_aliases.get(ds_type, ds_type)
+    ds_type = dataset_type_aliases.get(ds_config.get("type"), ds_config.get("type"))
     valid_types = {"sft", "dpo", "vlm_sft"}
     if ds_type not in valid_types:
         raise ValueError(
@@ -126,18 +111,69 @@ def parse_job_config(config_input: str) -> JobConfig:
     if preprocess_fn_path:
         preprocess_fn = _import_callable(preprocess_fn_path)
 
-    model_name = config_dict.get("model_name", "LFM2-1.2B")
-    dataset = DatasetLoader(
-        dataset_path=final_dataset_path,
+    shared_path = ds_config.get("path")
+    train_path = ds_config.get("train_path")
+    if shared_path and train_path:
+        raise ValueError("Use either dataset.path or dataset.train_path, not both")
+
+    dataset_path_env = os.getenv("DATASET_PATH")
+    effective_train_path = dataset_path_env or train_path or shared_path
+    if not effective_train_path:
+        raise ValueError("dataset.path or dataset.train_path is required")
+
+    effective_train_path = _resolve_local_path(
+        effective_train_path,
+        base_dir=pathlib.Path.cwd() if dataset_path_env else config_dir,
+    )
+
+    val_path = _resolve_local_path(
+        ds_config.get("val_path"),
+        base_dir=config_dir,
+    )
+    shared_subset = ds_config.get("subset")
+    train_subset = ds_config.get("train_subset", shared_subset)
+    val_subset = ds_config.get("val_subset", shared_subset)
+    train_split = ds_config.get("train_split", ds_config.get("split", "train"))
+    val_split = ds_config.get("val_split")
+    if val_path and val_split is None:
+        val_split = "train"
+
+    test_size = ds_config.get("test_size")
+    if test_size is not None and (val_path is not None or val_split is not None):
+        raise ValueError(
+            "dataset.test_size cannot be combined with dataset.val_path or dataset.val_split"
+        )
+
+    return DatasetLoader(
+        dataset_path=effective_train_path,
         dataset_type=ds_type,
         model_name=model_name,
         limit=ds_config.get("limit"),
-        split=ds_config.get("split", "train"),
-        test_size=ds_config.get("test_size", 0.2),
-        subset=ds_config.get("subset"),
+        split=train_split,
+        test_size=test_size,
+        subset=train_subset,
+        val_dataset_path=val_path,
+        val_split=val_split,
+        val_subset=val_subset,
         image_root=ds_config.get("image_root"),
         cache_dataset=ds_config.get("cache_dataset", False),
         preprocess_fn=preprocess_fn,
+    )
+
+
+def parse_job_config(config_input: str) -> JobConfig:
+    path_obj = resolve_config_path(config_input)
+    config_dir = path_obj.parent
+
+    with open(path_obj) as f:
+        config_dict = yaml.safe_load(f)
+
+    model_name = config_dict.get("model_name", "LFM2-1.2B")
+    ds_config = config_dict.get("dataset", {})
+    dataset = _parse_dataset_loader(
+        ds_config,
+        config_dir=config_dir,
+        model_name=model_name,
     )
 
     train_config_dict = config_dict.get("training_config", {})
@@ -235,7 +271,7 @@ def parse_job_config(config_input: str) -> JobConfig:
     run_name = generate_run_name(
         model_name=model_name,
         training_type=training_type,
-        dataset_path=final_dataset_path,
+        dataset_path=dataset.dataset_path,
         dataset_limit=ds_config.get("limit"),
         learning_rate=final_train_values.get("learning_rate"),
         warmup_ratio=final_train_values.get("warmup_ratio"),
@@ -284,6 +320,14 @@ def parse_job_config(config_input: str) -> JobConfig:
 
     final_training_config.value["output_dir"] = str(final_output_dir)
     final_training_config.value["leap_run_name_template"] = run_name
+    if not dataset.has_eval_dataset():
+        raw_eval_strategy = train_config_dict.get("eval_strategy")
+        if raw_eval_strategy and raw_eval_strategy != "no":
+            raise ValueError(
+                "training_config.eval_strategy requires a validation dataset. "
+                "Set dataset.test_size, dataset.val_split, or dataset.val_path, or disable eval."
+            )
+        final_training_config.value["eval_strategy"] = "no"
 
     model_config = config_dict.get("model_config")
     _validate_parallelism_config(

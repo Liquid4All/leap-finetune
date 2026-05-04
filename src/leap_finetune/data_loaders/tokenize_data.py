@@ -154,6 +154,7 @@ def tokenize_sft(
     max_length: int,
     assistant_only_loss: bool = False,
     completion_only_loss: bool = False,
+    truncate: bool = True,
 ) -> dict:
     """
     Tokenize a single SFT row for use in ray_ds.map().
@@ -167,8 +168,8 @@ def tokenize_sft(
         result = tokenizer.apply_chat_template(
             row["messages"],
             tokenize=True,
-            truncation=True,
-            max_length=max_length,
+            truncation=truncate,
+            max_length=max_length if truncate else None,
             return_dict=need_masks,
             return_assistant_tokens_mask=need_masks,
         )
@@ -180,9 +181,11 @@ def tokenize_sft(
                 "assistant_only_loss/completion_only_loss require conversational "
                 "SFT rows with a 'messages' column"
             )
-        input_ids = tokenizer(row["text"], truncation=True, max_length=max_length)[
-            "input_ids"
-        ]
+        input_ids = tokenizer(
+            row["text"],
+            truncation=truncate,
+            max_length=max_length if truncate else None,
+        )["input_ids"]
     else:
         raise ValueError(
             f"Row must have 'messages' or 'text' column, got: {list(row.keys())}"
@@ -210,6 +213,7 @@ def tokenize_and_pack_sft(
     packing: bool = False,
     assistant_only_loss: bool = False,
     completion_only_loss: bool = False,
+    drop_overlength: bool = False,
 ) -> ray.data.Dataset:
     """
     Tokenize and optionally pack an SFT dataset.
@@ -227,8 +231,15 @@ def tokenize_and_pack_sft(
             "max_length": max_length,
             "assistant_only_loss": assistant_only_loss,
             "completion_only_loss": completion_only_loss,
+            "truncate": not drop_overlength,
         },
     )
+
+    if drop_overlength:
+        # For long-context SFT we often prefilter complete conversations. Do not
+        # silently turn a complete example into a partial supervised target if
+        # the active tokenizer/template now renders it over the configured limit.
+        ds = ds.filter(lambda row: row["length"] <= max_length)
 
     # === 2. Pack or truncate ===
     if packing:
@@ -253,7 +264,8 @@ def tokenize_and_pack_sft(
         console.print(f"[dim]Packed into {len(hf_ds):,} rows[/dim]")
         return ray.data.from_arrow(hf_ds.data.table)
 
-    # Non-packing: tokenizer already truncated to max_length, just return
+    # Non-packing: tokenizer already truncated to max_length or overlength rows
+    # were explicitly dropped above.
     return ds
 
 

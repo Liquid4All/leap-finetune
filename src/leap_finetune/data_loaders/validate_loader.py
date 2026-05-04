@@ -24,17 +24,31 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def _is_cloud_path(path: str) -> bool:
+def is_cloud_path(path: str) -> bool:
     """Check if path is a cloud storage path (S3, GCS, Azure)."""
     cloud_prefixes = ("s3://", "gs://", "az://", "abfs://", "abfss://")
     return path.startswith(cloud_prefixes)
 
 
-def _get_source_type(dataset_path: str) -> str:
-    """Determine the source type for display and loading logic."""
-    path_lower = dataset_path.lower()
+def find_local_files(dataset_path: str, *patterns: str) -> list[Path]:
+    """Return sorted local files matching any of the given glob patterns."""
+    path = Path(dataset_path).expanduser()
+    if not path.is_dir():
+        return []
 
-    if _is_cloud_path(dataset_path):
+    matches: list[Path] = []
+    for pattern in patterns:
+        matches.extend(path.glob(pattern))
+    return sorted(matches)
+
+
+def get_source_type(dataset_path: str) -> str:
+    """Determine the source type for display and loading logic."""
+    expanded_path = Path(dataset_path).expanduser()
+    path_str = str(expanded_path)
+    path_lower = path_str.lower()
+
+    if is_cloud_path(dataset_path):
         if path_lower.startswith("s3://"):
             return "s3"
         elif path_lower.startswith("gs://"):
@@ -42,14 +56,27 @@ def _get_source_type(dataset_path: str) -> str:
         elif path_lower.startswith(("az://", "abfs://", "abfss://")):
             return "azure"
         return "cloud"
-    elif Path(dataset_path).exists() or dataset_path.startswith(("./", "/", "~")):
-        p = Path(dataset_path)
-        if path_lower.endswith(".parquet"):
+    elif expanded_path.exists() or dataset_path.startswith(("./", "/", "~")):
+        if path_lower.endswith((".parquet", ".pq")):
             return "parquet"
-        elif p.is_dir() and (list(p.glob("*.parquet")) or list(p.glob("*.pq"))):
+        elif path_lower.endswith(".arrow"):
+            return "arrow"
+        elif path_lower.endswith(".csv"):
+            return "csv"
+        elif path_lower.endswith((".json", ".jsonl", ".json.zst")):
+            return "json"
+        elif expanded_path.is_dir() and find_local_files(path_str, "*.parquet", "*.pq"):
             return "parquet"
+        elif expanded_path.is_dir() and find_local_files(path_str, "*.arrow"):
+            return "arrow"
+        elif expanded_path.is_dir() and find_local_files(path_str, "*.csv"):
+            return "csv"
+        elif expanded_path.is_dir() and find_local_files(
+            path_str, "*.json", "*.jsonl", "*.json.zst"
+        ):
+            return "json"
         else:
-            return "jsonl"
+            return "directory"
     else:
         return "huggingface"
 
@@ -72,7 +99,7 @@ def quick_validate_schema(
     """
     console = Console()
 
-    source_type = _get_source_type(dataset_path)
+    source_type = get_source_type(dataset_path)
     console.print(
         f"[dim]Validating {source_type} schema ({num_samples} samples)...[/dim]"
     )
@@ -123,7 +150,7 @@ def _load_sample_dataset(
 ) -> Dataset:
     """Load a small sample as HF Dataset."""
     try:
-        source_type = _get_source_type(dataset_path)
+        source_type = get_source_type(dataset_path)
 
         if source_type in ("s3", "gcs", "azure", "cloud"):
             # Cloud storage - use fsspec + pyarrow (no Ray needed)
@@ -139,13 +166,13 @@ def _load_sample_dataset(
                     rows = [json.loads(line) for _, line in zip(range(num_samples), f)]
                 return Dataset.from_list(rows)
 
-        elif source_type in ("parquet", "jsonl"):
+        elif source_type in ("parquet", "json", "csv", "arrow"):
             # Local file or directory
-            p = Path(dataset_path)
+            p = Path(dataset_path).expanduser()
             if source_type == "parquet":
                 if p.is_dir():
                     # Directory of parquets: read first shard
-                    parquet_files = sorted(p.glob("*.parquet")) + sorted(p.glob("*.pq"))
+                    parquet_files = find_local_files(dataset_path, "*.parquet", "*.pq")
                     if not parquet_files:
                         raise ValueError(
                             f"No parquet files found in directory: {dataset_path}"
@@ -159,12 +186,27 @@ def _load_sample_dataset(
                         data_files=dataset_path,
                         split=f"{split}[:{num_samples}]",
                     )
+            elif source_type == "csv":
+                return load_dataset(
+                    "csv",
+                    data_files=dataset_path,
+                    split=f"{split}[:{num_samples}]",
+                )
+            elif source_type == "arrow":
+                return load_dataset(
+                    "arrow",
+                    data_files=dataset_path,
+                    split=f"{split}[:{num_samples}]",
+                )
             else:
                 return load_dataset(
                     "json",
                     data_files=dataset_path,
                     split=f"{split}[:{num_samples}]",
                 )
+
+        elif source_type == "directory":
+            return load_dataset(dataset_path, subset, split=f"{split}[:{num_samples}]")
 
         else:
             # HuggingFace Hub - use streaming then convert to Dataset
@@ -182,6 +224,26 @@ def _load_sample_dataset(
 # ============================================================================
 # DISTRIBUTED FILTERING (Ray Data native operations)
 # ============================================================================
+
+
+def _structured_tool_calls_are_valid(tool_calls) -> bool:
+    """Cheap structural check for OpenAI-style assistant tool calls."""
+    if tool_calls is None:
+        return True
+    if not isinstance(tool_calls, list):
+        return False
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            return False
+        function = tool_call.get("function", tool_call)
+        if not isinstance(function, dict):
+            return False
+        if not isinstance(function.get("name"), str) or not function.get("name"):
+            return False
+        arguments = function.get("arguments", {})
+        if arguments is not None and not isinstance(arguments, (dict, str)):
+            return False
+    return True
 
 
 def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
@@ -206,12 +268,15 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
         if not (isinstance(first, dict) and "role" in first and "content" in first):
             return False
 
-        # Check for foreign tool call markers or unsupported tool_calls field
+        # Check for foreign tool call markers. Structured tool_calls are allowed
+        # because normalize_tool_format() converts them before tokenization.
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
             if msg.get("role") == "assistant":
-                if "tool_calls" in msg:
+                if "tool_calls" in msg and not _structured_tool_calls_are_valid(
+                    msg.get("tool_calls")
+                ):
                     return False
                 content = msg.get("content", "")
                 if isinstance(content, str) and ("<" in content or "[" in content):
@@ -230,7 +295,8 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
         if chosen == rejected:
             return False
 
-        # Check for foreign tool call markers
+        # Check for foreign tool call markers. Structured tool_calls are allowed
+        # because normalize_tool_format() converts them before tokenization.
         for data in (chosen, rejected):
             if isinstance(data, str):
                 if ("<" in data or "[" in data) and has_foreign_tool_markers(data):
@@ -240,7 +306,9 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
                     if not isinstance(msg, dict):
                         continue
                     if msg.get("role") == "assistant":
-                        if "tool_calls" in msg:
+                        if "tool_calls" in msg and not _structured_tool_calls_are_valid(
+                            msg.get("tool_calls")
+                        ):
                             return False
                         content = msg.get("content", "")
                         if isinstance(content, str) and (

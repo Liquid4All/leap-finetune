@@ -5,6 +5,9 @@ from leap_finetune.data_loaders.tool_call_utils import (
     validate_tool_format,
     _tool_calls_to_pythonic,
 )
+from leap_finetune.data_loaders.validate_tool_calls import (
+    validate_tool_calls_in_messages,
+)
 from leap_finetune.utils.model_utils import get_model_family
 
 
@@ -290,6 +293,16 @@ class TestToolCallsToPythonic:
         result = _tool_calls_to_pythonic(tc)
         assert result == "<|tool_call_start|>[f(flag=True)]<|tool_call_end|>"
 
+    def test_string_arguments_passthrough(self):
+        tc = [
+            {
+                "type": "function",
+                "function": {"name": "f", "arguments": 'x="hello", y=42'},
+            }
+        ]
+        result = _tool_calls_to_pythonic(tc)
+        assert result == '<|tool_call_start|>[f(x="hello", y=42)]<|tool_call_end|>'
+
 
 # === Edge cases the current converter mishandles ===
 # Invariant: converter output must be valid Python (parseable by ast.parse).
@@ -495,3 +508,22 @@ class TestNormalizeToolFormat:
         result = normalize_tool_format(row, "lfm2")
         # After normalization, tool content should be clean
         assert result["messages"][2]["content"] == '{"r": 1}'
+
+
+class TestValidateToolCallsInMessages:
+    def test_structured_tool_calls_are_allowed(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "f", "arguments": {"x": "hello"}},
+                    }
+                ],
+            },
+            {"role": "tool", "content": '{"result": 1}'},
+        ]
+        validate_tool_calls_in_messages(messages, 0)

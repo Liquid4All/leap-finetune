@@ -193,13 +193,16 @@ def ray_trainer(job_config: dict) -> None:
             tokenizer=tokenizer if use_pretokenize else None,
             training_config=training_config if use_pretokenize else None,
         )
-        datasets = {"train": train_ds, "eval": eval_ds}
+        datasets = {"train": train_ds}
+        if eval_ds is not None:
+            datasets["eval"] = eval_ds
     elif isinstance(dataset_config, tuple):
         # Legacy path: pre-loaded (Dataset, Dataset) tuple (deprecate eventually)
         train_hf, eval_hf = dataset_config
         train_ds = ray.data.from_huggingface(train_hf)
-        eval_ds = ray.data.from_huggingface(eval_hf)
-        datasets = {"train": train_ds, "eval": eval_ds}
+        datasets = {"train": train_ds}
+        if eval_hf is not None:
+            datasets["eval"] = ray.data.from_huggingface(eval_hf)
     else:
         raise ValueError(f"Invalid dataset type: {type(dataset_config)}")
 

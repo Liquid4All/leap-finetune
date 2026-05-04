@@ -71,7 +71,7 @@ class TestToolCallValidation:
         with pytest.raises(ValueError, match="Text appears before tool call"):
             validate_sft_format(ds)
 
-    def test_sft_structured_tool_calls_field_rejected(self):
+    def test_sft_structured_tool_calls_field_allowed_with_tool_response(self):
         from leap_finetune.data_loaders.validate_loader import validate_sft_format
 
         ds = Dataset.from_list(
@@ -82,14 +82,22 @@ class TestToolCallValidation:
                         {
                             "role": "assistant",
                             "content": "Let me check.",
-                            "tool_calls": [{"name": "get_weather"}],
+                            "tool_calls": [
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": {"location": "SF"},
+                                    },
+                                }
+                            ],
                         },
+                        {"role": "tool", "content": '{"temp": 18}'},
                     ]
                 }
             ]
         )
-        with pytest.raises(ValueError, match="tool_calls.*not supported"):
-            validate_sft_format(ds)
+        assert len(validate_sft_format(ds)) == 1
 
     def test_sft_missing_tool_response_rejected(self):
         from leap_finetune.data_loaders.validate_loader import validate_sft_format
@@ -256,6 +264,61 @@ class TestDatasetLoader:
         assert loader.limit == 20
         assert loader.test_size == 0.2
 
+    def test_parquet_directory_detected(self, tmp_path):
+        import pandas as pd
+
+        from leap_finetune.data_loaders.validate_loader import get_source_type
+
+        shard_dir = tmp_path / "parquet_shards"
+        shard_dir.mkdir()
+        pd.DataFrame(
+            [{"messages": [{"role": "user", "content": "x"}, {"role": "assistant", "content": "y"}]}]
+        ).to_parquet(shard_dir / "train-00000-of-00002.parquet")
+        pd.DataFrame(
+            [{"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]}]
+        ).to_parquet(shard_dir / "train-00001-of-00002.parquet")
+
+        assert get_source_type(str(shard_dir)) == "parquet"
+
+    def test_directory_of_parquet_shards_reads_all_files(self, tmp_path):
+        import pandas as pd
+        from unittest.mock import patch
+
+        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+
+        shard_dir = tmp_path / "parquet_shards"
+        shard_dir.mkdir()
+        rows = [
+            {
+                "messages": [
+                    {"role": "user", "content": "u1"},
+                    {"role": "assistant", "content": "a1"},
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "u2"},
+                    {"role": "assistant", "content": "a2"},
+                ]
+            },
+        ]
+        pd.DataFrame(rows[:1]).to_parquet(shard_dir / "train-00000-of-00002.parquet")
+        pd.DataFrame(rows[1:]).to_parquet(shard_dir / "train-00001-of-00002.pq")
+
+        loader = DatasetLoader(
+            dataset_path=str(shard_dir),
+            dataset_type="sft",
+            test_size=None,
+        )
+        with patch("ray.data.read_parquet", return_value="mock-dataset") as mock_read:
+            ds = loader.to_ray_dataset()
+        assert ds == "mock-dataset"
+        assert mock_read.call_count == 1
+        parquet_paths = mock_read.call_args.args[0]
+        assert len(parquet_paths) == 2
+        assert parquet_paths[0].endswith(".parquet")
+        assert parquet_paths[1].endswith(".pq")
+
 
 # === SFT tokenization ===
 
@@ -326,6 +389,25 @@ class TestTokenizationSFT:
         assert 0.1 < eval_ratio < 0.4, (
             f"Eval ratio {eval_ratio:.2f} is outside expected range for test_size=0.2"
         )
+
+    def test_sft_without_eval_split_returns_none(self, ray_session, tokenizer):
+        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+        from leap_finetune.data_loaders.ray_data_utils import create_ray_datasets
+
+        loader = DatasetLoader(
+            dataset_path="HuggingFaceTB/smoltalk",
+            dataset_type="sft",
+            subset="all",
+            limit=20,
+            test_size=None,
+        )
+        train_ds, eval_ds = create_ray_datasets(
+            loader,
+            tokenizer=tokenizer,
+            training_config={"max_length": 128, "packing": False},
+        )
+        assert train_ds.count() > 0
+        assert eval_ds is None
 
     def test_sft_packing_changes_row_count(self, ray_session, tokenizer):
         from leap_finetune.data_loaders.dataset_loader import DatasetLoader

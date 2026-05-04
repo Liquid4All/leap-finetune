@@ -36,20 +36,12 @@ def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
     1. No foreign tool call markers (Qwen, Mistral)
     2. If pre-formatted LFM markers exist, tool call must come before text
     3. If assistant has tool call, a role="tool" response should follow
-    4. Structured tool_calls field is not supported by LFM template
+    4. Structured tool_calls are allowed because they are normalized before tokenization
     """
     for msg_idx, msg in enumerate(messages):
         if not isinstance(msg, dict):
             continue
         role = msg.get("role", "")
-
-        # === Check for unsupported structured tool_calls field ===
-        if role == "assistant" and "tool_calls" in msg:
-            raise ValueError(
-                f"Sample {sample_idx}, message {msg_idx}: 'tool_calls' field is not "
-                f"supported by the LFM chat template. Tool calls must be pre-formatted "
-                f"in the 'content' field using <|tool_call_start|>/<|tool_call_end|> markers."
-            )
 
         # Only check content strings on assistant messages
         if role != "assistant":
@@ -87,7 +79,16 @@ def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
         role = msg.get("role", "")
         content = msg.get("content", "")
 
-        has_tool_call = isinstance(content, str) and _LFM_TOOL_CALL_START in content
+        structured_tool_calls = msg.get("tool_calls")
+        has_tool_call = (
+            isinstance(content, str)
+            and _LFM_TOOL_CALL_START in content
+            or (
+                role == "assistant"
+                and isinstance(structured_tool_calls, list)
+                and len(structured_tool_calls) > 0
+            )
+        )
         if not has_tool_call or role != "assistant":
             continue
 

@@ -18,7 +18,9 @@ from leap_finetune.utils.context_parallel import (
     apply_cp_to_model,
     create_parallel_process_groups,
     split_batch_for_cp,
+    validate_cp_batch_replicated,
     validate_cp_config,
+    validate_cp_model_support,
 )
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
@@ -39,6 +41,7 @@ class LFMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
     def __init__(self, cp_config: dict | None = None, **kwargs):
         super().__init__(**kwargs)
         self.cp_config = cp_config
+        self._cp_batch_validated = False
 
     def _prepare_dataset(self, dataset, *args, **kwargs):
         return dataset
@@ -49,6 +52,14 @@ class LFMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
 
     def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
         if self.cp_config and self.cp_config["cp_size"] > 1:
+            if not self._cp_batch_validated:
+                validate_cp_batch_replicated(
+                    inputs,
+                    self.cp_config["cp_group"],
+                    self.cp_config["cp_rank"],
+                    self.cp_config["cp_size"],
+                )
+                self._cp_batch_validated = True
             inputs = split_batch_for_cp(
                 inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
             )
@@ -67,7 +78,7 @@ def dpo_run(training_config: dict) -> None:
     train_ds_ray = ray.train.get_dataset_shard("train")
     eval_ds_ray = ray.train.get_dataset_shard("eval")
     train_dataset = ray_dataset_to_hf(train_ds_ray)
-    eval_dataset = ray_dataset_to_hf(eval_ds_ray)
+    eval_dataset = ray_dataset_to_hf(eval_ds_ray) if eval_ds_ray is not None else None
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -92,6 +103,7 @@ def dpo_run(training_config: dict) -> None:
         "chat_template_path",
         "reshard_after_forward",
         "fsdp_cpu_offload",
+        "checkpoint_staging_dir",
     }
     train_config_filtered = {
         k: v for k, v in train_config.items() if k not in excluded_keys
@@ -131,6 +143,7 @@ def dpo_run(training_config: dict) -> None:
 
     cp_config = None
     if cp_size > 1:
+        validate_cp_model_support(model, train_config)
         validate_cp_config(cp_size, world_size=dist.get_world_size())
         cp_config = create_parallel_process_groups(cp_size)
         apply_cp_to_model(model, cp_config)

@@ -4,6 +4,7 @@ import socket
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import torch.nn.functional as F
 
 from leap_finetune.utils.parallel_topology import (
     WorkerTopology,
@@ -11,6 +12,8 @@ from leap_finetune.utils.parallel_topology import (
 )
 
 logger = logging.getLogger(__name__)
+
+CP_CONV_LEFT_HALO = 2
 
 
 def dist_barrier(group: dist.ProcessGroup | None = None) -> None:
@@ -129,43 +132,60 @@ def create_parallel_process_groups(cp_size: int = 1) -> dict:
         "cp_group": my_cp_group,
         "cp_rank": cp_idx,
         "cp_size": cp_size,
+        "dp_rank": dp_idx,
     }
 
     logger.info("Rank %s: dp=%s cp=%s/%s", rank, dp_idx, cp_idx, cp_size)
     return result
 
 
-def _get_cp_load_balanced_chunk_ids(
-    cp_rank: int, cp_size: int, device: torch.device
-) -> torch.Tensor:
-    """Return the two sequence chunk ids assigned to this CP rank."""
-    return torch.tensor(
-        [cp_rank, 2 * cp_size - cp_rank - 1], device=device, dtype=torch.long
-    )
+def _get_cp_contiguous_bounds(
+    seq_len: int,
+    cp_rank: int,
+    cp_size: int,
+) -> tuple[int, int]:
+    """Return the contiguous sequence bounds for one CP rank."""
+    if seq_len % cp_size != 0:
+        raise ValueError(
+            f"Sequence length {seq_len} must be divisible by cp_size {cp_size}"
+        )
+    chunk_len = seq_len // cp_size
+    start = cp_rank * chunk_len
+    end = start + chunk_len
+    return start, end
 
 
-def _all_gather_variable_seq(
+def _all_gather_fixed_seq(
     tensor: torch.Tensor,
     group: dist.ProcessGroup,
-) -> tuple[list[torch.Tensor], list[int]]:
-    """All-gather sequence shards after padding them to a CP-group max length."""
-    from torch.distributed.nn import functional as dist_nn
+) -> list[torch.Tensor]:
+    """All-gather equal-length sequence shards across the CP group."""
+    return [
+        chunk.contiguous()
+        for chunk in _CPAllGather.apply(tensor.contiguous(), group)
+    ]
 
-    local_len = torch.tensor([tensor.shape[1]], device=tensor.device, dtype=torch.int64)
-    gathered_lens = [torch.zeros_like(local_len) for _ in range(dist.get_world_size(group))]
-    dist.all_gather(gathered_lens, local_len, group=group)
-    lengths = [int(item.item()) for item in gathered_lens]
-    max_len = max(lengths)
 
-    if tensor.shape[1] < max_len:
-        pad_shape = list(tensor.shape)
-        pad_shape[1] = max_len - tensor.shape[1]
-        pad = torch.zeros(pad_shape, dtype=tensor.dtype, device=tensor.device)
-        tensor = torch.cat((tensor, pad), dim=1)
+class _CPAllGather(torch.autograd.Function):
+    """Differentiable all-gather with an explicit per-chunk gradient reduction."""
 
-    gathered = dist_nn.all_gather(tensor.contiguous(), group=group)
-    trimmed = [chunk[:, :seq_len].contiguous() for chunk, seq_len in zip(gathered, lengths)]
-    return trimmed, lengths
+    @staticmethod
+    def forward(ctx, tensor: torch.Tensor, group: dist.ProcessGroup):
+        ctx.group = group
+        ctx.rank = dist.get_rank(group=group)
+        world_size = dist.get_world_size(group=group)
+        chunks = [torch.empty_like(tensor) for _ in range(world_size)]
+        dist.all_gather(chunks, tensor.contiguous(), group=group)
+        return tuple(chunks)
+
+    @staticmethod
+    def backward(ctx, *grad_outputs: torch.Tensor):
+        grad_stack = torch.stack(
+            [grad.contiguous() for grad in grad_outputs],
+            dim=0,
+        )
+        dist.all_reduce(grad_stack, op=dist.ReduceOp.SUM, group=ctx.group)
+        return grad_stack[ctx.rank].contiguous(), None
 
 
 def prefix_gather_attention(
@@ -176,69 +196,66 @@ def prefix_gather_attention(
     cp_rank: int,
     cp_size: int,
 ) -> torch.Tensor:
-    """Run causal attention with staged low/high-side CP gathers."""
+    """Run causal attention over the contiguous visible prefix for this CP rank."""
     from flash_attn import flash_attn_func
 
     if cp_size == 1:
         return flash_attn_func(q, k, v, causal=True)
 
-    bsz, s_local, _, _ = q.shape
-    subchunk_len = s_local // 2
-    local_chunk_ids = _get_cp_load_balanced_chunk_ids(cp_rank, cp_size, device=q.device)
+    gathered_k_chunks = _all_gather_fixed_seq(k, cp_group)
+    gathered_v_chunks = _all_gather_fixed_seq(v, cp_group)
+    visible_k = torch.cat(gathered_k_chunks[: cp_rank + 1], dim=1).contiguous()
+    visible_v = torch.cat(gathered_v_chunks[: cp_rank + 1], dim=1).contiguous()
+    return flash_attn_func(q, visible_k, visible_v, causal=True)
 
-    q_low = q[:, :subchunk_len].contiguous()
-    q_high = q[:, subchunk_len:].contiguous()
-    k_low = k[:, :subchunk_len].contiguous()
-    k_high = k[:, subchunk_len:].contiguous()
-    v_low = v[:, :subchunk_len].contiguous()
-    v_high = v[:, subchunk_len:].contiguous()
 
-    # === 1. Gather the early chunks [0, ..., cp_size - 1] across the CP group ===
-    gathered_low_k_chunks, low_lengths = _all_gather_variable_seq(k_low, cp_group)
-    gathered_low_v_chunks, _ = _all_gather_variable_seq(v_low, cp_group)
-    gathered_low_k = torch.cat(gathered_low_k_chunks, dim=1)
-    gathered_low_v = torch.cat(gathered_low_v_chunks, dim=1)
+def _all_gather_cp_halos(
+    tensor: torch.Tensor,
+    halo_width: int,
+    group: dist.ProcessGroup,
+) -> list[torch.Tensor]:
+    """All-gather a fixed-width tail halo from every CP rank."""
+    if halo_width < 1:
+        raise ValueError(f"halo_width must be >= 1, got {halo_width}")
+    if tensor.shape[1] < halo_width:
+        raise ValueError(
+            f"Need sequence length >= halo width ({halo_width}), got {tensor.shape[1]}"
+        )
+    tail = tensor[:, -halo_width:].contiguous()
+    return _all_gather_fixed_seq(tail, group)
 
-    # === 2. Run the first local subchunk as soon as its visible prefix is available ===
-    low_chunk_id = int(local_chunk_ids[0].item())
-    low_prefix_end = sum(low_lengths[: low_chunk_id + 1])
-    low_out = flash_attn_func(
-        q_low,
-        gathered_low_k[:, :low_prefix_end].contiguous(),
-        gathered_low_v[:, :low_prefix_end].contiguous(),
-        causal=True,
-    )
 
-    # === 3. Gather the late chunks [cp_size, ..., 2 * cp_size - 1] in a second round ===
-    gathered_high_k_chunks, high_lengths = _all_gather_variable_seq(k_high, cp_group)
-    gathered_high_v_chunks, _ = _all_gather_variable_seq(v_high, cp_group)
-    gathered_high_k_chunks.reverse()
-    gathered_high_v_chunks.reverse()
-    high_lengths.reverse()
-    gathered_high_k = torch.cat(gathered_high_k_chunks, dim=1)
-    gathered_high_v = torch.cat(gathered_high_v_chunks, dim=1)
+def _prepend_cp_left_halo(
+    hidden_states: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    *,
+    cp_group: dist.ProcessGroup,
+    cp_rank: int,
+    halo_width: int,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Prepend the previous rank's tail halo to a local conv input shard."""
+    if halo_width < 1:
+        return hidden_states, attention_mask
 
-    # === 4. Run the second local subchunk against the full visible prefix ===
-    high_chunk_id = int(local_chunk_ids[1].item())
-    high_prefix_chunks = high_chunk_id - cp_size + 1
-    high_prefix_end = sum(high_lengths[:high_prefix_chunks])
-    high_prefix_k = torch.cat(
-        (
-            gathered_low_k,
-            gathered_high_k[:, :high_prefix_end].contiguous(),
-        ),
-        dim=1,
-    )
-    high_prefix_v = torch.cat(
-        (
-            gathered_low_v,
-            gathered_high_v[:, :high_prefix_end].contiguous(),
-        ),
-        dim=1,
-    )
-    high_out = flash_attn_func(q_high, high_prefix_k, high_prefix_v, causal=True)
+    gathered_hidden_halos = _all_gather_cp_halos(hidden_states, halo_width, cp_group)
+    if cp_rank == 0:
+        halo_hidden = torch.zeros_like(gathered_hidden_halos[0])
+    else:
+        halo_hidden = gathered_hidden_halos[cp_rank - 1]
+    extended_hidden = torch.cat((halo_hidden, hidden_states), dim=1)
 
-    return torch.cat((low_out, high_out), dim=1)
+    extended_mask = attention_mask
+    if attention_mask is not None:
+        gathered_mask_halos = _all_gather_cp_halos(
+            attention_mask, halo_width, cp_group
+        )
+        if cp_rank == 0:
+            halo_mask = torch.zeros_like(gathered_mask_halos[0])
+        else:
+            halo_mask = gathered_mask_halos[cp_rank - 1]
+        extended_mask = torch.cat((halo_mask, attention_mask), dim=1)
+
+    return extended_hidden, extended_mask
 
 
 # === Attention Monkey-Patch for CP ===
@@ -284,20 +301,17 @@ def patch_attention_for_cp(
                 position_ids = second_arg
 
         if position_ids is None:
-            subchunk_len = s_local // 2 if cp_size > 1 else s_local
-            local_chunk_ids = _get_cp_load_balanced_chunk_ids(
-                cp_rank, cp_size, device=hidden_states.device
-            )
-            position_chunks = [
+            start = cp_rank * s_local if cp_size > 1 else 0
+            position_ids = (
                 torch.arange(
-                    int(chunk_id.item()) * subchunk_len,
-                    (int(chunk_id.item()) + 1) * subchunk_len,
+                    start,
+                    start + s_local,
                     device=hidden_states.device,
                     dtype=torch.long,
                 )
-                for chunk_id in local_chunk_ids
-            ]
-            position_ids = torch.cat(position_chunks, dim=0).unsqueeze(0).expand(bsz, -1)
+                .unsqueeze(0)
+                .expand(bsz, -1)
+            )
 
         num_heads = attn.config.num_attention_heads
         num_kv_heads = getattr(attn.config, "num_key_value_heads", num_heads)
@@ -383,6 +397,9 @@ def apply_cp_to_model(model: nn.Module, parallel_config: dict) -> None:
                 rotary_emb=rotary_emb,
             )
             patched += 1
+        elif "ShortConv" in module_name and hasattr(module, "conv"):
+            patch_short_conv_for_cp(module, cp_group, cp_rank, cp_size)
+            patched += 1
 
     if patched == 0:
         logger.warning(
@@ -394,6 +411,65 @@ def apply_cp_to_model(model: nn.Module, parallel_config: dict) -> None:
         logger.info(f"Applied CP to {patched} attention modules (cp_size={cp_size})")
 
 
+def patch_short_conv_for_cp(
+    conv_module: nn.Module,
+    cp_group: dist.ProcessGroup,
+    cp_rank: int,
+    cp_size: int,
+) -> None:
+    """Monkey-patch the LFM short-conv path to prepend a minimal left halo."""
+    original_forward = conv_module.forward
+    halo_width = min(getattr(conv_module, "L_cache", CP_CONV_LEFT_HALO) - 1, CP_CONV_LEFT_HALO)
+
+    def cp_short_conv_forward(
+        hidden_states: torch.Tensor,
+        past_key_values=None,
+        cache_position=None,
+        attention_mask=None,
+        *args,
+        **kwargs,
+    ):
+        if cp_size == 1 or halo_width < 1:
+            return original_forward(
+                hidden_states,
+                past_key_values=past_key_values,
+                cache_position=cache_position,
+                attention_mask=attention_mask,
+                *args,
+                **kwargs,
+            )
+
+        # Keep generation/cache behavior untouched; CP is only used for training/eval.
+        if past_key_values is not None or cache_position is not None:
+            return original_forward(
+                hidden_states,
+                past_key_values=past_key_values,
+                cache_position=cache_position,
+                attention_mask=attention_mask,
+                *args,
+                **kwargs,
+            )
+
+        extended_hidden, extended_mask = _prepend_cp_left_halo(
+            hidden_states,
+            attention_mask,
+            cp_group=cp_group,
+            cp_rank=cp_rank,
+            halo_width=halo_width,
+        )
+        conv_out = original_forward(
+            extended_hidden,
+            past_key_values=None,
+            cache_position=None,
+            attention_mask=extended_mask,
+            *args,
+            **kwargs,
+        )
+        return conv_out[:, halo_width:, :].contiguous()
+
+    conv_module.forward = cp_short_conv_forward
+
+
 # === Sequence Splitting ===
 
 
@@ -402,7 +478,7 @@ def _pad_sequence_tensor_for_cp(
 ) -> torch.Tensor:
     """Pad the sequence dimension to a CP-compatible multiple when needed."""
     seq_len = value.shape[1]
-    pad_multiple = 2 * cp_size if cp_size > 1 else 1
+    pad_multiple = cp_size if cp_size > 1 else 1
     pad_len = (-seq_len) % pad_multiple
     if pad_len == 0:
         return value
@@ -410,7 +486,7 @@ def _pad_sequence_tensor_for_cp(
     pad_shape = list(value.shape)
     pad_shape[1] = pad_len
 
-    if key == "labels":
+    if key in {"labels", "shift_labels"}:
         pad_values = torch.full(
             pad_shape,
             fill_value=-100,
@@ -465,6 +541,14 @@ def split_batch_for_cp(batch: dict, cp_rank: int, cp_size: int) -> dict:
             input_ids.shape[0], -1
         )
 
+    labels = batch_with_positions.get("labels")
+    if isinstance(labels, torch.Tensor) and labels.dim() >= 2:
+        padded_labels = _pad_sequence_tensor_for_cp("labels", labels, cp_size)
+        shifted_labels = torch.full_like(padded_labels, -100)
+        shifted_labels[:, :-1, ...] = padded_labels[:, 1:, ...]
+        batch_with_positions["labels"] = padded_labels
+        batch_with_positions["shift_labels"] = shifted_labels
+
     new_batch = {}
     for key, value in batch_with_positions.items():
         if isinstance(value, torch.Tensor) and value.dim() >= 2:
@@ -472,28 +556,57 @@ def split_batch_for_cp(batch: dict, cp_rank: int, cp_size: int) -> dict:
             value = _pad_sequence_tensor_for_cp(key, value, cp_size)
             seq_len = value.shape[1]
             if cp_size > 1:
-                # === 3. Reassemble the load-balanced local shard for this CP rank ===
-                subchunk_len = seq_len // (2 * cp_size)
-                value = value.view(
-                    value.shape[0],
-                    2 * cp_size,
-                    subchunk_len,
-                    *value.shape[2:],
-                )
-                chunk_ids = _get_cp_load_balanced_chunk_ids(
-                    cp_rank, cp_size, value.device
-                )
-                value = value.index_select(1, chunk_ids).reshape(
-                    value.shape[0],
-                    2 * subchunk_len,
-                    *value.shape[3:],
-                )
-                new_batch[key] = value
+                start, end = _get_cp_contiguous_bounds(seq_len, cp_rank, cp_size)
+                new_batch[key] = value[:, start:end, ...].contiguous()
             else:
                 new_batch[key] = value
         else:
             new_batch[key] = value
+
+    attention_mask = new_batch.get("attention_mask")
+    if isinstance(attention_mask, torch.Tensor):
+        new_batch["leap_cp_padding_mask"] = attention_mask.clone()
     return new_batch
+
+
+def _cp_tensor_fingerprint(tensor: torch.Tensor) -> tuple:
+    tensor = tensor.detach()
+    flat = tensor.reshape(-1)
+    sample_len = min(8, flat.numel())
+    head = flat[:sample_len].to("cpu").tolist()
+    tail = flat[-sample_len:].to("cpu").tolist() if sample_len else []
+    checksum = tensor.to(torch.int64).sum().item() if tensor.numel() else 0
+    return (tuple(tensor.shape), int(checksum), tuple(head), tuple(tail))
+
+
+def validate_cp_batch_replicated(
+    batch: dict,
+    cp_group: dist.ProcessGroup,
+    cp_rank: int,
+    cp_size: int,
+) -> None:
+    """Fail fast if CP peers did not receive the same full batch before splitting."""
+    fingerprint = {}
+    for key in ("input_ids", "labels", "attention_mask"):
+        value = batch.get(key)
+        if isinstance(value, torch.Tensor):
+            fingerprint[key] = _cp_tensor_fingerprint(value)
+
+    gathered: list[dict | None] = [None] * cp_size
+    dist.all_gather_object(gathered, fingerprint, group=cp_group)
+
+    expected = gathered[0]
+    mismatched = [
+        rank
+        for rank, item in enumerate(gathered)
+        if item != expected
+    ]
+    if mismatched:
+        raise RuntimeError(
+            "Context parallel ranks received different pre-split batches. "
+            f"cp_rank={cp_rank}, mismatched_cp_ranks={mismatched}, "
+            f"fingerprints={gathered}"
+        )
 
 
 # === CP Loss Aggregation ===
@@ -502,9 +615,96 @@ def split_batch_for_cp(batch: dict, cp_rank: int, cp_size: int) -> dict:
 def aggregate_cp_loss(
     loss: torch.Tensor, cp_group: dist.ProcessGroup, cp_size: int
 ) -> torch.Tensor:
-    """Average loss across CP ranks (each rank computes loss on different sequence chunk)."""
+    """Average the reporting loss across CP ranks."""
     dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=cp_group)
     return loss / cp_size
+
+
+def validate_cp_model_support(model: nn.Module, train_config: dict) -> None:
+    """Reject known-unsafe CP combinations while keeping the baseline runtime shape."""
+    if not train_config.get("packing"):
+        return
+
+    layer_types = getattr(getattr(model, "config", None), "layer_types", None) or []
+    has_conv_layers = any("conv" in str(layer_type).lower() for layer_type in layer_types)
+    if not has_conv_layers:
+        has_conv_layers = any(
+            "conv" in type(module).__name__.lower() for module in model.modules()
+        )
+    if has_conv_layers:
+        raise ValueError(
+            "packing=True is not supported with context_parallel_size > 1 on "
+            "hybrid/conv LFM models. Packed sequence boundaries can bleed into "
+            "short-conv state under CP."
+        )
+
+
+def compute_cp_causal_lm_loss(
+    model: nn.Module,
+    inputs: dict,
+    cp_group: dist.ProcessGroup,
+    cp_size: int,
+    return_outputs: bool = False,
+):
+    """Compute a CP-local causal LM loss that remains differentiable on empty-label shards."""
+    labels = inputs.get("labels")
+    if labels is None:
+        outputs = model(**inputs)
+        loss = outputs["loss"] if isinstance(outputs, dict) else outputs.loss
+        if return_outputs:
+            return loss, outputs
+        return loss
+
+    model_inputs = dict(inputs)
+    model_inputs.pop("labels")
+    shift_labels = model_inputs.pop("shift_labels", None)
+    outputs = model(**model_inputs)
+    logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
+
+    if shift_labels is None:
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+    else:
+        shift_logits = logits.contiguous()
+        shift_labels = shift_labels.contiguous()
+    vocab_size = shift_logits.size(-1)
+
+    token_losses = F.cross_entropy(
+        shift_logits.view(-1, vocab_size),
+        shift_labels.view(-1),
+        ignore_index=-100,
+        reduction="none",
+    ).view_as(shift_labels)
+    valid_mask = shift_labels.ne(-100)
+    local_token_count = valid_mask.sum()
+
+    if bool(local_token_count.item()):
+        local_loss_numerator = token_losses.masked_select(valid_mask).sum()
+    else:
+        # Preserve a gradient-connected zero so backward is well-defined on shards
+        # that contain no supervised assistant tokens after CP splitting.
+        local_loss_numerator = shift_logits.sum() * 0.0
+
+    global_token_count = local_token_count.to(
+        device=shift_logits.device, dtype=local_loss_numerator.dtype
+    )
+    dist.all_reduce(global_token_count, op=dist.ReduceOp.SUM, group=cp_group)
+
+    if bool(global_token_count.item()):
+        # Distributed reducers average gradients across ranks. CP ranks each hold
+        # a chunk of the same sequence, so scale the local objective before
+        # backward; the reducer average then recovers the full-sequence gradient.
+        loss = (local_loss_numerator / global_token_count) * cp_size
+    else:
+        loss = shift_logits.sum() * 0.0
+
+    if isinstance(outputs, dict):
+        outputs["loss"] = loss
+    else:
+        outputs.loss = loss
+    if return_outputs:
+        return loss, outputs
+    return loss
 
 
 # === Validation ===

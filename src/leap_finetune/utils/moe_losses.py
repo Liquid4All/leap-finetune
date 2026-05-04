@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 
 from leap_finetune.utils.moe_ops import route_tokens_to_experts
@@ -41,23 +42,41 @@ def switch_load_balancing_loss(
     num_experts: int,
     top_k: int,
     coeff: float,
+    sequence_partition_group: dist.ProcessGroup | None = None,
 ) -> torch.Tensor:
     n_tokens = router_probs.shape[0]
+    if n_tokens == 0:
+        return router_probs.sum() * 0.0
 
     tokens_per_expert = torch.zeros(
-        num_experts, device=router_probs.device, dtype=router_probs.dtype
+        num_experts, device=router_probs.device, dtype=torch.float32
     )
-    ones = torch.ones_like(selected_experts, dtype=router_probs.dtype)
-    tokens_per_expert.scatter_add_(0, selected_experts.view(-1), ones.view(-1))
+    ones = torch.ones_like(selected_experts, dtype=torch.float32)
+    tokens_per_expert.scatter_add_(0, selected_experts.reshape(-1), ones.reshape(-1))
 
-    aggregated_probs = router_probs.mean(dim=0)
+    cp_size = 1
+    if sequence_partition_group is not None:
+        dist.all_reduce(
+            tokens_per_expert,
+            op=dist.ReduceOp.SUM,
+            group=sequence_partition_group,
+        )
+        cp_size = dist.get_world_size(sequence_partition_group)
+
+    total_num_tokens = n_tokens * cp_size
+    aggregated_probs = router_probs.float().sum(dim=0)
 
     aux_loss = (
         torch.sum(aggregated_probs * tokens_per_expert)
         * num_experts
         * coeff
-        / (n_tokens * top_k)
+        / (total_num_tokens * total_num_tokens * top_k)
     )
+    if sequence_partition_group is not None:
+        # Our FSDP reducer averages gradients across CP ranks. Each CP rank
+        # contributes one local slice of the same sequence, so scale the local
+        # aux objective before backward, matching the CP causal-LM loss path.
+        aux_loss = aux_loss * cp_size
     return aux_loss
 
 
@@ -108,6 +127,18 @@ def apply_moe_losses(model: nn.Module, config: MoETrainingConfig) -> None:
             _patch_block(module, config)
             patched += 1
     logger.info("Applied MoE aux losses to %s blocks", patched)
+
+
+def set_moe_sequence_partition_group(
+    model: nn.Module, sequence_partition_group: dist.ProcessGroup | None
+) -> None:
+    """Attach the CP group used by patched MoE aux losses."""
+    updated = 0
+    for module in model.modules():
+        if type(module).__name__ == "Lfm2MoeSparseMoeBlock":
+            module._moe_sequence_partition_group = sequence_partition_group
+            updated += 1
+    logger.info("Set MoE sequence partition group on %s blocks", updated)
 
 
 def store_moe_metrics(
@@ -167,6 +198,10 @@ def _run_module_list_experts(
 
 
 def _patch_block(block: nn.Module, config: MoETrainingConfig) -> None:
+    block._moe_sequence_partition_group = getattr(
+        block, "_moe_sequence_partition_group", None
+    )
+
     def enhanced_forward(hidden_states: torch.Tensor) -> torch.Tensor:
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         x = hidden_states.view(-1, hidden_states.shape[-1])
@@ -195,12 +230,16 @@ def _patch_block(block: nn.Module, config: MoETrainingConfig) -> None:
             )
 
         if config.aux_loss_coef > 0:
+            sequence_partition_group = getattr(
+                block, "_moe_sequence_partition_group", None
+            )
             aux = switch_load_balancing_loss(
                 router_probs,
                 selected_experts,
                 num_experts,
                 top_k,
                 config.aux_loss_coef,
+                sequence_partition_group=sequence_partition_group,
             )
             routing_weights = InjectAuxLoss.apply(routing_weights, aux)
             block._moe_aux_loss = aux.detach()

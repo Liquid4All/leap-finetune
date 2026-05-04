@@ -63,6 +63,7 @@ def generate_slurm_script(
         "job_name": config_dict.get("project_name", "leap_finetune"),
         "nodes": 1,
         "ntasks_per_node": 1,
+        "gpus_per_node": None,
         "gpus_per_task": 1,
         "cpus_per_gpu": 8,
         "output": "logs/OUT_%x.%j",
@@ -88,12 +89,19 @@ def generate_slurm_script(
         else config_path
     )
 
+    gpus_per_node = slurm_settings.get("gpus_per_node")
+    gpus_directive = (
+        f'#SBATCH --gpus-per-node={gpus_per_node}'
+        if gpus_per_node is not None
+        else f'#SBATCH --gpus-per-task={slurm_settings["gpus_per_task"]}'
+    )
+
     script_content = f"""#!/bin/bash
 
 #SBATCH --job-name={slurm_settings["job_name"]}
 #SBATCH --nodes={slurm_settings["nodes"]}
 #SBATCH --ntasks-per-node={slurm_settings["ntasks_per_node"]}
-#SBATCH --gpus-per-task={slurm_settings["gpus_per_task"]}
+{gpus_directive}
 #SBATCH --output={slurm_settings["output"]}
 #SBATCH --error={slurm_settings["error"]}
 #SBATCH --cpus-per-gpu={slurm_settings["cpus_per_gpu"]}
@@ -116,9 +124,12 @@ source .venv/bin/activate
 """
 
     is_multinode = int(slurm_settings["nodes"]) > 1
-    gpus_per_node = int(slurm_settings["gpus_per_task"]) * int(
-        slurm_settings["ntasks_per_node"]
-    )
+    if slurm_settings.get("gpus_per_node") is not None:
+        gpus_per_node = int(slurm_settings["gpus_per_node"])
+    else:
+        gpus_per_node = int(slurm_settings["gpus_per_task"]) * int(
+            slurm_settings["ntasks_per_node"]
+        )
 
     if is_multinode:
         script_content += f"""
@@ -136,13 +147,13 @@ ray_slurm_wait_ready "${{SLURM_NNODES}}" "${{TOTAL_GPUS}}" 600 5
 echo "Ray cluster up: ${{TOTAL_GPUS}} GPUs across ${{SLURM_NNODES}} nodes (RAY_ADDRESS=${{RAY_ADDRESS}})"
 
 export RAY_ADDRESS
-uv run leap-finetune {config_relative_path}
+leap-finetune {config_relative_path}
 
 ray_slurm_stop_cluster
 """
     else:
         script_content += f"""
-uv run leap-finetune {config_relative_path}
+leap-finetune {config_relative_path}
 """
 
     script_content += """

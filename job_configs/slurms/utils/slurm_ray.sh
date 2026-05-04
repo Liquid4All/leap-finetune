@@ -9,6 +9,7 @@ RAY_HEAD_IP=""
 RAY_PORT=""
 RAY_ADDRESS=""
 TOTAL_GPUS=0
+RAY_TEMP_ROOT=""
 
 _ray_slurm_detect_iface_for_ip() {
   local target_ip="$1"
@@ -85,8 +86,9 @@ ray_slurm_init() {
   RAY_HEAD_IP="$(srun --nodes=1 --ntasks=1 -w "${RAY_HEAD_NODE}" hostname -I | awk '{print $1}')"
   RAY_ADDRESS="${RAY_HEAD_IP}:${RAY_PORT}"
   TOTAL_GPUS=$((nnodes * gpus_per_node))
+  RAY_TEMP_ROOT="${RAY_TEMP_ROOT:-/tmp/ray-${USER}/${SLURM_JOB_ID}}"
 
-  export RAY_HEAD_NODE RAY_HEAD_IP RAY_PORT RAY_ADDRESS TOTAL_GPUS
+  export RAY_HEAD_NODE RAY_HEAD_IP RAY_PORT RAY_ADDRESS TOTAL_GPUS RAY_TEMP_ROOT
 }
 
 ray_slurm_start_cluster_bg() {
@@ -95,17 +97,21 @@ ray_slurm_start_cluster_bg() {
     return 1
   fi
 
+  local head_temp_dir="${RAY_TEMP_ROOT}/head"
+  srun --nodes=1 --ntasks=1 -w "${RAY_HEAD_NODE}" mkdir -p "${head_temp_dir}"
   srun --nodes=1 --ntasks=1 -w "${RAY_HEAD_NODE}" \
     ray start --head --node-ip-address="${RAY_HEAD_IP}" --port="${RAY_PORT}" \
-    --disable-usage-stats --block &
+    --temp-dir="${head_temp_dir}" --disable-usage-stats --block &
   RAY_SLURM_PIDS+=("$!")
 
   sleep 5
 
   local node
   for node in "${RAY_SLURM_NODES[@]:1}"; do
+    local worker_temp_dir="${RAY_TEMP_ROOT}/${node}"
+    srun --nodes=1 --ntasks=1 -w "${node}" mkdir -p "${worker_temp_dir}"
     srun --nodes=1 --ntasks=1 -w "${node}" \
-      ray start --address="${RAY_ADDRESS}" --disable-usage-stats --block &
+      ray start --address="${RAY_ADDRESS}" --temp-dir="${worker_temp_dir}" --disable-usage-stats --block &
     RAY_SLURM_PIDS+=("$!")
   done
 }

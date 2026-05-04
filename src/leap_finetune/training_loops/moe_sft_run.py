@@ -19,10 +19,13 @@ from leap_finetune.utils.callbacks import LeapCheckpointCallback, MoEMetricsCall
 from leap_finetune.utils.context_parallel import (
     aggregate_cp_loss,
     apply_cp_to_model,
+    compute_cp_causal_lm_loss,
     create_parallel_process_groups,
     dist_barrier,
     split_batch_for_cp,
+    validate_cp_batch_replicated,
     validate_cp_config,
+    validate_cp_model_support,
 )
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
@@ -35,15 +38,19 @@ from leap_finetune.utils.memory_trace import (
     wrap_optimizer_step,
     write_memory_trace_event,
 )
-from leap_finetune.utils.manual_sharded_trainer import (
-    ManualShardedTrainerMixin,
+from leap_finetune.utils.trainer_mixins import (
+    ManualShardedCheckpointMixin,
     validate_manual_sharded_training_args,
 )
 from leap_finetune.utils.model_utils import (
-    save_manual_sharded_trainer_checkpoint,
+    save_manual_sharded_checkpoint,
     should_run_final_manual_sharded_save,
 )
-from leap_finetune.utils.moe_losses import MoETrainingConfig, apply_moe_losses
+from leap_finetune.utils.moe_losses import (
+    MoETrainingConfig,
+    apply_moe_losses,
+    set_moe_sequence_partition_group,
+)
 from leap_finetune.utils.moe_parallel import (
     apply_ep_to_model,
     apply_fsdp2,
@@ -64,7 +71,7 @@ MOE_SFT_EXCLUDED_KEYS = SFT_EXCLUDED_KEYS | {
     "context_parallel_size",
 }
 
-class LFMMoeSFTTrainer(ManualShardedTrainerMixin, Trainer):
+class LFMMoeSFTTrainer(ManualShardedCheckpointMixin, Trainer):
     """SFT Trainer for MoE models with EP/FSDP2 support."""
 
     def __init__(
@@ -78,13 +85,18 @@ class LFMMoeSFTTrainer(ManualShardedTrainerMixin, Trainer):
         super().__init__(**kwargs)
         self.ep_config = ep_config
         self.cp_config = cp_config
+        self._cp_batch_validated = False
 
     def get_train_dataloader(self):
+        sampler_seed_rank = None
+        if self.cp_config is not None and self.cp_config.get("cp_size", 1) > 1:
+            sampler_seed_rank = int(self.cp_config.get("dp_rank", 0))
+        elif self.ep_config is not None:
+            sampler_seed_rank = int(self.ep_config["dp_rank"])
+
         sampler_generator = None
-        if self.ep_config is not None:
-            sampler_generator = torch.Generator().manual_seed(
-                42 + self.ep_config["dp_rank"]
-            )
+        if sampler_seed_rank is not None:
+            sampler_generator = torch.Generator().manual_seed(42 + sampler_seed_rank)
 
         sampler = get_length_grouped_sampler(
             self.train_dataset,
@@ -107,6 +119,8 @@ class LFMMoeSFTTrainer(ManualShardedTrainerMixin, Trainer):
     def get_eval_dataloader(self, eval_dataset=None):
         if eval_dataset is None:
             eval_dataset = self.eval_dataset
+        if eval_dataset is None:
+            raise ValueError("No evaluation dataset configured for this run")
         return DataLoader(
             eval_dataset,
             batch_size=self.args.per_device_eval_batch_size,
@@ -133,7 +147,18 @@ class LFMMoeSFTTrainer(ManualShardedTrainerMixin, Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # === 2. Run the local forward on the rank's current batch shard ===
-        output = super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+        if self.cp_config and self.cp_config["cp_size"] > 1 and "labels" in inputs:
+            output = compute_cp_causal_lm_loss(
+                model,
+                inputs,
+                self.cp_config["cp_group"],
+                self.cp_config["cp_size"],
+                return_outputs=return_outputs,
+            )
+        else:
+            output = super().compute_loss(
+                model, inputs, return_outputs, num_items_in_batch
+            )
         write_memory_trace_event("after_forward_loss", step=self._memory_trace_step())
         return output
 
@@ -141,6 +166,14 @@ class LFMMoeSFTTrainer(ManualShardedTrainerMixin, Trainer):
         # === 1. Split the incoming packed sequence for the local CP rank ===
         write_memory_trace_event("train_step_start", step=self._memory_trace_step())
         if self.cp_config and self.cp_config["cp_size"] > 1:
+            if not self._cp_batch_validated:
+                validate_cp_batch_replicated(
+                    inputs,
+                    self.cp_config["cp_group"],
+                    self.cp_config["cp_rank"],
+                    self.cp_config["cp_size"],
+                )
+                self._cp_batch_validated = True
             inputs = split_batch_for_cp(
                 inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
             )
@@ -171,7 +204,7 @@ def moe_sft_run(training_config: dict) -> None:
     train_ds_ray = ray.train.get_dataset_shard("train")
     eval_ds_ray = ray.train.get_dataset_shard("eval")
     train_dataset = ray_dataset_to_hf(train_ds_ray)
-    eval_dataset = ray_dataset_to_hf(eval_ds_ray)
+    eval_dataset = ray_dataset_to_hf(eval_ds_ray) if eval_ds_ray is not None else None
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -182,6 +215,7 @@ def moe_sft_run(training_config: dict) -> None:
     moe_config = MoETrainingConfig.from_dict(moe_config_dict)
     ep_size = moe_config_dict.get("expert_parallel_size", 1) or 1
     train_config = training_config.get("train_config", {})
+    resume_from = train_config.get("resume_from_checkpoint")
     cp_size = train_config.get("context_parallel_size", 1)
 
     use_ep = ep_size > 1
@@ -207,6 +241,9 @@ def moe_sft_run(training_config: dict) -> None:
         if k not in excluded_keys
     }
     requested_save_strategy = train_config_filtered.get("save_strategy", "no")
+    manual_sharded_checkpoint_format = train_config.get(
+        "manual_sharded_checkpoint_format", "hf"
+    )
 
     wandb_logging = bool(
         train_config.get("wandb_logging", False)
@@ -252,6 +289,8 @@ def moe_sft_run(training_config: dict) -> None:
         chat_template=train_config.get("chat_template"),
         chat_template_path=train_config.get("chat_template_path"),
     )
+    if cp_size > 1:
+        validate_cp_model_support(model, train_config)
     write_memory_trace_event("after_model_load", always=True)
     log_cuda_memory("after_load_model")
 
@@ -329,6 +368,8 @@ def moe_sft_run(training_config: dict) -> None:
         data_collator=data_collator,
     )
     trainer.run_name_template = run_name_template
+    trainer.checkpoint_staging_dir = train_config.get("checkpoint_staging_dir")
+    trainer.manual_sharded_checkpoint_format = manual_sharded_checkpoint_format
 
     trainer.callback_handler.callbacks.insert(0, MoEMetricsCallback())
     trainer.add_callback(
@@ -342,23 +383,25 @@ def moe_sft_run(training_config: dict) -> None:
     if cp_size > 1:
         cp_config = create_parallel_process_groups(cp_size)
         apply_cp_to_model(trainer.model, cp_config)
+        set_moe_sequence_partition_group(trainer.model, cp_config["cp_group"])
         trainer.cp_config = cp_config
 
     dist_barrier()
 
     try:
         logger.info("Starting trainer.train() for MoE SFT")
-        trainer.train()
+        trainer.train(resume_from_checkpoint=resume_from)
         logger.info("trainer.train() returned for MoE SFT")
         if (use_ep or use_fsdp2) and should_run_final_manual_sharded_save(
             trainer=trainer,
             requested_save_strategy=requested_save_strategy,
         ):
             logger.info("Running explicit final manual-sharded checkpoint save")
-            save_manual_sharded_trainer_checkpoint(
+            save_manual_sharded_checkpoint(
                 trainer=trainer,
                 model=trainer.model,
                 trial=None,
+                checkpoint_format=manual_sharded_checkpoint_format,
                 ep_group=ep_config["ep_group"] if ep_config is not None else None,
             )
             logger.info("Explicit final manual-sharded checkpoint save completed")

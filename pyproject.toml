@@ -32,6 +32,7 @@ dependencies = [
 
 [project.scripts]
 leap-finetune = "leap_finetune:main"
+leap-export-manual-sharded-checkpoint = "leap_finetune.cli.export_manual_sharded_checkpoint:main"
 
 [build-system]
 requires = ["hatchling"]

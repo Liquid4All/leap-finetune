@@ -116,6 +116,14 @@ class JobConfig:
         # Dataset info
         if isinstance(self.dataset, DatasetLoader):
             table.add_row("Dataset Path", self.dataset.dataset_path)
+            if self.dataset.val_dataset_path:
+                table.add_row("Validation Path", self.dataset.val_dataset_path)
+            elif self.dataset.val_split:
+                table.add_row("Validation Split", self.dataset.val_split)
+            elif self.dataset.test_size is None:
+                table.add_row("Validation", "Disabled")
+            else:
+                table.add_row("Validation Split", f"Random ({self.dataset.test_size:.2f})")
             if self.dataset.limit:
                 table.add_row("Dataset Limit", f"{self.dataset.limit:,}")
         elif isinstance(self.dataset, tuple):

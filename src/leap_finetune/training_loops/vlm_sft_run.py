@@ -124,7 +124,7 @@ def vlm_sft_run(training_config: dict) -> None:
     eval_ds_ray = ray.train.get_dataset_shard("eval")
 
     train_dataset = ray_dataset_to_hf(train_ds_ray)
-    eval_dataset = ray_dataset_to_hf(eval_ds_ray)
+    eval_dataset = ray_dataset_to_hf(eval_ds_ray) if eval_ds_ray is not None else None
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")

@@ -70,6 +70,7 @@ DEFAULT_DPO = {
     "deepspeed": DEEPSPEED_CONFIG,
     "chat_template": None,
     "chat_template_path": None,
+    "manual_sharded_checkpoint_format": "hf",
 }
 
 
@@ -100,4 +101,5 @@ MOE_DPO = {
     "deepspeed": MOE_DEEPSPEED_CONFIG,
     "chat_template": None,
     "chat_template_path": None,
+    "manual_sharded_checkpoint_format": "hf",
 }

@@ -11,10 +11,15 @@ from leap_finetune.utils.config_parser import (
     resolve_config_path,
 )
 from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
-from leap_finetune.utils.manual_sharded_trainer import (
+from leap_finetune.utils.trainer_mixins import (
     validate_manual_sharded_training_args,
 )
 from leap_finetune.utils.model_utils import should_run_final_manual_sharded_save
+from leap_finetune.utils.model_utils import (
+    _update_latest_pointer,
+    load_manual_sharded_model_checkpoint,
+    normalize_manual_sharded_checkpoint_format,
+)
 
 from conftest import BASE_DPO_DATASET, BASE_SFT_DATASET, BASE_VLM_DATASET, write_config
 
@@ -377,6 +382,21 @@ class TestTrainingConfigOverrides:
         }
         job = parse_job_config(write_config(config, tmp_path))
         assert job.training_config.value["fsdp_cpu_offload"] is True
+
+    def test_checkpoint_staging_dir_survives_config_override(self, tmp_path):
+        config = {
+            "project_name": "test_checkpoint_staging",
+            "model_name": "LFM2-24B-A2B",
+            "training_type": "moe_sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {
+                "extends": "MOE_SFT",
+                "checkpoint_staging_dir": "/tmp/checkpoint-stage",
+            },
+            "peft_config": {"use_peft": False},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.training_config.value["checkpoint_staging_dir"] == "/tmp/checkpoint-stage"
 
     def test_relative_local_paths_resolve_from_config_dir(self, tmp_path):
         data_dir = tmp_path / "data"
@@ -940,6 +960,16 @@ class TestCheckpointHelpers:
         ):
             validate_manual_sharded_training_args({"gradient_checkpointing": True})
 
+    def test_manual_sharded_checkpoint_format_names_and_legacy_aliases(self):
+        assert normalize_manual_sharded_checkpoint_format("hf") == "hf"
+        assert normalize_manual_sharded_checkpoint_format("sharded") == "sharded"
+        assert normalize_manual_sharded_checkpoint_format("both") == "both"
+        assert normalize_manual_sharded_checkpoint_format("hf_only") == "hf"
+        assert normalize_manual_sharded_checkpoint_format("resume_only") == "sharded"
+        validate_manual_sharded_training_args(
+            {"manual_sharded_checkpoint_format": "sharded"}
+        )
+
     def test_should_run_final_manual_sharded_save_detects_existing_checkpoint(
         self, tmp_path
     ):
@@ -962,6 +992,31 @@ class TestCheckpointHelpers:
             )
             is False
         )
+
+    def test_load_manual_sharded_model_checkpoint_returns_false_without_resume_dir(
+        self, tmp_path
+    ):
+        model = object()
+        assert load_manual_sharded_model_checkpoint(
+            model=model,
+            checkpoint_dir=str(tmp_path),
+        ) is False
+
+    def test_update_latest_pointer_replaces_existing_target(self, tmp_path):
+        run_dir = tmp_path / "outputs"
+        run_dir.mkdir()
+        old_ckpt = run_dir / "checkpoint-old"
+        new_ckpt = run_dir / "checkpoint-new"
+        old_ckpt.mkdir()
+        new_ckpt.mkdir()
+
+        latest = run_dir / "latest"
+        latest.symlink_to(old_ckpt.name)
+
+        _update_latest_pointer(str(run_dir), str(new_ckpt))
+
+        assert latest.is_symlink()
+        assert latest.resolve() == new_ckpt.resolve()
 
 
 # === SLURM generation ===

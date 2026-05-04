@@ -10,6 +10,7 @@ SFT_EXCLUDED_KEYS = {
     "trackio_space_id",
     "packing",
     "max_length",
+    "drop_overlength",
     "packing_strategy",
     "eval_packing",
     "padding_free",
@@ -24,6 +25,8 @@ SFT_EXCLUDED_KEYS = {
     "reshard_after_forward",
     "fsdp_cpu_offload",
     "resume_from_checkpoint",
+    "checkpoint_staging_dir",
+    "manual_sharded_checkpoint_format",
 }
 
 
@@ -134,6 +137,7 @@ MOE_SFT = {
     "eval_strategy": "epoch",
     "max_grad_norm": 1.0,
     "bf16": True,
+    "manual_sharded_checkpoint_format": "hf",
     # Distributed strategy will be set automatically:
     # - With PEFT: uses MOE_DEEPSPEED_CONFIG
     # - Without PEFT: uses FSDP_CONFIG

@@ -276,6 +276,16 @@ class TestToolCallsToPythonic:
         result = _tool_calls_to_pythonic(tc)
         assert result == "<|tool_call_start|>[get_time()]<|tool_call_end|>"
 
+    def test_none_arguments_render_as_no_args(self):
+        tc = [
+            {
+                "type": "function",
+                "function": {"name": "get_time", "arguments": None},
+            }
+        ]
+        result = _tool_calls_to_pythonic(tc)
+        assert result == "<|tool_call_start|>[get_time()]<|tool_call_end|>"
+
     def test_string_arguments(self):
         tc = [
             {

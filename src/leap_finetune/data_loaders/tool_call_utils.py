@@ -211,6 +211,8 @@ def _tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
         func = tc.get("function", tc)
         name = func["name"]
         args = func.get("arguments", {})
+        if args is None:
+            args = {}
         if isinstance(args, str):
             try:
                 args = json.loads(args)
@@ -218,7 +220,7 @@ def _tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
                 rendered_args = args.strip()
                 calls.append(f"{name}({rendered_args})")
                 continue
-        # skip malformed tool calls instead of failur error
+        # Skip malformed tool calls instead of failing the Ray worker.
         if not isinstance(args, dict):
             if isinstance(args, str):
                 rendered_args = args.strip()

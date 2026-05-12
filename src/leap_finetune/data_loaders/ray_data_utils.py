@@ -403,10 +403,9 @@ def ray_dataset_to_hf(ray_ds) -> Dataset | None:
     """
     Convert a Ray dataset shard to a HuggingFace Dataset.
 
-    Keep this path aligned with the last known-working multinode behavior:
-    materialize the shard to Python rows, then build an HF Dataset from that
-    row list. This is slower and less elegant than a pure Arrow handoff, but
-    it removes the new pre-step behavior change while we isolate the CP stall.
+    This materializes only the Ray shard assigned to the current worker. Keep
+    large full-dataset materialization in Ray/cache paths instead of local temp
+    directories.
     """
     if ray_ds is None:
         return None

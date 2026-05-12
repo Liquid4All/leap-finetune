@@ -23,6 +23,24 @@ _DISTRIBUTED_CLEANUP_KEYWORDS = (
 )
 
 
+def _trainer_reached_planned_end(trainer) -> bool:
+    state = getattr(trainer, "state", None)
+    args = getattr(trainer, "args", None)
+    if state is None or args is None:
+        return False
+
+    max_steps = int(getattr(args, "max_steps", -1) or -1)
+    global_step = int(getattr(state, "global_step", 0) or 0)
+    if max_steps > 0:
+        return global_step >= max_steps
+
+    epoch = getattr(state, "epoch", None)
+    num_train_epochs = getattr(args, "num_train_epochs", None)
+    if epoch is None or num_train_epochs is None:
+        return False
+    return float(epoch) >= float(num_train_epochs)
+
+
 class RayDataLoaderMixin:
     """Bypasses Accelerate's DistributedSampler for Ray-sharded data.
 
@@ -67,8 +85,8 @@ class RayDataLoaderMixin:
 def run_training_safely(trainer, **kwargs):
     """Run trainer.train() with graceful handling of post-training CUDA/NCCL errors.
 
-    Only suppresses distributed errors that occur *after* training made progress
-    (global_step > 0), which indicates the error is from cleanup/teardown rather
+    Only suppresses distributed errors that occur after the configured training
+    target is reached, which indicates the error is from cleanup/teardown rather
     than a real training failure.
 
     Any extra kwargs are forwarded to trainer.train() (e.g. resume_from_checkpoint).
@@ -78,8 +96,7 @@ def run_training_safely(trainer, **kwargs):
         logger.info("Training completed successfully")
     except RuntimeError as e:
         error_msg = str(e).lower()
-        trained = getattr(trainer.state, "global_step", 0) > 0
-        is_cleanup_error = trained and any(
+        is_cleanup_error = _trainer_reached_planned_end(trainer) and any(
             kw in error_msg for kw in _DISTRIBUTED_CLEANUP_KEYWORDS
         )
         if is_cleanup_error:

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -21,6 +22,8 @@ from transformers.trainer import SCALER_NAME, SCHEDULER_NAME
 from transformers.trainer import TRAINER_STATE_NAME, TRAINING_ARGS_NAME
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
+from leap_finetune.utils.load_models import normalize_model_config_overrides
+
 logger = logging.getLogger(__name__)
 
 # Manual-sharded MoE runs use two distinct checkpoint concepts:
@@ -28,10 +31,9 @@ logger = logging.getLogger(__name__)
 #    `manual_sharded_resume/` plus trainer/RNG metadata at the checkpoint root
 # 2. explicit HF model exports, produced on demand from the current model or from a
 #    previously saved resumable checkpoint
-MANUAL_SHARDED_FORMAT_VERSION = 2
+MANUAL_SHARDED_FORMAT_VERSION = 3
 MANUAL_SHARDED_METADATA_NAME = "manual_sharded_checkpoint.json"
 MANUAL_SHARDED_RESUME_DIR = "manual_sharded_resume"
-DEFAULT_EXPORT_SHARD_SIZE = 5 * 1024**3
 HF_EXPORT_MAX_SHARD_SIZE = "50GB"
 MANUAL_SHARDED_CHECKPOINT_FORMATS = {"sharded", "hf", "both"}
 LEGACY_MANUAL_SHARDED_CHECKPOINT_FORMATS = {
@@ -94,13 +96,81 @@ def normalize_manual_sharded_checkpoint_format(checkpoint_format: str) -> str:
     )
 
 
-def _save_root_metadata(checkpoint_dir: str, *, save_only_model: bool) -> None:
+def _json_safe(value: Any) -> Any:
+    """Convert metadata values to JSON-safe objects without losing structure."""
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        if isinstance(value, dict):
+            return {str(k): _json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_json_safe(v) for v in value]
+        return str(value)
+
+
+def _chat_template_metadata(processing_class) -> dict[str, Any]:
+    chat_template = getattr(processing_class, "chat_template", None)
+
+    metadata: dict[str, Any] = {}
+    if isinstance(chat_template, str):
+        metadata["chat_template"] = chat_template
+        metadata["chat_template_sha256"] = hashlib.sha256(
+            chat_template.encode("utf-8")
+        ).hexdigest()
+    return metadata
+
+
+def build_manual_sharded_export_metadata_from_config(
+    training_config: dict,
+    *,
+    processing_class=None,
+) -> dict[str, Any]:
+    """Build durable checkpoint metadata from the original run config."""
+    train_config = training_config.get("train_config", {}) or {}
+    metadata: dict[str, Any] = {
+        "training_config": _json_safe(training_config),
+        "base_model_name": training_config.get("model_name"),
+        "model_config": training_config.get("model_config") or {},
+        "max_length": train_config.get("max_length"),
+        "chat_template_path": train_config.get("chat_template_path"),
+    }
+    if train_config.get("chat_template") is not None:
+        metadata["chat_template"] = train_config.get("chat_template")
+    metadata.update(_chat_template_metadata(processing_class))
+    return {k: v for k, v in _json_safe(metadata).items() if v is not None}
+
+
+def finalize_manual_sharded_export_metadata(
+    export_metadata: dict[str, Any] | None,
+    *,
+    processing_class=None,
+) -> dict[str, Any]:
+    """Finalize durable checkpoint metadata with the active tokenizer template."""
+    metadata = dict(export_metadata or {})
+    metadata.update(_chat_template_metadata(processing_class))
+    return {k: v for k, v in _json_safe(metadata).items() if v is not None}
+
+
+def _save_root_metadata(
+    checkpoint_dir: str,
+    *,
+    save_only_model: bool,
+    checkpoint_format: str,
+    export_metadata: dict[str, Any] | None = None,
+) -> None:
     metadata = {
         "format_version": MANUAL_SHARDED_FORMAT_VERSION,
+        "checkpoint_format": checkpoint_format,
         "resume_dir": MANUAL_SHARDED_RESUME_DIR,
         "save_only_model": bool(save_only_model),
-        "has_optimizer_state": not bool(save_only_model),
+        "has_optimizer_state": (
+            checkpoint_format in {"sharded", "both"} and not bool(save_only_model)
+        ),
+        "has_resume_state": checkpoint_format in {"sharded", "both"},
     }
+    if export_metadata:
+        metadata.update(_json_safe(export_metadata))
     with open(_manual_sharded_metadata_path(checkpoint_dir), "w") as handle:
         json.dump(metadata, handle, indent=2)
 
@@ -111,6 +181,11 @@ def _load_root_metadata(checkpoint_dir: str) -> dict[str, Any]:
         return {}
     with open(metadata_path) as handle:
         return json.load(handle)
+
+
+def load_manual_sharded_checkpoint_metadata(checkpoint_dir: str) -> dict[str, Any]:
+    """Load manual-sharded checkpoint metadata for export tooling."""
+    return _load_root_metadata(checkpoint_dir)
 
 
 def _checkpoint_staging_dir(output_dir: str, staging_root: str) -> str:
@@ -284,17 +359,110 @@ def _unwrap_model_for_hf_export(model: torch.nn.Module, accelerator) -> torch.nn
         return accelerator.unwrap_model(model)
 
 
+def _model_state_has_lm_head(state_dict: dict[str, Any]) -> bool:
+    return any(
+        key == "lm_head.weight" or key.endswith(".lm_head.weight")
+        for key in state_dict
+    )
+
+
+def _rope_type(rope_config: dict[str, Any]) -> str | None:
+    return rope_config.get("rope_type") or rope_config.get("type")
+
+
+def _apply_yarn_export_config(config: Any, original_max_position_embeddings) -> None:
+    rope_config = None
+    if isinstance(getattr(config, "rope_parameters", None), dict):
+        rope_config = dict(config.rope_parameters)
+    elif isinstance(getattr(config, "rope_scaling", None), dict):
+        rope_config = dict(config.rope_scaling)
+
+    if not rope_config or _rope_type(rope_config) != "yarn":
+        return
+
+    if (
+        "original_max_position_embeddings" not in rope_config
+        and original_max_position_embeddings is not None
+    ):
+        rope_config["original_max_position_embeddings"] = int(
+            original_max_position_embeddings
+        )
+
+    # Keep the LFM-native field and the standard HF/vLLM field in sync. Different
+    # consumers look at different names, and both must describe the trained RoPE.
+    rope_parameters = dict(rope_config)
+    rope_parameters["rope_type"] = _rope_type(rope_parameters)
+    config.rope_parameters = rope_parameters
+
+    rope_scaling = dict(rope_config)
+    rope_scaling["type"] = _rope_type(rope_scaling)
+    rope_scaling["rope_type"] = _rope_type(rope_scaling)
+    if isinstance(getattr(type(config), "rope_scaling", None), property):
+        # Newer Transformers configs expose rope_scaling as a compatibility
+        # property over rope_parameters. Write the literal key as well so
+        # config.json remains readable by HF/vLLM consumers that expect it.
+        config.__dict__["rope_scaling"] = rope_scaling
+    else:
+        config.rope_scaling = rope_scaling
+
+
+def _apply_model_config_for_hf_export(
+    *,
+    model_to_save: torch.nn.Module,
+    state_dict: dict[str, Any],
+    export_metadata: dict[str, Any] | None = None,
+) -> None:
+    """Patch the config so HF/vLLM loaders see the same model semantics as training."""
+    config = getattr(model_to_save, "config", None)
+    if config is None:
+        return
+
+    original_max_position_embeddings = getattr(config, "max_position_embeddings", None)
+    model_config = {}
+    if export_metadata:
+        model_config = dict(export_metadata.get("model_config") or {})
+
+    if model_config:
+        normalized = normalize_model_config_overrides(config, model_config)
+        for key, value in normalized.items():
+            setattr(config, key, value)
+
+    max_length = export_metadata.get("max_length") if export_metadata else None
+    if max_length is not None:
+        current_max = getattr(config, "max_position_embeddings", None)
+        if current_max is None or int(current_max) < int(max_length):
+            config.max_position_embeddings = int(max_length)
+
+    _apply_yarn_export_config(config, original_max_position_embeddings)
+
+    if _model_state_has_lm_head(state_dict) and getattr(
+        config, "tie_word_embeddings", False
+    ):
+        logger.warning(
+            "HF export includes lm_head.weight while config ties embeddings; "
+            "setting tie_word_embeddings=False so loaders keep the trained head."
+        )
+        config.tie_word_embeddings = False
+
+
 def _save_hf_pretrained_model(
     *,
     model_to_save: torch.nn.Module,
     state_dict: dict[str, Any],
     export_dir: str,
+    export_metadata: dict[str, Any] | None = None,
 ) -> None:
     if not hasattr(model_to_save, "save_pretrained"):
         raise TypeError(
             "Manual-sharded HF export requires an unwrapped model with "
             "save_pretrained(...)."
         )
+
+    _apply_model_config_for_hf_export(
+        model_to_save=model_to_save,
+        state_dict=state_dict,
+        export_metadata=export_metadata,
+    )
 
     os.makedirs(export_dir, exist_ok=True)
     model_to_save.save_pretrained(
@@ -317,7 +485,12 @@ def _save_root_hf_export(
     data_collator,
     training_args,
     staging_dir: str | None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> None:
+    logger.warning(
+        "Manual-sharded HF export gathers a full CPU state dict on rank 0; "
+        "use manual_sharded_checkpoint_format=sharded for low-memory resumable saves."
+    )
     model_state_dict = get_model_state_dict(
         model,
         options=StateDictOptions(full_state_dict=True, cpu_offload=True),
@@ -337,6 +510,7 @@ def _save_root_hf_export(
             model_to_save=model_to_save,
             state_dict=model_state_dict,
             export_dir=export_dir,
+            export_metadata=export_metadata,
         )
 
         if processing_class is not None:
@@ -366,6 +540,7 @@ def save_fsdp2_model_checkpoint(
     data_collator,
     training_args,
     checkpoint_staging_dir: str | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Save the HF-export layer for a manual FSDP2 model."""
     global_rank = _global_rank()
@@ -381,6 +556,7 @@ def save_fsdp2_model_checkpoint(
         training_args=training_args,
         staging_dir=staging_dir,
         accelerator=accelerator,
+        export_metadata=export_metadata,
     )
     logger.info("FSDP2 root export end rank=%s output_dir=%s", global_rank, output_dir)
 
@@ -392,11 +568,17 @@ def save_fsdp2_trainer_checkpoint(
     trial,
 ) -> None:
     """Backward-compatible alias for the unified manual-sharded checkpoint save."""
+    export_metadata = (
+        trainer.get_manual_sharded_export_metadata()
+        if hasattr(trainer, "get_manual_sharded_export_metadata")
+        else None
+    )
     save_manual_sharded_trainer_checkpoint(
         trainer=trainer,
         model=model,
         trial=trial,
         ep_group=None,
+        export_metadata=export_metadata,
     )
 
 
@@ -410,6 +592,7 @@ def save_manual_sharded_model_export(
     training_args,
     ep_group: dist.ProcessGroup | None = None,
     checkpoint_staging_dir: str | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Export the current manual-sharded model as an HF model directory."""
     if ep_group is not None:
@@ -422,6 +605,7 @@ def save_manual_sharded_model_export(
             training_args=training_args,
             ep_group=ep_group,
             checkpoint_staging_dir=checkpoint_staging_dir,
+            export_metadata=export_metadata,
         )
         return
 
@@ -433,6 +617,7 @@ def save_manual_sharded_model_export(
         data_collator=data_collator,
         training_args=training_args,
         checkpoint_staging_dir=checkpoint_staging_dir,
+        export_metadata=export_metadata,
     )
 
 
@@ -442,6 +627,8 @@ def save_manual_sharded_trainer_checkpoint(
     model: torch.nn.Module,
     trial,
     ep_group: dist.ProcessGroup | None = None,
+    checkpoint_format: str = "sharded",
+    export_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Save a resumable manual-sharded training checkpoint.
 
@@ -487,7 +674,12 @@ def save_manual_sharded_trainer_checkpoint(
     if _global_rank() == 0:
         _save_scheduler_state(trainer, resume_dir)
         _save_scaler_state(trainer, resume_dir)
-        _save_root_metadata(output_dir, save_only_model=trainer.args.save_only_model)
+        _save_root_metadata(
+            output_dir,
+            save_only_model=trainer.args.save_only_model,
+            checkpoint_format=checkpoint_format,
+            export_metadata=export_metadata,
+        )
     _world_barrier()
 
     if _global_rank() == 0:
@@ -505,6 +697,7 @@ def save_manual_sharded_hf_checkpoint(
     model: torch.nn.Module,
     trial,
     ep_group: dist.ProcessGroup | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Save a named checkpoint directory containing only an HF model export.
 
@@ -535,9 +728,16 @@ def save_manual_sharded_hf_checkpoint(
         training_args=trainer.args,
         ep_group=ep_group,
         checkpoint_staging_dir=getattr(trainer, "checkpoint_staging_dir", None),
+        export_metadata=export_metadata,
     )
 
     if _global_rank() == 0:
+        _save_root_metadata(
+            output_dir,
+            save_only_model=True,
+            checkpoint_format="hf",
+            export_metadata=export_metadata,
+        )
         _save_rng_state(trainer, output_dir)
         trainer.state.save_to_json(os.path.join(output_dir, TRAINER_STATE_NAME))
         _update_latest_pointer(run_dir, output_dir)
@@ -553,6 +753,7 @@ def save_manual_sharded_checkpoint(
     trial,
     checkpoint_format: str,
     ep_group: dist.ProcessGroup | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Save a manual-sharded checkpoint according to the configured format."""
     checkpoint_format = normalize_manual_sharded_checkpoint_format(checkpoint_format)
@@ -563,6 +764,8 @@ def save_manual_sharded_checkpoint(
             model=model,
             trial=trial,
             ep_group=ep_group,
+            checkpoint_format="sharded",
+            export_metadata=export_metadata,
         )
         return
 
@@ -572,6 +775,7 @@ def save_manual_sharded_checkpoint(
             model=model,
             trial=trial,
             ep_group=ep_group,
+            export_metadata=export_metadata,
         )
         return
 
@@ -582,6 +786,8 @@ def save_manual_sharded_checkpoint(
         model=model,
         trial=trial,
         ep_group=ep_group,
+        checkpoint_format="both",
+        export_metadata=export_metadata,
     )
     output_dir = resolve_checkpoint_output_dir(
         run_dir=trainer._get_output_dir(trial=trial),
@@ -598,6 +804,7 @@ def save_manual_sharded_checkpoint(
         training_args=trainer.args,
         ep_group=ep_group,
         checkpoint_staging_dir=getattr(trainer, "checkpoint_staging_dir", None),
+        export_metadata=export_metadata,
     )
 
 
@@ -730,6 +937,7 @@ def export_manual_sharded_checkpoint_as_hf(
     training_args,
     ep_group: dist.ProcessGroup | None = None,
     checkpoint_staging_dir: str | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Export a resumable manual-sharded checkpoint as a standalone HF model.
 
@@ -746,6 +954,10 @@ def export_manual_sharded_checkpoint_as_hf(
             f"No manual-sharded resume state found under {checkpoint_dir!r}"
         )
 
+    checkpoint_metadata = _load_root_metadata(checkpoint_dir)
+    if export_metadata:
+        checkpoint_metadata.update(_json_safe(export_metadata))
+
     save_manual_sharded_model_export(
         model=model,
         accelerator=accelerator,
@@ -755,6 +967,7 @@ def export_manual_sharded_checkpoint_as_hf(
         training_args=training_args,
         ep_group=ep_group,
         checkpoint_staging_dir=checkpoint_staging_dir,
+        export_metadata=checkpoint_metadata,
     )
 
 
@@ -786,6 +999,7 @@ def save_ep_model_checkpoint(
     training_args,
     ep_group: dist.ProcessGroup,
     checkpoint_staging_dir: str | None = None,
+    export_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Save the HF-export layer for an EP/FSDP2 model."""
     del ep_group
@@ -802,6 +1016,7 @@ def save_ep_model_checkpoint(
         training_args=training_args,
         staging_dir=staging_dir,
         accelerator=accelerator,
+        export_metadata=export_metadata,
     )
     logger.info("EP root export end rank=%s output_dir=%s", global_rank, output_dir)
 
@@ -814,9 +1029,15 @@ def save_ep_trainer_checkpoint(
     ep_group: dist.ProcessGroup,
 ) -> None:
     """Backward-compatible alias for the unified manual-sharded checkpoint save."""
+    export_metadata = (
+        trainer.get_manual_sharded_export_metadata()
+        if hasattr(trainer, "get_manual_sharded_export_metadata")
+        else None
+    )
     save_manual_sharded_trainer_checkpoint(
         trainer=trainer,
         model=model,
         trial=trial,
         ep_group=ep_group,
+        export_metadata=export_metadata,
     )

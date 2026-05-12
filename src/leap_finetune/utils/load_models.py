@@ -61,7 +61,7 @@ def _apply_chat_template_override(
     return tokenizer
 
 
-def _normalize_model_config_overrides(
+def normalize_model_config_overrides(
     config: AutoConfig,
     model_config: dict | None,
 ) -> dict:
@@ -154,7 +154,7 @@ def load_model(
     logger.info(f"Loading model: {model_id}")
 
     config = AutoConfig.from_pretrained(model_id)
-    normalized_model_config = _normalize_model_config_overrides(config, model_config)
+    normalized_model_config = normalize_model_config_overrides(config, model_config)
     if normalized_model_config:
         for key, value in normalized_model_config.items():
             setattr(config, key, value)

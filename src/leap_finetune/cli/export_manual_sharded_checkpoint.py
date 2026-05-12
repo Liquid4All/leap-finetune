@@ -11,7 +11,10 @@ from transformers import TrainingArguments
 
 from leap_finetune.training_loops.sft_run import build_sft_data_collator
 from leap_finetune.utils.load_models import load_model
-from leap_finetune.utils.model_utils import export_manual_sharded_checkpoint_as_hf
+from leap_finetune.utils.model_utils import (
+    export_manual_sharded_checkpoint_as_hf,
+    load_manual_sharded_checkpoint_metadata,
+)
 from leap_finetune.utils.moe_parallel import apply_fsdp2, create_dp_mesh
 
 
@@ -47,7 +50,7 @@ def _init_distributed_for_export() -> None:
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
 
 
-def _load_model_config(args: argparse.Namespace) -> dict | None:
+def _load_model_config(args: argparse.Namespace, metadata: dict) -> dict | None:
     if args.model_config_json and args.model_config_file:
         raise ValueError("Use only one of --model-config-json or --model-config-file")
     if args.model_config_file:
@@ -55,7 +58,7 @@ def _load_model_config(args: argparse.Namespace) -> dict | None:
             return json.load(handle)
     if args.model_config_json:
         return json.loads(args.model_config_json)
-    return None
+    return metadata.get("model_config")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,11 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
             "required if you are already on a GPU host."
         )
     )
-    parser.add_argument("--model-name", "--base-model", dest="model_name", required=True)
+    parser.add_argument("--model-name", "--base-model", dest="model_name", default=None)
     parser.add_argument("--checkpoint-dir", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--chat-template-path", required=True)
-    parser.add_argument("--max-length", type=int, default=120000)
+    parser.add_argument("--chat-template-path", default=None)
+    parser.add_argument("--max-length", type=int, default=None)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--model-config-json", default=None)
     parser.add_argument("--model-config-file", default=None)
@@ -90,11 +93,20 @@ def main() -> None:
     args = parser.parse_args()
 
     _init_distributed_for_export()
-    model_config = _load_model_config(args)
+    metadata = load_manual_sharded_checkpoint_metadata(args.checkpoint_dir)
+    model_config = _load_model_config(args, metadata)
+    model_name = args.model_name or metadata.get("base_model_name")
+    if not model_name:
+        raise ValueError(
+            "--model-name is required for checkpoints that do not record base_model_name"
+        )
+    max_length = args.max_length or metadata.get("max_length") or 120000
+    chat_template = None if args.chat_template_path else metadata.get("chat_template")
 
     model, tokenizer = load_model(
-        args.model_name,
+        model_name,
         model_config=model_config,
+        chat_template=chat_template,
         chat_template_path=args.chat_template_path,
     )
 
@@ -110,7 +122,7 @@ def main() -> None:
         tokenizer,
         {
             "assistant_only_loss": True,
-            "max_length": args.max_length,
+            "max_length": max_length,
             "packing": False,
             "padding_free": False,
         },
@@ -134,6 +146,13 @@ def main() -> None:
         data_collator=data_collator,
         training_args=training_args,
         checkpoint_staging_dir=args.checkpoint_staging_dir,
+        export_metadata={
+            **metadata,
+            "base_model_name": model_name,
+            "model_config": model_config,
+            "max_length": max_length,
+            "chat_template": tokenizer.chat_template,
+        },
     )
 
     dist.barrier()

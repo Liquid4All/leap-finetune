@@ -2,7 +2,6 @@ import logging
 from typing import cast
 
 import ray.train
-import torch.distributed as dist
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
@@ -13,15 +12,6 @@ from leap_finetune.evaluation import (
     create_llm_benchmarks_from_config,
 )
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
-from leap_finetune.utils.context_parallel import (
-    aggregate_cp_loss,
-    apply_cp_to_model,
-    create_parallel_process_groups,
-    split_batch_for_cp,
-    validate_cp_batch_replicated,
-    validate_cp_config,
-    validate_cp_model_support,
-)
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
     finish_tracker,
@@ -36,12 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class LFMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
-    """DPO trainer with Ray-sharded data loaders and optional CP loss handling."""
-
-    def __init__(self, cp_config: dict | None = None, **kwargs):
-        super().__init__(**kwargs)
-        self.cp_config = cp_config
-        self._cp_batch_validated = False
+    """DPO trainer with Ray-sharded data loaders."""
 
     def _prepare_dataset(self, dataset, *args, **kwargs):
         return dataset
@@ -49,26 +34,6 @@ class LFMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = self._prepare_inputs(inputs)
         return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
-
-    def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
-        if self.cp_config and self.cp_config["cp_size"] > 1:
-            if not self._cp_batch_validated:
-                validate_cp_batch_replicated(
-                    inputs,
-                    self.cp_config["cp_group"],
-                    self.cp_config["cp_rank"],
-                    self.cp_config["cp_size"],
-                )
-                self._cp_batch_validated = True
-            inputs = split_batch_for_cp(
-                inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
-            )
-        loss = super().training_step(model, inputs, num_items_in_batch, **kwargs)
-        if self.cp_config and self.cp_config["cp_size"] > 1:
-            loss = aggregate_cp_loss(
-                loss, self.cp_config["cp_group"], self.cp_config["cp_size"]
-            )
-        return loss
 
 
 def dpo_run(training_config: dict) -> None:
@@ -133,6 +98,11 @@ def dpo_run(training_config: dict) -> None:
     training_args = DPOConfig(**config_kwargs)
 
     cp_size = train_config.get("context_parallel_size", 1)
+    if cp_size > 1:
+        raise ValueError(
+            "context_parallel_size > 1 is currently supported for SFT/MoE SFT only. "
+            "DPO needs a CP-aware preference loss/eval path before it can be enabled."
+        )
     model_config = training_config.get("model_config")
     model, tokenizer = load_model(
         model_name,
@@ -141,13 +111,6 @@ def dpo_run(training_config: dict) -> None:
         chat_template_path=train_config.get("chat_template_path"),
     )
 
-    cp_config = None
-    if cp_size > 1:
-        validate_cp_model_support(model, train_config)
-        validate_cp_config(cp_size, world_size=dist.get_world_size())
-        cp_config = create_parallel_process_groups(cp_size)
-        apply_cp_to_model(model, cp_config)
-
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
 
@@ -155,7 +118,6 @@ def dpo_run(training_config: dict) -> None:
         model.warnings_issued = {}
 
     trainer = LFMDPOTrainer(
-        cp_config=cp_config,
         model=model,
         args=training_args,
         train_dataset=train_dataset,

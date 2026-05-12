@@ -17,16 +17,7 @@ from leap_finetune.training_configs.distributed_configs import (
     resolve_reshard_after_forward,
 )
 from leap_finetune.utils.callbacks import LeapCheckpointCallback, MoEMetricsCallback
-from leap_finetune.utils.context_parallel import (
-    aggregate_cp_loss,
-    apply_cp_to_model,
-    create_parallel_process_groups,
-    dist_barrier,
-    split_batch_for_cp,
-    validate_cp_batch_replicated,
-    validate_cp_config,
-    validate_cp_model_support,
-)
+from leap_finetune.utils.context_parallel import dist_barrier
 from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
     init_wandb_if_enabled,
@@ -38,13 +29,13 @@ from leap_finetune.utils.trainer_mixins import (
     validate_manual_sharded_training_args,
 )
 from leap_finetune.utils.model_utils import (
+    build_manual_sharded_export_metadata_from_config,
     save_manual_sharded_checkpoint,
     should_run_final_manual_sharded_save,
 )
 from leap_finetune.utils.moe_losses import (
     MoETrainingConfig,
     apply_moe_losses,
-    set_moe_sequence_partition_group,
 )
 from leap_finetune.utils.moe_parallel import (
     apply_ep_to_model,
@@ -75,39 +66,34 @@ MOE_DPO_EXCLUDED_KEYS = {
 
 
 class LFMMoeDPOTrainer(ManualShardedCheckpointMixin, DPOTrainer):
-    """DPO Trainer for MoE models with EP and optional CP support."""
+    """DPO Trainer for MoE models with EP/FSDP2 support."""
 
     def __init__(
         self,
         ep_config: dict | None = None,
         manual_fsdp2: bool = False,
-        cp_config: dict | None = None,
+        run_name_template: str | None = None,
+        checkpoint_staging_dir: str | None = None,
+        manual_sharded_checkpoint_format: str = "hf",
+        manual_sharded_export_metadata: dict | None = None,
         **kwargs,
     ):
         self.manual_sharded = manual_fsdp2
+        self.run_name_template = run_name_template
+        self.checkpoint_staging_dir = checkpoint_staging_dir
+        self.manual_sharded_checkpoint_format = manual_sharded_checkpoint_format
+        self.manual_sharded_export_metadata = dict(manual_sharded_export_metadata or {})
         super().__init__(**kwargs)
         self.ep_config = ep_config
-        self.cp_config = cp_config
-        self._cp_batch_validated = False
 
     def _prepare_dataset(self, dataset, *args, **kwargs):
         return dataset
 
     def get_train_dataloader(self):
-        sampler_generator = None
-        if self.cp_config is not None and self.cp_config.get("cp_size", 1) > 1:
-            sampler_generator = torch.Generator().manual_seed(
-                42 + int(self.cp_config.get("dp_rank", 0))
-            )
-
         sampler = get_length_grouped_sampler(
             self.train_dataset,
             self._train_batch_size,
-            generator=sampler_generator,
         )
-        dataloader_kwargs = {}
-        if sampler is None and sampler_generator is not None:
-            dataloader_kwargs["generator"] = sampler_generator
         return DataLoader(
             self.train_dataset,
             batch_size=self._train_batch_size,
@@ -115,7 +101,6 @@ class LFMMoeDPOTrainer(ManualShardedCheckpointMixin, DPOTrainer):
             shuffle=sampler is None,
             sampler=sampler,
             drop_last=True,
-            **dataloader_kwargs,
         )
 
     def get_eval_dataloader(self, eval_dataset=None):
@@ -147,24 +132,7 @@ class LFMMoeDPOTrainer(ManualShardedCheckpointMixin, DPOTrainer):
     def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
         if self.ep_config:
             inputs = self._replicate_batch_across_ep(inputs)
-        if self.cp_config and self.cp_config["cp_size"] > 1:
-            if not self._cp_batch_validated:
-                validate_cp_batch_replicated(
-                    inputs,
-                    self.cp_config["cp_group"],
-                    self.cp_config["cp_rank"],
-                    self.cp_config["cp_size"],
-                )
-                self._cp_batch_validated = True
-            inputs = split_batch_for_cp(
-                inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
-            )
-        loss = super().training_step(model, inputs, num_items_in_batch, **kwargs)
-        if self.cp_config and self.cp_config["cp_size"] > 1:
-            loss = aggregate_cp_loss(
-                loss, self.cp_config["cp_group"], self.cp_config["cp_size"]
-            )
-        return loss
+        return super().training_step(model, inputs, num_items_in_batch, **kwargs)
 
     def _replicate_batch_across_ep(self, inputs: dict) -> dict:
         """Broadcast batch from EP rank 0 to all EP ranks in the group."""
@@ -192,7 +160,7 @@ class LFMMoeDPOTrainer(ManualShardedCheckpointMixin, DPOTrainer):
 
 
 def moe_dpo_run(training_config: dict) -> None:
-    """MoE DPO training loop with revised EP support and current CP support."""
+    """MoE DPO training loop with revised EP support."""
     setup_worker_logging()
     if torch.cuda.is_available():
         worker_device = get_ray_torch_device()
@@ -215,21 +183,15 @@ def moe_dpo_run(training_config: dict) -> None:
     train_config = training_config.get("train_config", {})
     resume_from = train_config.get("resume_from_checkpoint")
     cp_size = train_config.get("context_parallel_size", 1)
+    if cp_size > 1:
+        raise ValueError(
+            "context_parallel_size > 1 is currently supported for SFT/MoE SFT only. "
+            "DPO needs a CP-aware preference loss/eval path before it can be enabled."
+        )
     use_ep = ep_size > 1
     use_fsdp2 = peft_config is None and not use_ep
-    if use_ep and cp_size > 1:
-        raise ValueError(
-            "expert_parallel_size > 1 cannot be combined with context_parallel_size > 1. "
-            "Only DP x CP is supported for context parallelism."
-        )
 
     run_name_template = train_config.get("leap_run_name_template")
-
-    if cp_size > 1:
-        validate_cp_config(
-            cp_size,
-            world_size=dist.get_world_size(),
-        )
 
     reshard_after_forward = resolve_reshard_after_forward(
         train_config,
@@ -292,15 +254,13 @@ def moe_dpo_run(training_config: dict) -> None:
         chat_template=train_config.get("chat_template"),
         chat_template_path=train_config.get("chat_template_path"),
     )
-    if cp_size > 1:
-        validate_cp_model_support(model, train_config)
 
     ep_config = None
     device_mesh = None
     dp_mesh = None
     num_experts = getattr(model.config, "num_experts", None)
 
-    if use_ep or use_fsdp2 or cp_size > 1:
+    if use_ep or use_fsdp2:
         logger.info("Waiting for all ranks to finish model loading...")
         dist_barrier()
 
@@ -333,19 +293,24 @@ def moe_dpo_run(training_config: dict) -> None:
     if not hasattr(model, "warnings_issued"):
         model.warnings_issued = {}
 
+    manual_sharded_export_metadata = build_manual_sharded_export_metadata_from_config(
+        training_config,
+        processing_class=tokenizer,
+    )
+
     trainer = LFMMoeDPOTrainer(
         ep_config=ep_config,
         manual_fsdp2=(use_ep or use_fsdp2),
-        cp_config=None,
+        run_name_template=run_name_template,
+        checkpoint_staging_dir=train_config.get("checkpoint_staging_dir"),
+        manual_sharded_checkpoint_format=manual_sharded_checkpoint_format,
+        manual_sharded_export_metadata=manual_sharded_export_metadata,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=cast(PreTrainedTokenizerBase, tokenizer),
     )
-    trainer.run_name_template = run_name_template
-    trainer.checkpoint_staging_dir = train_config.get("checkpoint_staging_dir")
-    trainer.manual_sharded_checkpoint_format = manual_sharded_checkpoint_format
 
     trainer.add_callback(
         LeapCheckpointCallback(
@@ -355,12 +320,6 @@ def moe_dpo_run(training_config: dict) -> None:
     )
     trainer.add_callback(MoEMetricsCallback())
     trainer = prepare_trainer(trainer)
-
-    if cp_size > 1:
-        cp_config = create_parallel_process_groups(cp_size)
-        apply_cp_to_model(trainer.model, cp_config)
-        set_moe_sequence_partition_group(trainer.model, cp_config["cp_group"])
-        trainer.cp_config = cp_config
 
     dist_barrier()
 
@@ -376,6 +335,7 @@ def moe_dpo_run(training_config: dict) -> None:
                 trial=None,
                 checkpoint_format=manual_sharded_checkpoint_format,
                 ep_group=ep_config["ep_group"] if ep_config is not None else None,
+                export_metadata=trainer.get_manual_sharded_export_metadata(),
             )
         logger.info("MoE DPO training completed successfully")
     except RuntimeError as e:

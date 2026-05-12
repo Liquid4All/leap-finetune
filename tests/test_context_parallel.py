@@ -17,6 +17,7 @@ from leap_finetune.utils.context_parallel import (
     validate_cp_model_support,
 )
 
+
 def test_split_batch_for_cp_uses_consecutive_chunks():
     batch = {
         "input_ids": torch.arange(8, dtype=torch.long).unsqueeze(0),
@@ -204,6 +205,39 @@ def test_cp_causal_lm_loss_scales_before_distributed_gradient_average(monkeypatc
     assert model.logits.grad is not None
 
 
+def test_cp_causal_lm_loss_uses_num_items_in_batch_denominator(monkeypatch):
+    def fake_all_reduce(tensor, op=None, group=None):
+        tensor.mul_(2)
+
+    monkeypatch.setattr(
+        "leap_finetune.utils.context_parallel.dist.all_reduce",
+        fake_all_reduce,
+    )
+
+    logits = torch.zeros(1, 3, 5)
+    model = _DummyCausalLM(logits)
+    inputs = {
+        "input_ids": torch.tensor([[0, 1, 2]], dtype=torch.long),
+        "labels": torch.tensor([[-100, 1, 2]], dtype=torch.long),
+    }
+
+    loss = compute_cp_causal_lm_loss(
+        model,
+        inputs,
+        cp_group="group",
+        cp_size=4,
+        num_items_in_batch=torch.tensor(8),
+    )
+
+    local_loss_sum = F.cross_entropy(
+        logits[:, :-1].reshape(-1, logits.shape[-1]),
+        inputs["labels"][:, 1:].reshape(-1),
+        ignore_index=-100,
+        reduction="sum",
+    )
+    assert torch.allclose(loss, local_loss_sum * 4 / 8)
+
+
 def test_cp_causal_lm_loss_uses_precomputed_shift_labels(monkeypatch):
     def fake_all_reduce(tensor, op=None, group=None):
         return None
@@ -231,6 +265,71 @@ def test_cp_causal_lm_loss_uses_precomputed_shift_labels(monkeypatch):
     )
 
     assert loss.item() < 0.001
+
+
+def test_cp_prediction_step_splits_eval_batch_before_loss(monkeypatch, tmp_path):
+    from transformers import TrainingArguments
+
+    from leap_finetune.training_loops.sft_run import LFMSFTTrainer
+
+    def fake_all_reduce(tensor, op=None, group=None):
+        tensor.mul_(2)
+
+    def fake_all_gather_object(output, fingerprint, group=None):
+        output[0] = fingerprint
+        output[1] = fingerprint
+
+    monkeypatch.setattr(
+        "leap_finetune.utils.context_parallel.dist.all_reduce",
+        fake_all_reduce,
+    )
+    monkeypatch.setattr(
+        "leap_finetune.utils.context_parallel.dist.all_gather_object",
+        fake_all_gather_object,
+    )
+
+    class ShapeRecordingLM(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.param = nn.Parameter(torch.zeros(()))
+            self.seen_input_shapes = []
+
+        def forward(self, input_ids=None, **kwargs):
+            self.seen_input_shapes.append(tuple(input_ids.shape))
+            logits = torch.zeros(
+                input_ids.shape[0],
+                input_ids.shape[1],
+                5,
+                device=input_ids.device,
+            )
+            return {"logits": logits + self.param}
+
+    model = ShapeRecordingLM()
+    trainer = LFMSFTTrainer(
+        model=model,
+        args=TrainingArguments(
+            output_dir=str(tmp_path),
+            use_cpu=True,
+            report_to=[],
+            per_device_eval_batch_size=1,
+        ),
+        cp_config={"cp_group": "group", "cp_rank": 1, "cp_size": 2},
+    )
+    inputs = {
+        "input_ids": torch.arange(4, dtype=torch.long).unsqueeze(0),
+        "labels": torch.tensor([[0, 1, 2, 3]], dtype=torch.long),
+    }
+
+    loss, logits, labels = trainer.prediction_step(
+        model,
+        inputs,
+        prediction_loss_only=True,
+    )
+
+    assert loss is not None
+    assert logits is None
+    assert labels is None
+    assert model.seen_input_shapes == [(1, 2)]
 
 
 def test_validate_cp_batch_replicated_rejects_mismatched_inputs(monkeypatch):

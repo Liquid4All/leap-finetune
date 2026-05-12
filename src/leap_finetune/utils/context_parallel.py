@@ -645,6 +645,7 @@ def compute_cp_causal_lm_loss(
     cp_group: dist.ProcessGroup,
     cp_size: int,
     return_outputs: bool = False,
+    num_items_in_batch: torch.Tensor | int | float | None = None,
 ):
     """Compute a CP-local causal LM loss that remains differentiable on empty-label shards."""
     labels = inputs.get("labels")
@@ -690,11 +691,20 @@ def compute_cp_causal_lm_loss(
     )
     dist.all_reduce(global_token_count, op=dist.ReduceOp.SUM, group=cp_group)
 
-    if bool(global_token_count.item()):
+    if num_items_in_batch is not None:
+        denominator = torch.as_tensor(
+            num_items_in_batch,
+            device=shift_logits.device,
+            dtype=local_loss_numerator.dtype,
+        )
+    else:
+        denominator = global_token_count
+
+    if bool(denominator.item()):
         # Distributed reducers average gradients across ranks. CP ranks each hold
         # a chunk of the same sequence, so scale the local objective before
         # backward; the reducer average then recovers the full-sequence gradient.
-        loss = (local_loss_numerator / global_token_count) * cp_size
+        loss = (local_loss_numerator / denominator) * cp_size
     else:
         loss = shift_logits.sum() * 0.0
 

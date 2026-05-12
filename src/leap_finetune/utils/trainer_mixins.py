@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from leap_finetune.utils.model_utils import (
+    finalize_manual_sharded_export_metadata,
     load_manual_sharded_model_checkpoint,
     load_manual_sharded_optimizer_checkpoint,
     MANUAL_SHARDED_CHECKPOINT_FORMATS,
@@ -120,7 +121,16 @@ class ManualShardedCheckpointMixin:
 
     manual_sharded: bool
     ep_config: dict | None
+    run_name_template: str | None = None
+    checkpoint_staging_dir: str | None = None
     manual_sharded_checkpoint_format: str = "hf"
+    manual_sharded_export_metadata: dict | None = None
+
+    def get_manual_sharded_export_metadata(self) -> dict:
+        return finalize_manual_sharded_export_metadata(
+            self.manual_sharded_export_metadata,
+            processing_class=getattr(self, "processing_class", None),
+        )
 
     def create_accelerator_and_postprocess(self):
         super().create_accelerator_and_postprocess()
@@ -151,6 +161,7 @@ class ManualShardedCheckpointMixin:
             training_args=self.args,
             ep_group=self.ep_config["ep_group"] if self.ep_config is not None else None,
             checkpoint_staging_dir=getattr(self, "checkpoint_staging_dir", None),
+            export_metadata=self.get_manual_sharded_export_metadata(),
         )
         logger.info("%s trainer save_model end output_dir=%s", mode_name, output_dir)
 
@@ -173,6 +184,7 @@ class ManualShardedCheckpointMixin:
             trial=trial,
             checkpoint_format=getattr(self, "manual_sharded_checkpoint_format", "hf"),
             ep_group=self.ep_config["ep_group"] if self.ep_config is not None else None,
+            export_metadata=self.get_manual_sharded_export_metadata(),
         )
         logger.info("%s trainer _save_checkpoint end step=%s", mode_name, step)
 

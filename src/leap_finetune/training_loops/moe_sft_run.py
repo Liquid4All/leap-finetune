@@ -14,12 +14,16 @@ from leap_finetune.training_configs.distributed_configs import (
     resolve_reshard_after_forward,
 )
 from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
+from leap_finetune.training_loops.cp_trainer_utils import (
+    compute_cp_loss_for_trainer,
+    cp_enabled,
+    cp_prediction_step,
+)
 from leap_finetune.training_loops.sft_run import build_sft_data_collator
 from leap_finetune.utils.callbacks import LeapCheckpointCallback, MoEMetricsCallback
 from leap_finetune.utils.context_parallel import (
     aggregate_cp_loss,
     apply_cp_to_model,
-    compute_cp_causal_lm_loss,
     create_parallel_process_groups,
     dist_barrier,
     split_batch_for_cp,
@@ -43,6 +47,7 @@ from leap_finetune.utils.trainer_mixins import (
     validate_manual_sharded_training_args,
 )
 from leap_finetune.utils.model_utils import (
+    build_manual_sharded_export_metadata_from_config,
     save_manual_sharded_checkpoint,
     should_run_final_manual_sharded_save,
 )
@@ -79,13 +84,22 @@ class LFMMoeSFTTrainer(ManualShardedCheckpointMixin, Trainer):
         ep_config: dict | None = None,
         manual_fsdp2: bool = False,
         cp_config: dict | None = None,
+        run_name_template: str | None = None,
+        checkpoint_staging_dir: str | None = None,
+        manual_sharded_checkpoint_format: str = "hf",
+        manual_sharded_export_metadata: dict | None = None,
         **kwargs,
     ):
         self.manual_sharded = manual_fsdp2
+        self.run_name_template = run_name_template
+        self.checkpoint_staging_dir = checkpoint_staging_dir
+        self.manual_sharded_checkpoint_format = manual_sharded_checkpoint_format
+        self.manual_sharded_export_metadata = dict(manual_sharded_export_metadata or {})
         super().__init__(**kwargs)
         self.ep_config = ep_config
         self.cp_config = cp_config
         self._cp_batch_validated = False
+        self._cp_eval_batch_validated = False
 
     def get_train_dataloader(self):
         sampler_seed_rank = None
@@ -148,12 +162,12 @@ class LFMMoeSFTTrainer(ManualShardedCheckpointMixin, Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # === 2. Run the local forward on the rank's current batch shard ===
         if self.cp_config and self.cp_config["cp_size"] > 1 and "labels" in inputs:
-            output = compute_cp_causal_lm_loss(
+            output = compute_cp_loss_for_trainer(
+                self,
                 model,
                 inputs,
-                self.cp_config["cp_group"],
-                self.cp_config["cp_size"],
                 return_outputs=return_outputs,
+                num_items_in_batch=num_items_in_batch,
             )
         else:
             output = super().compute_loss(
@@ -161,6 +175,13 @@ class LFMMoeSFTTrainer(ManualShardedCheckpointMixin, Trainer):
             )
         write_memory_trace_event("after_forward_loss", step=self._memory_trace_step())
         return output
+
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        if cp_enabled(self.cp_config) and "labels" in inputs:
+            return cp_prediction_step(
+                self, model, inputs, prediction_loss_only, ignore_keys
+            )
+        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
     def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
         # === 1. Split the incoming packed sequence for the local CP rank ===
@@ -355,11 +376,19 @@ def moe_sft_run(training_config: dict) -> None:
     data_collator = build_sft_data_collator(
         tokenizer, training_config.get("train_config", {})
     )
+    manual_sharded_export_metadata = build_manual_sharded_export_metadata_from_config(
+        training_config,
+        processing_class=tokenizer,
+    )
 
     trainer = LFMMoeSFTTrainer(
         ep_config=ep_config,
         manual_fsdp2=(use_ep or use_fsdp2),
         cp_config=None,
+        run_name_template=run_name_template,
+        checkpoint_staging_dir=train_config.get("checkpoint_staging_dir"),
+        manual_sharded_checkpoint_format=manual_sharded_checkpoint_format,
+        manual_sharded_export_metadata=manual_sharded_export_metadata,
         model=model,
         processing_class=tokenizer,
         args=training_args,
@@ -367,9 +396,6 @@ def moe_sft_run(training_config: dict) -> None:
         eval_dataset=eval_dataset,
         data_collator=data_collator,
     )
-    trainer.run_name_template = run_name_template
-    trainer.checkpoint_staging_dir = train_config.get("checkpoint_staging_dir")
-    trainer.manual_sharded_checkpoint_format = manual_sharded_checkpoint_format
 
     trainer.callback_handler.callbacks.insert(0, MoEMetricsCallback())
     trainer.add_callback(
@@ -403,6 +429,7 @@ def moe_sft_run(training_config: dict) -> None:
                 trial=None,
                 checkpoint_format=manual_sharded_checkpoint_format,
                 ep_group=ep_config["ep_group"] if ep_config is not None else None,
+                export_metadata=trainer.get_manual_sharded_export_metadata(),
             )
             logger.info("Explicit final manual-sharded checkpoint save completed")
         logger.info("MoE SFT training completed successfully")

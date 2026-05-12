@@ -12,11 +12,15 @@ from leap_finetune.evaluation import (
     create_llm_benchmarks_from_config,
 )
 from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
+from leap_finetune.training_loops.cp_trainer_utils import (
+    compute_cp_loss_for_trainer,
+    cp_enabled,
+    cp_prediction_step,
+)
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
 from leap_finetune.utils.context_parallel import (
     aggregate_cp_loss,
     apply_cp_to_model,
-    compute_cp_causal_lm_loss,
     create_parallel_process_groups,
     split_batch_for_cp,
     validate_cp_batch_replicated,
@@ -43,17 +47,25 @@ class LFMSFTTrainer(RayDataLoaderMixin, Trainer):
         super().__init__(**kwargs)
         self.cp_config = cp_config
         self._cp_batch_validated = False
+        self._cp_eval_batch_validated = False
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if self.cp_config and self.cp_config["cp_size"] > 1 and "labels" in inputs:
-            return compute_cp_causal_lm_loss(
+            return compute_cp_loss_for_trainer(
+                self,
                 model,
                 inputs,
-                self.cp_config["cp_group"],
-                self.cp_config["cp_size"],
                 return_outputs=return_outputs,
+                num_items_in_batch=num_items_in_batch,
             )
         return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        if cp_enabled(self.cp_config) and "labels" in inputs:
+            return cp_prediction_step(
+                self, model, inputs, prediction_loss_only, ignore_keys
+            )
+        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
     def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
         if self.cp_config and self.cp_config["cp_size"] > 1:

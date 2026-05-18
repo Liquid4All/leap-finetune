@@ -1,9 +1,5 @@
-import os
 import pathlib
-import subprocess
 import sys
-import tempfile
-import textwrap
 
 import yaml
 
@@ -76,6 +72,8 @@ def _get_local_hf_token() -> str | None:
 
 
 def _ensure_modal_secret(token: str) -> None:
+    import subprocess
+
     result = subprocess.run(
         ["modal", "secret", "list", "--json"], capture_output=True, text=True
     )
@@ -138,6 +136,8 @@ def _print_config_summary(config_dict: dict, modal_cfg: dict) -> None:
 
 
 def _submit(config_dict: dict, modal_cfg: dict) -> None:
+    from contextlib import nullcontext
+
     import modal
 
     detach = modal_cfg.get("detach", False)
@@ -155,45 +155,14 @@ def _submit(config_dict: dict, modal_cfg: dict) -> None:
         print(f"\nTrackio dashboard: https://huggingface.co/spaces/{space_id}\n")
 
     config_str = yaml.dump(config_dict)
-    app_name = modal_cfg.get("app_name", "leap-finetune")
+
+    app = modal.App(modal_cfg.get("app_name", "leap-finetune"))
     image = _build_image(modal_cfg)
     volume = modal.Volume.from_name(
         modal_cfg.get("output_volume", "leap-finetune"),
         create_if_missing=True,
     )
     secrets = [modal.Secret.from_name(s) for s in (modal_cfg.get("secrets") or [])]
-
-    if detach:
-        _submit_detached(app_name, image, output_dir, volume, secrets, modal_cfg, config_str)
-    else:
-        _submit_attached(app_name, image, output_dir, volume, secrets, modal_cfg, config_str)
-
-
-def _run_train(cfg: str, output_dir: str) -> None:
-    import tempfile
-
-    for prefix in ("leap_finetune", "huggingface_hub", "datasets", "fsspec"):
-        for mod_name in [m for m in sys.modules if m.startswith(prefix)]:
-            del sys.modules[mod_name]
-
-    os.environ["LEAP_FINETUNE_DIR"] = "/app"
-    os.environ["OUTPUT_DIR"] = output_dir
-    os.environ.pop("HF_HUB_OFFLINE", None)
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-        f.write(cfg)
-        tmp_path = f.name
-
-    sys.argv = ["leap-finetune", tmp_path]
-    from leap_finetune import main as leap_main
-
-    leap_main()
-
-
-def _submit_attached(app_name, image, output_dir, volume, secrets, modal_cfg, config_str):
-    import modal
-
-    app = modal.App(app_name)
 
     @app.function(
         image=image,
@@ -204,104 +173,47 @@ def _submit_attached(app_name, image, output_dir, volume, secrets, modal_cfg, co
         serialized=True,
     )
     def train(cfg: str) -> None:
-        _run_train(cfg, output_dir)
+        import os
+        import sys
+        import tempfile
 
-    print("Waiting for container to start (image is cached after first build)...")
-    with modal.enable_output():
-        with app.run():
-            try:
-                train.remote(config_str)
-            except modal.exception.RemoteError as e:
+        for prefix in ("leap_finetune", "huggingface_hub", "datasets", "fsspec"):
+            for mod_name in [m for m in sys.modules if m.startswith(prefix)]:
+                del sys.modules[mod_name]
+
+        os.environ["LEAP_FINETUNE_DIR"] = "/app"
+        os.environ["OUTPUT_DIR"] = output_dir
+        os.environ.pop("HF_HUB_OFFLINE", None)
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(cfg)
+            tmp_path = f.name
+
+        sys.argv = ["leap-finetune", tmp_path]
+        from leap_finetune import main as leap_main
+
+        leap_main()
+
+    if detach:
+        print("Submitting detached Modal job (image is cached after first build)...")
+    else:
+        print("Waiting for container to start (image is cached after first build)...")
+
+    output_context = nullcontext() if detach else modal.enable_output()
+    with output_context:
+        with app.run(detach=detach):
+            if detach:
+                call = train.spawn(config_str)
                 print(
-                    f"\nModal container exited with error after training: {e}\n"
-                    "Check the logs above — training likely completed and the\n"
-                    "error occurred during container teardown."
+                    f"Modal job submitted (detached). Function call ID: {call.object_id}"
                 )
-
-
-def _submit_detached(app_name, image, output_dir, volume, secrets, modal_cfg, config_str):
-    gpu = modal_cfg.get("gpu", "H100")
-    timeout = modal_cfg.get("timeout", 86400)
-    secret_names = modal_cfg.get("secrets") or []
-    output_volume = modal_cfg.get("output_volume", "leap-finetune")
-
-    base_image = modal_cfg.get("base_image", "nvidia/cuda:12.8.0-devel-ubuntu22.04")
-    pyproject = str(_REPO_ROOT / "pyproject.toml")
-    lockfile = str(_REPO_ROOT / "uv.lock")
-    src_dir = str(_REPO_ROOT / "src" / "leap_finetune")
-
-    script = textwrap.dedent(f"""\
-        import modal
-
-        app = modal.App("{app_name}")
-
-        image = (
-            modal.Image.from_registry("{base_image}", add_python="3.12")
-            .pip_install("uv")
-            .add_local_file("{pyproject}", remote_path="/app/pyproject.toml", copy=True)
-            .add_local_file("{lockfile}", remote_path="/app/uv.lock", copy=True)
-            .run_commands(
-                "cd /app && uv export --frozen --no-dev --no-emit-project --no-hashes"
-                " > requirements.txt"
-                " && grep -v flash-attn requirements.txt > requirements-modal.txt"
-                " && uv pip install --system -r requirements-modal.txt",
-            )
-            .add_local_dir("{src_dir}", remote_path="/app/src/leap_finetune", copy=True)
-            .env({{
-                "PYTHONPATH": "/app/src",
-                "LEAP_FINETUNE_DIR": "/app",
-                "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE": "1",
-            }})
-        )
-
-        volume = modal.Volume.from_name("{output_volume}", create_if_missing=True)
-        secrets = [modal.Secret.from_name(s) for s in {secret_names!r}]
-
-        @app.function(
-            image=image,
-            gpu="{gpu}",
-            timeout={timeout},
-            volumes={{"{output_dir}": volume}},
-            secrets=secrets,
-            serialized=True,
-        )
-        def train(cfg: str) -> None:
-            import os, sys, tempfile
-            for prefix in ("leap_finetune", "huggingface_hub", "datasets", "fsspec"):
-                for mod_name in [m for m in sys.modules if m.startswith(prefix)]:
-                    del sys.modules[mod_name]
-            os.environ["LEAP_FINETUNE_DIR"] = "/app"
-            os.environ["OUTPUT_DIR"] = "{output_dir}"
-            os.environ.pop("HF_HUB_OFFLINE", None)
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-                f.write(cfg)
-                tmp_path = f.name
-            sys.argv = ["leap-finetune", tmp_path]
-            from leap_finetune import main as leap_main
-            leap_main()
-
-        @app.local_entrypoint()
-        def main():
-            train.remote({config_str!r})
-    """)
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, prefix="modal-train-"
-    ) as f:
-        f.write(script)
-        script_path = f.name
-
-    print(f"Submitting detached Modal job via 'modal run --detach'...")
-    result = subprocess.run(
-        ["modal", "run", "--detach", script_path],
-    )
-    os.unlink(script_path)
-
-    if result.returncode != 0:
-        print(f"modal run --detach failed with exit code {result.returncode}")
-        sys.exit(1)
-
-    print(f"\nMonitor with: modal app logs {app_name}")
+                if app.app_id:
+                    print(f"Modal app ID: {app.app_id}")
+                    print(f"Dashboard: https://modal.com/id/{app.app_id}")
+                    print(f"Monitor with: modal app logs {app.app_id}")
+                    print(f"Stop with: modal app stop {app.app_id}")
+            else:
+                train.remote(config_str)
 
 
 # === Image build ===

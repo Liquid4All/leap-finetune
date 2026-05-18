@@ -116,7 +116,7 @@ modal:
 uv run leap-finetune job_configs/sft_example_modal.yaml
 ```
 
-That's it. The CLI will:
+That's it. In attached mode (`detach: false`), the CLI will:
 
 1. Build the container image (~5 min on first run, cached after that)
 2. Auto-create a `huggingface-secret` on Modal from your local HF token
@@ -130,7 +130,14 @@ modal volume ls leap-finetune                                        # list save
 modal volume get leap-finetune <checkpoint-name> ./local-outputs     # download to local
 ```
 
-**Detached mode:** Set `detach: true` in the modal config to submit and disconnect. Monitor with `modal app logs leap-finetune`.
+**Detached mode:** Set `detach: true` in the modal config to submit and disconnect. The CLI prints the Modal app ID for that run, plus commands to monitor or stop it:
+
+```bash
+modal app logs ap-...
+modal app stop ap-...
+```
+
+Detached runs are ephemeral Modal apps, so use the printed `ap-...` app ID rather than the `app_name` value from your config when viewing logs.
 
 See [`job_configs/sft_example_modal.yaml`](./job_configs/sft_example_modal.yaml) for all available options.
 

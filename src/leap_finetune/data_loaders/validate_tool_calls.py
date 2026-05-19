@@ -29,12 +29,21 @@ def has_foreign_tool_markers(text: str) -> str | None:
     return None
 
 
-def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
+def _tool_call_must_be_first(model_family: str) -> bool:
+    """Legacy LFM2 expects tool-call-first text; LFM2.5 templates allow prose first."""
+    return model_family != "lfm25"
+
+
+def validate_tool_calls_in_messages(
+    messages: list,
+    sample_idx: int,
+    model_family: str = "lfm2",
+) -> None:
     """Validate tool call formatting in a message list. Raises ValueError on issues.
 
     Checks:
     1. No foreign tool call markers (Qwen, Mistral)
-    2. If pre-formatted LFM markers exist, tool call must come before text
+    2. If pre-formatted LFM markers exist, legacy LFM2 requires tool call before text
     3. If assistant has tool call, a role="tool" response should follow
     4. Structured tool_calls are allowed because they are normalized before tokenization
     """
@@ -59,16 +68,16 @@ def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
                 f"markers in the content field."
             )
 
-        # === Check ordering: tool call must come before text ===
+        # === Check ordering: legacy LFM2 requires tool call before text ===
         tc_pos = content.find(_LFM_TOOL_CALL_START)
         if tc_pos == -1:
             continue
 
         text_before = content[:tc_pos].strip()
-        if text_before:
+        if text_before and _tool_call_must_be_first(model_family):
             raise ValueError(
                 f"Sample {sample_idx}, message {msg_idx}: Text appears before tool call "
-                f"in assistant content. LFM expects tool call first, then text. "
+                f"in assistant content. Legacy LFM2 expects tool call first, then text. "
                 f"Found: '{text_before[:50]}...' before <|tool_call_start|>"
             )
 
@@ -110,7 +119,12 @@ def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
             )
 
 
-def validate_tool_calls_in_text(text: str, sample_idx: int, field: str) -> None:
+def validate_tool_calls_in_text(
+    text: str,
+    sample_idx: int,
+    field: str,
+    model_family: str = "lfm2",
+) -> None:
     """Validate tool call formatting in a pre-formatted text string (DPO)."""
     fmt = has_foreign_tool_markers(text)
     if fmt:
@@ -124,18 +138,23 @@ def validate_tool_calls_in_text(text: str, sample_idx: int, field: str) -> None:
         return
 
     text_before = text[:tc_pos].strip()
-    if text_before:
+    if text_before and _tool_call_must_be_first(model_family):
         raise ValueError(
             f"Sample {sample_idx}, {field}: Text appears before tool call. "
-            f"LFM expects tool call first, then text. "
+            f"Legacy LFM2 expects tool call first, then text. "
             f"Found: '{text_before[:50]}...' before <|tool_call_start|>"
         )
 
 
-def validate_tool_calls_dpo(chosen: Any, rejected: Any, sample_idx: int) -> None:
+def validate_tool_calls_dpo(
+    chosen: Any,
+    rejected: Any,
+    sample_idx: int,
+    model_family: str = "lfm2",
+) -> None:
     """Validate tool call formatting in DPO chosen/rejected data."""
     for field, data in [("chosen", chosen), ("rejected", rejected)]:
         if isinstance(data, str):
-            validate_tool_calls_in_text(data, sample_idx, field)
+            validate_tool_calls_in_text(data, sample_idx, field, model_family)
         elif isinstance(data, list):
-            validate_tool_calls_in_messages(data, sample_idx)
+            validate_tool_calls_in_messages(data, sample_idx, model_family)

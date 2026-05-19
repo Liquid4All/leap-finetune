@@ -75,9 +75,7 @@ def _build_cache_key(
         key["packing"] = training_config.get("packing", False)
         key["drop_overlength"] = training_config.get("drop_overlength", False)
         key["assistant_only_loss"] = training_config.get("assistant_only_loss", False)
-        key["completion_only_loss"] = training_config.get(
-            "completion_only_loss", False
-        )
+        key["completion_only_loss"] = training_config.get("completion_only_loss", False)
         key["chat_template"] = training_config.get("chat_template")
         key["chat_template_path"] = training_config.get("chat_template_path")
         key["chat_template_path_sha256"] = _hash_text_file(
@@ -102,7 +100,11 @@ def _try_load_cache(
     metadata_path = cache_dir / "fingerprint.json"
     success_marker = cache_dir / _CACHE_SUCCESS_MARKER
 
-    if not train_dir.exists() or not metadata_path.exists() or not success_marker.exists():
+    if (
+        not train_dir.exists()
+        or not metadata_path.exists()
+        or not success_marker.exists()
+    ):
         return None
 
     try:
@@ -176,6 +178,7 @@ def _prepare_dataset(
     ds = ds.map(normalizer)
 
     # Normalize tool call format (strip wrong markers, convert structured tool_calls)
+    model_family = "lfm2"
     if loader.model_name and loader.dataset_type in ("sft", "dpo"):
         from leap_finetune.utils.model_utils import get_model_family
 
@@ -184,7 +187,7 @@ def _prepare_dataset(
         ds = ds.map(tool_normalizer)
 
     # Filter invalid rows using Ray's native filter (pure Python, Ray handles Arrow)
-    row_filter = get_row_filter(loader.dataset_type)
+    row_filter = get_row_filter(loader.dataset_type, model_family=model_family)
     return ds.filter(row_filter)
 
 
@@ -216,7 +219,9 @@ def _materialize_explicit_split_datasets(
             loader,
             loader.to_ray_dataset(
                 dataset_path=eval_path,
-                subset=loader.val_subset if loader.val_split is not None else loader.subset,
+                subset=loader.val_subset
+                if loader.val_split is not None
+                else loader.subset,
                 split=loader.val_split or "train",
             ),
         )

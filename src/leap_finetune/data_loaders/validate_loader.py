@@ -113,19 +113,23 @@ def quick_validate_schema(
     normalizer = normalize_columns(dataset_type, image_root=image_root)
     sample_ds = sample_ds.map(normalizer)
 
+    model_family = "lfm2"
+    if model_name and dataset_type in ("sft", "dpo"):
+        from leap_finetune.utils.model_utils import get_model_family
+
+        model_family = get_model_family(model_name)
+
     # Use the same validation as full validation
-    validate_dataset_format(sample_ds, dataset_type)
+    validate_dataset_format(sample_ds, dataset_type, model_family=model_family)
 
     # === Tool call format validation ===
     if model_name and dataset_type in ("sft", "dpo"):
         from .tool_call_utils import detect_tool_format, validate_tool_format
-        from leap_finetune.utils.model_utils import get_model_family
 
         samples = [sample_ds[i] for i in range(len(sample_ds))]
         format_info = detect_tool_format(samples)
 
         if format_info.has_tool_calls:
-            model_family = get_model_family(model_name)
             issues = validate_tool_format(format_info, model_family)
 
             for issue in issues:
@@ -246,7 +250,10 @@ def _structured_tool_calls_are_valid(tool_calls) -> bool:
     return True
 
 
-def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
+def get_row_filter(
+    dataset_type: str,
+    model_family: str = "lfm2",
+) -> Callable[[dict], bool]:
     """
     Get a row filter function for ray.data.filter().
     Uses pure Python - Ray handles Arrow/serialization internally.
@@ -270,18 +277,18 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
 
         # Check for foreign tool call markers. Structured tool_calls are allowed
         # because normalize_tool_format() converts them before tokenization.
+        try:
+            validate_tool_calls_in_messages(
+                messages, sample_idx=-1, model_family=model_family
+            )
+        except ValueError:
+            return False
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
-            if msg.get("role") == "assistant":
-                if "tool_calls" in msg and not _structured_tool_calls_are_valid(
-                    msg.get("tool_calls")
-                ):
+            if msg.get("role") == "assistant" and "tool_calls" in msg:
+                if not _structured_tool_calls_are_valid(msg.get("tool_calls")):
                     return False
-                content = msg.get("content", "")
-                if isinstance(content, str) and ("<" in content or "[" in content):
-                    if has_foreign_tool_markers(content):
-                        return False
         return True
 
     def is_valid_dpo(row: dict) -> bool:
@@ -305,17 +312,15 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
                 for msg in data:
                     if not isinstance(msg, dict):
                         continue
-                    if msg.get("role") == "assistant":
-                        if "tool_calls" in msg and not _structured_tool_calls_are_valid(
-                            msg.get("tool_calls")
-                        ):
+                    if msg.get("role") == "assistant" and "tool_calls" in msg:
+                        if not _structured_tool_calls_are_valid(msg.get("tool_calls")):
                             return False
-                        content = msg.get("content", "")
-                        if isinstance(content, str) and (
-                            "<" in content or "[" in content
-                        ):
-                            if has_foreign_tool_markers(content):
-                                return False
+        try:
+            validate_tool_calls_dpo(
+                chosen, rejected, sample_idx=-1, model_family=model_family
+            )
+        except ValueError:
+            return False
         return True
 
     def is_valid_vlm_sft(row: dict) -> bool:
@@ -522,20 +527,24 @@ def validate_data_loader(func):
     return wrapper
 
 
-def validate_dataset_format(dataset: Dataset, dataset_type: str) -> Dataset:
+def validate_dataset_format(
+    dataset: Dataset,
+    dataset_type: str,
+    model_family: str = "lfm2",
+) -> Dataset:
     """Validate and convert dataset format based on dataset_type"""
 
     if dataset_type == "sft":
-        return validate_sft_format(dataset)
+        return validate_sft_format(dataset, model_family=model_family)
     elif dataset_type == "dpo":
-        return validate_dpo_format(dataset)
+        return validate_dpo_format(dataset, model_family=model_family)
     elif dataset_type == "vlm_sft":
         return validate_vlm_sft_format(dataset)
     else:
         raise ValueError(f"Unsupported dataset_type: {dataset_type}")
 
 
-def validate_sft_format(dataset: Dataset) -> Dataset:
+def validate_sft_format(dataset: Dataset, model_family: str = "lfm2") -> Dataset:
     """Validate and convert SFT dataset to proper format."""
     columns = dataset.column_names
 
@@ -567,7 +576,7 @@ def validate_sft_format(dataset: Dataset) -> Dataset:
 
     # === Validate tool call formatting ===
     for i in range(len(dataset)):
-        validate_tool_calls_in_messages(dataset[i][conv_col], i)
+        validate_tool_calls_in_messages(dataset[i][conv_col], i, model_family)
 
     # Rename column if needed
     if conv_col != "messages":
@@ -592,7 +601,7 @@ def _find_conversational_column(dataset: Dataset, columns: list) -> str | None:
     return None
 
 
-def validate_dpo_format(dataset: Dataset) -> Dataset:
+def validate_dpo_format(dataset: Dataset, model_family: str = "lfm2") -> Dataset:
     """Validate and convert DPO dataset to proper format."""
     columns = set(dataset.column_names)
 
@@ -635,7 +644,9 @@ def validate_dpo_format(dataset: Dataset) -> Dataset:
 
     # === Validate tool call formatting ===
     for i in range(len(dataset)):
-        validate_tool_calls_dpo(dataset[i]["chosen"], dataset[i]["rejected"], i)
+        validate_tool_calls_dpo(
+            dataset[i]["chosen"], dataset[i]["rejected"], i, model_family
+        )
 
     # Add prompt if missing
     if "prompt" in columns:

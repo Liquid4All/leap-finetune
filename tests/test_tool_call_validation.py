@@ -1,3 +1,5 @@
+import pytest
+
 from leap_finetune.data_loaders.tool_call_utils import (
     ToolFormatInfo,
     detect_tool_format,
@@ -480,6 +482,38 @@ class TestNormalizeToolFormat:
         assert 'get_weather(location="SF")' in assistant_msg["content"]
         assert "tool_calls" not in assistant_msg
 
+    def test_lfm2_structured_tool_call_with_content_keeps_tool_call_first(self):
+        row = {
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": "Let me check.",
+                    "tool_calls": [{"function": {"name": "f", "arguments": {}}}],
+                },
+            ]
+        }
+        result = normalize_tool_format(row, "lfm2")
+        assert result["messages"][1]["content"] == (
+            "<|tool_call_start|>[f()]<|tool_call_end|>\nLet me check."
+        )
+
+    def test_lfm25_structured_tool_call_with_content_preserves_content_first(self):
+        row = {
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": "Let me check.",
+                    "tool_calls": [{"function": {"name": "f", "arguments": {}}}],
+                },
+            ]
+        }
+        result = normalize_tool_format(row, "lfm25")
+        assert result["messages"][1]["content"] == (
+            "Let me check.\n<|tool_call_start|>[f()]<|tool_call_end|>"
+        )
+
     def test_no_modification_when_clean(self):
         row = {
             "messages": [
@@ -537,3 +571,26 @@ class TestValidateToolCallsInMessages:
             {"role": "tool", "content": '{"result": 1}'},
         ]
         validate_tool_calls_in_messages(messages, 0)
+
+    def test_lfm25_allows_content_before_tool_call_marker(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "Let me check.\n<|tool_call_start|>[f()]<|tool_call_end|>",
+            },
+            {"role": "tool", "content": '{"result": 1}'},
+        ]
+        validate_tool_calls_in_messages(messages, 0, model_family="lfm25")
+
+    def test_legacy_lfm2_rejects_content_before_tool_call_marker(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "Let me check.\n<|tool_call_start|>[f()]<|tool_call_end|>",
+            },
+            {"role": "tool", "content": '{"result": 1}'},
+        ]
+        with pytest.raises(ValueError, match="Text appears before tool call"):
+            validate_tool_calls_in_messages(messages, 0, model_family="lfm2")

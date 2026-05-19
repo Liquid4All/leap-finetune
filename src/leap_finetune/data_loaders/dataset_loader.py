@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Callable, Literal
 
 from datasets import Dataset, load_dataset
@@ -7,7 +6,6 @@ from datasets import Dataset, load_dataset
 from .validate_loader import (
     find_local_files,
     get_source_type,
-    is_cloud_path,
     quick_validate_schema,
     validate_data_loader,
     validate_dataset_format,
@@ -237,7 +235,9 @@ class DatasetLoader:
         if source_type != "huggingface":
             try:
                 if source_type == "directory":
-                    dataset = load_dataset(self.dataset_path, self.subset, split=split_str)
+                    dataset = load_dataset(
+                        self.dataset_path, self.subset, split=split_str
+                    )
                 else:
                     file_type = {
                         "parquet": "parquet",
@@ -262,7 +262,14 @@ class DatasetLoader:
                 )
 
         # Validate dataset format
-        dataset = validate_dataset_format(dataset, self.dataset_type)
+        model_family = "lfm2"
+        if self.model_name and self.dataset_type in ("sft", "dpo"):
+            from leap_finetune.utils.model_utils import get_model_family
+
+            model_family = get_model_family(self.model_name)
+        dataset = validate_dataset_format(
+            dataset, self.dataset_type, model_family=model_family
+        )
 
         if self.test_size is None:
             raise ValueError(

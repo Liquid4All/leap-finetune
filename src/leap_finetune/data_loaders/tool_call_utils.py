@@ -275,7 +275,10 @@ def normalize_tool_format(row: dict, model_family: str) -> dict:
                 pythonic = _tool_calls_to_pythonic(tool_calls)
                 existing_content = content.strip()
                 if existing_content:
-                    new_msg["content"] = f"{pythonic}\n{existing_content}"
+                    if model_family == "lfm25":
+                        new_msg["content"] = f"{existing_content}\n{pythonic}"
+                    else:
+                        new_msg["content"] = f"{pythonic}\n{existing_content}"
                 else:
                     new_msg["content"] = pythonic
                 modified = True

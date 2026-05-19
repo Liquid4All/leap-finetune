@@ -389,10 +389,11 @@ Tool calls use LFM bracket notation pre-baked in the assistant `content` field. 
 ```
 
 - Tool calls must be pre-baked in `content` using `<|tool_call_start|>[func(args)]<|tool_call_end|>` bracket notation
-- Structured `tool_calls` fields (OpenAI format) are auto-converted if present
+- Structured `tool_calls` fields (OpenAI format) are auto-converted if present. If an assistant turn contains both prose and structured tool calls, LFM2.5/24B keeps prose before the tool-call marker to match the official template; legacy LFM2 keeps tool-call-first ordering for backward compatibility.
 - Foreign formats (e.g. `<tool_call>` XML) are rejected with an actionable error
-- Do not include `<|tool_response_start|>` / `<|tool_response_end|>` markers in `role: "tool"` messages — the LFM2 chat template adds these automatically during tokenization
+- Do not pre-wrap `role: "tool"` messages. Legacy LFM2 templates add `<|tool_response_start|>` / `<|tool_response_end|>` during tokenization; the LFM2.5/24B Shopify template keeps tool responses as bare ChatML `tool` turns.
 - **LFM2 models** additionally expect `<|tool_list_start|>` / `<|tool_list_end|>` around tool definitions in the system prompt. Include these in your data if training an LFM2 model; omit them for LFM2.5. The pipeline warns on mismatches and auto-strips `<|tool_list_start|>` when training LFM2.5.
+- Canonical tracked templates live in `job_configs/templates/lfm2_tool_call_chat_template.jinja` for legacy LFM2 and `job_configs/templates/lfm25_tool_call_chat_template.jinja` for LFM2.5/24B-style models.
 
 ## 🔄 Resuming Training
 

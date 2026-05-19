@@ -16,6 +16,7 @@ from leap_finetune.utils.model_utils import (
     finalize_manual_sharded_export_metadata,
     load_manual_sharded_checkpoint_metadata,
 )
+from leap_finetune.utils.load_models import normalize_model_config_overrides
 
 
 class ConfigStub:
@@ -30,6 +31,7 @@ class ConfigStub:
         self.max_position_embeddings = 131072
         self.rope_parameters = {"rope_type": "default", "rope_theta": 1000000.0}
         self.rope_scaling = None
+        self.rope_theta = 1000000.0
         self.default_theta = 1000000.0
         self.tie_word_embeddings = True
 
@@ -39,13 +41,12 @@ class ConfigStub:
             "auto_map": self.auto_map,
             "max_position_embeddings": self.max_position_embeddings,
             "rope_parameters": self.rope_parameters,
+            "rope_theta": self.rope_theta,
             "tie_word_embeddings": self.tie_word_embeddings,
         }
         if self.rope_scaling is not None:
             config["rope_scaling"] = self.rope_scaling
-        Path(output_dir, "config.json").write_text(
-            json.dumps(config)
-        )
+        Path(output_dir, "config.json").write_text(json.dumps(config))
 
 
 class GenerationConfigStub:
@@ -248,6 +249,47 @@ def test_save_hf_pretrained_model_preserves_yarn_and_trained_lm_head(
     assert config["rope_scaling"]["factor"] == 10.0
     assert config["rope_scaling"]["original_max_position_embeddings"] == 128000
     assert config["tie_word_embeddings"] is False
+
+
+def test_lfm2_rope_theta_override_is_mirrored_to_rope_parameters():
+    config = ConfigStub(Path("base"))
+
+    normalized = normalize_model_config_overrides(
+        config,
+        {"rope_theta": 5000000.0},
+    )
+
+    assert normalized["rope_theta"] == 5000000.0
+    assert normalized["rope_parameters"]["rope_theta"] == 5000000.0
+    assert normalized["rope_parameters"]["rope_type"] == "default"
+
+
+def test_save_hf_pretrained_model_preserves_rope_theta_without_yarn(
+    tmp_path: Path,
+):
+    source_dir = tmp_path / "base"
+    export_dir = tmp_path / "export"
+    source_dir.mkdir()
+    model = ModelStub(source_dir)
+
+    _save_hf_pretrained_model(
+        model_to_save=model,
+        state_dict={"model.embed_tokens.weight": torch.ones(2, 3)},
+        export_dir=str(export_dir),
+        export_metadata={
+            "model_config": {
+                "rope_theta": 5000000.0,
+                "max_position_embeddings": 327680,
+            },
+            "max_length": 327680,
+        },
+    )
+
+    config = json.loads((export_dir / "config.json").read_text())
+    assert config["max_position_embeddings"] == 327680
+    assert config["rope_theta"] == 5000000.0
+    assert config["rope_parameters"]["rope_theta"] == 5000000.0
+    assert config["rope_parameters"]["rope_type"] == "default"
 
 
 def test_save_hf_pretrained_model_writes_literal_rope_scaling_key_for_alias_config(

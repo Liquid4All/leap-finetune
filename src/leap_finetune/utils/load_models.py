@@ -71,32 +71,33 @@ def normalize_model_config_overrides(
 
     normalized = dict(model_config)
 
-    # LFM2 / LFM2-MoE expect rope_parameters, while older job configs still use
-    # rope_scaling. YaRN also requires rope_theta to be present explicitly.
-    if (
-        getattr(config, "model_type", "") in {"lfm2", "lfm2_moe"}
-        and "rope_scaling" in normalized
-        and "rope_parameters" not in normalized
-    ):
-        rope_parameters = dict(normalized["rope_scaling"])
-        if "rope_theta" not in rope_parameters or rope_parameters["rope_theta"] is None:
-            rope_parameters["rope_theta"] = normalized.get(
-                "rope_theta",
-                getattr(config, "default_theta", None),
-            )
-        normalized["rope_parameters"] = rope_parameters
+    # LFM2 / LFM2-MoE consumers do not all read the same RoPE field. Keep the
+    # native rope_parameters field populated even when the user only overrides
+    # top-level rope_theta.
+    if getattr(config, "model_type", "") in {"lfm2", "lfm2_moe"}:
+        rope_parameters = None
+        if "rope_parameters" in normalized:
+            rope_parameters = dict(normalized["rope_parameters"])
+        elif "rope_scaling" in normalized:
+            rope_parameters = dict(normalized["rope_scaling"])
+        elif "rope_theta" in normalized:
+            base_rope_parameters = getattr(config, "rope_parameters", None)
+            if isinstance(base_rope_parameters, dict):
+                rope_parameters = dict(base_rope_parameters)
+            else:
+                rope_parameters = {}
 
-    if (
-        getattr(config, "model_type", "") in {"lfm2", "lfm2_moe"}
-        and "rope_parameters" in normalized
-    ):
-        rope_parameters = dict(normalized["rope_parameters"])
-        if "rope_theta" not in rope_parameters or rope_parameters["rope_theta"] is None:
-            rope_parameters["rope_theta"] = normalized.get(
-                "rope_theta",
-                getattr(config, "default_theta", None),
-            )
-        normalized["rope_parameters"] = rope_parameters
+        if rope_parameters is not None:
+            if normalized.get("rope_theta") is not None:
+                rope_parameters["rope_theta"] = normalized["rope_theta"]
+            elif (
+                "rope_theta" not in rope_parameters
+                or rope_parameters["rope_theta"] is None
+            ):
+                rope_parameters["rope_theta"] = getattr(config, "default_theta", None)
+            if "rope_type" not in rope_parameters and "type" in rope_parameters:
+                rope_parameters["rope_type"] = rope_parameters["type"]
+            normalized["rope_parameters"] = rope_parameters
 
     return normalized
 
@@ -169,9 +170,10 @@ def load_model(
         attn_implementation=attn_impl,
     )
     model.config.use_cache = False
-    if install_memory_efficient_loss and os.getenv(
-        "LEAP_INSTALL_MEMORY_EFFICIENT_LOSS", "1"
-    ) == "1":
+    if (
+        install_memory_efficient_loss
+        and os.getenv("LEAP_INSTALL_MEMORY_EFFICIENT_LOSS", "1") == "1"
+    ):
         install_memory_efficient_causal_lm_loss(model)
     else:
         logger.info("Skipping memory-efficient causal LM loss install")

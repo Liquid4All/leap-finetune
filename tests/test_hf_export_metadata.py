@@ -130,7 +130,7 @@ def test_manual_sharded_metadata_preserves_run_config_and_active_template():
         },
         "train_config": {
             "max_length": 327680,
-            "chat_template_path": "job_configs/templates/lfm.jinja",
+            "chat_template_path": "job_configs/chat_templates/lfm.jinja",
         },
     }
 

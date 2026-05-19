@@ -37,14 +37,14 @@
   - Long-term, do not repair, reorder, or synthesize assistant tool calls from structured `tool_calls`.
   - Short-term, if eval/serving passes structured history through the template, rendering must be robust and match preprocessing semantics.
 - Canonical tracked templates:
-  - `job_configs/templates/lfm2_tool_call_chat_template.jinja`: legacy LFM2, tool definitions wrapped with `<|tool_list_start|>` / `<|tool_list_end|>`, and `role="tool"` content wrapped with `<|tool_response_start|>` / `<|tool_response_end|>` during rendering.
-  - `job_configs/templates/lfm25_tool_call_chat_template.jinja`: LFM2.5/24B, plain `List of tools: ...`, assistant calls as `<|tool_call_start|>...<|tool_call_end|>`, and bare ChatML `role="tool"` content.
+- `job_configs/chat_templates/lfm2_tool_call_chat_template.jinja`: legacy LFM2, tool definitions wrapped with `<|tool_list_start|>` / `<|tool_list_end|>`, and `role="tool"` content wrapped with `<|tool_response_start|>` / `<|tool_response_end|>` during rendering.
+- `job_configs/chat_templates/lfm25_tool_call_chat_template.jinja`: LFM2.5/24B, plain `List of tools: ...`, assistant calls as `<|tool_call_start|>...<|tool_call_end|>`, and bare ChatML `role="tool"` content.
 
 ## Implemented Fixes
 
 - The active 24B Shopify template is kept equivalent to the tracked LFM2.5 canonical template.
-- `job_configs/templates/lfm2_tool_call_chat_template.jinja` tracks the legacy LFM2 contract.
-- `job_configs/templates/lfm25_tool_call_chat_template.jinja` tracks the LFM2.5/24B contract.
+- `job_configs/chat_templates/lfm2_tool_call_chat_template.jinja` tracks the legacy LFM2 contract.
+- `job_configs/chat_templates/lfm25_tool_call_chat_template.jinja` tracks the LFM2.5/24B contract.
 - Template-side structured `tool_calls` fallback now escapes string arguments, accepts null assistant content, and accepts flat or nested tool-call schemas.
 - Preprocessing now preserves family-specific assistant prose/tool-call order when converting structured tool calls into content.
 - Validation is family-aware: legacy LFM2 rejects text before pre-baked tool-call markers, while LFM2.5/24B allows it.

@@ -4,12 +4,14 @@ from pathlib import Path
 from transformers.utils.chat_template_utils import render_jinja_template
 
 
-LFM25_TEMPLATE_PATH = Path("job_configs/templates/lfm25_tool_call_chat_template.jinja")
+LFM25_TEMPLATE_PATH = Path(
+    "job_configs/chat_templates/lfm25_tool_call_chat_template.jinja"
+)
 LFM24B_TEMPLATE_PATH = Path(
-    "job_configs/templates/lfm2_24b_tool_call_chat_template.jinja"
+    "job_configs/chat_templates/lfm2_24b_tool_call_chat_template.jinja"
 )
 LEGACY_LFM2_TEMPLATE_PATH = Path(
-    "job_configs/templates/lfm2_tool_call_chat_template.jinja"
+    "job_configs/chat_templates/lfm2_tool_call_chat_template.jinja"
 )
 
 SAMPLE_TOOLS = [

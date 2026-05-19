@@ -1,8 +1,13 @@
 from peft import LoraConfig, TaskType
 
-GLU_MODULES = ["w1", "w2", "w3"]
-MHA_MODULES = ["q_proj", "k_proj", "v_proj", "out_proj"]
-CONV_MODULES = ["in_proj", "out_proj"]
+GLU_MODULES = ["feed_forward.w1", "feed_forward.w2", "feed_forward.w3"]
+MHA_MODULES = [
+    "self_attn.q_proj",
+    "self_attn.k_proj",
+    "self_attn.v_proj",
+    "self_attn.out_proj",
+]
+CONV_MODULES = ["conv.in_proj", "conv.out_proj"]
 
 
 DEFAULT_LORA = LoraConfig(
@@ -24,7 +29,13 @@ HIGH_R_LORA = LoraConfig(
 )
 
 
-LFM_MODULES = ["q_proj", "k_proj", "v_proj", "out_proj", "in_proj"]
+LFM_MODULES = [
+    "self_attn.q_proj",
+    "self_attn.k_proj",
+    "self_attn.v_proj",
+    "self_attn.out_proj",
+    "conv.in_proj",
+]
 VISION_TOWER_MODULES = ["fc1", "fc2"]
 MULTI_MODAL_PROJECTOR_MODULES = ["linear_1", "linear_2"]
 

@@ -21,7 +21,11 @@ from leap_finetune.utils.logging_utils import (
     setup_worker_logging,
 )
 from leap_finetune.utils.model_utils import is_moe_model_from_name
-from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
+from leap_finetune.utils.peft import (
+    apply_peft_to_model,
+    load_peft_adapter,
+    merge_and_save_peft_model,
+)
 from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
 
 logger = logging.getLogger(__name__)
@@ -63,6 +67,7 @@ def dpo_run(training_config: dict) -> None:
     train_config = training_config.get("train_config", {})
     run_name_template = train_config.get("leap_run_name_template")
     resume_from = train_config.get("resume_from_checkpoint")
+    adapter_path = train_config.get("adapter_path")
     output_dir = train_config.get("output_dir", "")
     if resume_from:
         logger.info("Resuming from checkpoint: %s", resume_from)
@@ -75,6 +80,7 @@ def dpo_run(training_config: dict) -> None:
         "trackio_space_id",
         "leap_run_name_template",
         "resume_from_checkpoint",
+        "adapter_path",
     }
     if use_fsdp:
         excluded_keys.add("deepspeed")
@@ -116,7 +122,9 @@ def dpo_run(training_config: dict) -> None:
     # Load model after config is created
     model, tokenizer = load_model(model_name)
 
-    if peft_config:
+    if adapter_path:
+        model = load_peft_adapter(model, adapter_path)
+    elif peft_config:
         model = apply_peft_to_model(model, peft_config)
 
     # DPOTrainer.__init__ expects model.warnings_issued (set by HF Trainer),
@@ -146,7 +154,7 @@ def dpo_run(training_config: dict) -> None:
     run_training_safely(trainer, resume_from_checkpoint=resume_from)
 
     # Save PEFT model if applicable
-    if peft_config and is_rank_zero():
+    if (peft_config or adapter_path) and is_rank_zero():
         merge_and_save_peft_model(
             model, tokenizer, training_args.output_dir, run_name_template
         )

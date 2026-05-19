@@ -49,8 +49,10 @@ For AMD / ROCm clusters, install the ROCm dependency group instead of the defaul
 uv sync --no-group cuda --group rocm
 ```
 
-The ROCm group keeps installation lockfile-managed. CUDA-only packages such as `flash-attn`
-and CUDA vLLM wheels are not installed in ROCm environments.
+The ROCm group is lockfile-managed and uses vLLM's ROCm wheel index for vLLM plus
+its matching `torch`, `torchvision`, `torchaudio`, `flash-attn`, and `triton`
+stack. The currently pinned vLLM ROCm wheels are Python 3.12 Linux wheels, so use
+the repo's `.python-version` when creating AMD environments.
 
 ## 🚀 Quickstart
 

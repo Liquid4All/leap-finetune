@@ -16,9 +16,9 @@ rewards:
 Bounding-box grounding where the model outputs a bare JSON array of
 `{"label", "bbox"}` dicts in normalized `[0, 1]` coordinates.
 
-| Recipe                   | Reward                                                                                                                                      | Default weights                                    |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `VLMGroundingIoURecipe`  | Strict JSON format check + F1 of Hungarian-matched IoUs.                                                                                    | `strict_format_reward: 0.1`, `iou_f1_reward: 1.0`  |
+| Recipe | Reward | Default weights |
+|---|---|---|
+| `VLMGroundingIoURecipe` | Strict JSON format check + F1 of Hungarian-matched IoUs. | `strict_format_reward: 0.1`, `iou_f1_reward: 1.0` |
 | `VLMGroundingCIoURecipe` | Same F1 structure, but each matched pair uses Complete-IoU (IoU − center-distance − aspect-ratio). The Hungarian matcher also runs on CIoU. | `strict_format_reward: 0.1`, `ciou_f1_reward: 1.0` |
 
 **Required columns:** `prompt` (VLM messages list with image +
@@ -55,8 +55,8 @@ penalized). Plain IoU-F1 is typically enough for multi-object scenes.
 Exact-match reward on the final numeric answer, extracted via the
 `#### N` marker.
 
-| Recipe        | Reward                                                                                                         | Default weights     |
-| ------------- | -------------------------------------------------------------------------------------------------------------- | ------------------- |
+| Recipe | Reward | Default weights |
+|---|---|---|
 | `GSM8KRecipe` | Extract the final number via `#### N` (with last-number fallback) and compare to the gold. 1.0 / 0.0 / `None`. | `gsm8k_reward: 1.0` |
 
 **Required columns:** `prompt` (question), `solution` (bare numeric
@@ -88,8 +88,8 @@ Letter-match reward on the extracted answer choice. Supports
 `Answer: X` / `\boxed{X}` / trailing-letter patterns; the last match
 in the completion wins.
 
-| Recipe       | Reward                                                                                      | Default weights    |
-| ------------ | ------------------------------------------------------------------------------------------- | ------------------ |
+| Recipe | Reward | Default weights |
+|---|---|---|
 | `MCQARecipe` | Extract a letter A..J from the completion tail and compare to the gold. 1.0 / 0.0 / `None`. | `mcqa_reward: 1.0` |
 
 **Required columns:** `prompt` (question + labeled options),
@@ -120,8 +120,8 @@ training_config:
 Dense reward in `[0, 1]`: the fraction of supported constraints the
 completion satisfies.
 
-| Recipe         | Reward                                                                                                        | Default weights      |
-| -------------- | ------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Recipe | Reward | Default weights |
+|---|---|---|
 | `IFEvalRecipe` | Parse a JSON constraint spec from `solution`, check each supported constraint, return the fraction that pass. | `ifeval_reward: 1.0` |
 
 **Supported constraint types:** `punctuation:no_comma`,
@@ -182,7 +182,6 @@ and the reward-function API contract.
 
    __all__ = ["YourTaskRecipe", "your_reward_fn"]
    ```
-
 4. Add a row to this README.
 5. Reference the recipe from YAML:
    `./rewards/tasks/<your_task>/recipe.py::YourTaskRecipe`.

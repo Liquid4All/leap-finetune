@@ -37,9 +37,20 @@ cd leap_finetune
 
 ### 3. Set up virtual environment
 
+For CUDA / NVIDIA clusters, CUDA dependencies are included by default:
+
 ```bash
 uv sync
 ```
+
+For AMD / ROCm clusters, install the ROCm dependency group instead of the default CUDA group:
+
+```bash
+uv sync --no-group cuda --group rocm
+```
+
+The ROCm group keeps installation lockfile-managed. CUDA-only packages such as `flash-attn`
+and CUDA vLLM wheels are not installed in ROCm environments.
 
 ## 🚀 Quickstart
 

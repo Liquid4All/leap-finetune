@@ -33,22 +33,6 @@ dependencies = [
 rl-env = [
     "openenv-core>=0.1; sys_platform == 'linux'",
 ]
-# NVIDIA / CUDA GPU stack.
-# Install with: uv sync --extra cuda
-cuda = [
-    "flash-attn>=2.8.0; sys_platform == 'linux'",
-    "liger-kernel>=0.6.2; sys_platform == 'linux'",
-    "vllm>=0.19.0; sys_platform == 'linux'",
-]
-# AMD / ROCm GPU stack.
-# Install with: uv sync --extra rocm
-# Post-install for vLLM + flash-attn (vLLM ROCm wheels bundle flash-attn):
-#   uv pip uninstall vllm torch && uv pip install vllm --extra-index-url https://wheels.vllm.ai/rocm/
-rocm = [
-    "torch>=2.7.1; sys_platform == 'linux'",
-    "torchvision>=0.24.1; sys_platform == 'linux'",
-    "liger-kernel>=0.6.2; sys_platform == 'linux'",
-]
 
 [project.scripts]
 leap-finetune = "leap_finetune:main"
@@ -59,13 +43,16 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 no-build-isolation-package = ["flash-attn"]
+default-groups = ["dev", "cuda"]
 environments = [
     "sys_platform == 'darwin'",
     "sys_platform == 'linux'",
 ]
-# cuda and rocm pull torch from different indexes — they cannot coexist in one env.
+# CUDA is the default GPU stack. ROCm pulls torch/torchvision from a different index,
+# so it must be selected explicitly instead of the default cuda group:
+#   uv sync --no-group cuda --group rocm
 conflicts = [
-    [{ extra = "cuda" }, { extra = "rocm" }],
+    [{ group = "cuda" }, { group = "rocm" }],
 ]
 
 override-dependencies = [
@@ -86,10 +73,10 @@ explicit = true
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-rocm", extra = "rocm" },
+    { index = "pytorch-rocm", group = "rocm" },
 ]
 torchvision = [
-    { index = "pytorch-rocm", extra = "rocm" },
+    { index = "pytorch-rocm", group = "rocm" },
 ]
 
 [tool.pytest.ini_options]
@@ -104,8 +91,18 @@ markers = [
 addopts = "-v --tb=short"
 
 [dependency-groups]
+cuda = [
+    "flash-attn>=2.8.0; sys_platform == 'linux'",
+    "liger-kernel>=0.6.2; sys_platform == 'linux'",
+    "vllm>=0.19.0; sys_platform == 'linux'",
+]
 dev = [
     "pre-commit>=4.2.0",
     "pytest>=8.0",
     "ruff>=0.11.13",
+]
+rocm = [
+    "torch>=2.7.1; sys_platform == 'linux'",
+    "torchvision>=0.24.1; sys_platform == 'linux'",
+    "liger-kernel>=0.6.2; sys_platform == 'linux'",
 ]

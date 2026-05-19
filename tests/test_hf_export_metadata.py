@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import torch
 
 from leap_finetune.utils.model_utils import (
@@ -79,7 +80,7 @@ class AliasedRopeConfigStub:
         self.max_position_embeddings = 128000
         self.rope_parameters = {"rope_type": "default", "rope_theta": 1000000.0}
         self.default_theta = 1000000.0
-        self.tie_word_embeddings = False
+        self.tie_word_embeddings = True
 
     @property
     def rope_scaling(self):
@@ -252,30 +253,6 @@ def test_save_hf_pretrained_model_preserves_yarn_and_tied_lm_head_contract(
     assert "lm_head.weight" not in model.saved_state_dict
 
 
-def test_save_hf_pretrained_model_preserves_intentionally_untied_lm_head(
-    tmp_path: Path,
-):
-    source_dir = tmp_path / "base"
-    export_dir = tmp_path / "export"
-    source_dir.mkdir()
-    model = ModelStub(source_dir)
-    state_dict = {
-        "model.embed_tokens.weight": torch.ones(2, 3),
-        "lm_head.weight": torch.zeros(2, 3),
-    }
-
-    _save_hf_pretrained_model(
-        model_to_save=model,
-        state_dict=state_dict,
-        export_dir=str(export_dir),
-        export_metadata={"model_config": {"tie_word_embeddings": False}},
-    )
-
-    config = json.loads((export_dir / "config.json").read_text())
-    assert config["tie_word_embeddings"] is False
-    assert "lm_head.weight" in model.saved_state_dict
-
-
 def test_lfm2_rope_theta_override_is_mirrored_to_rope_parameters():
     config = ConfigStub(Path("base"))
 
@@ -287,6 +264,14 @@ def test_lfm2_rope_theta_override_is_mirrored_to_rope_parameters():
     assert normalized["rope_theta"] == 5000000.0
     assert normalized["rope_parameters"]["rope_theta"] == 5000000.0
     assert normalized["rope_parameters"]["rope_type"] == "default"
+
+
+@pytest.mark.parametrize("override_key", ["tie_word_embeddings", "tie_embedding"])
+def test_lfm2_tie_embedding_false_override_is_rejected(override_key: str):
+    config = ConfigStub(Path("base"))
+
+    with pytest.raises(ValueError, match="require tied word embeddings"):
+        normalize_model_config_overrides(config, {override_key: False})
 
 
 def test_save_hf_pretrained_model_preserves_rope_theta_without_yarn(

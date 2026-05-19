@@ -18,6 +18,7 @@ from leap_finetune.utils.loss_utils import install_memory_efficient_causal_lm_lo
 logger = logging.getLogger(__name__)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+LFM_TIED_WORD_EMBEDDING_MODEL_TYPES = {"lfm2", "lfm2_moe"}
 
 
 def _get_attn_implementation() -> str:
@@ -74,7 +75,12 @@ def normalize_model_config_overrides(
     # LFM2 / LFM2-MoE consumers do not all read the same RoPE field. Keep the
     # native rope_parameters field populated even when the user only overrides
     # top-level rope_theta.
-    if getattr(config, "model_type", "") in {"lfm2", "lfm2_moe"}:
+    if getattr(config, "model_type", "") in LFM_TIED_WORD_EMBEDDING_MODEL_TYPES:
+        if normalized.get("tie_word_embeddings") is False:
+            raise ValueError("LFM2/LFM2-MoE require tied word embeddings")
+        if normalized.get("tie_embedding") is False:
+            raise ValueError("LFM2/LFM2-MoE require tied word embeddings")
+
         rope_parameters = None
         if "rope_parameters" in normalized:
             rope_parameters = dict(normalized["rope_parameters"])
@@ -118,13 +124,17 @@ def _maybe_enable_grouped_mm(model: AutoModelForCausalLM) -> None:
     model.set_experts_implementation("grouped_mm")
 
 
-def _retie_word_embeddings_if_configured(model: AutoModelForCausalLM) -> None:
-    if not getattr(model.config, "tie_word_embeddings", False):
+def _enforce_lfm_tied_word_embeddings(model: AutoModelForCausalLM) -> None:
+    if (
+        getattr(model.config, "model_type", "")
+        not in LFM_TIED_WORD_EMBEDDING_MODEL_TYPES
+    ):
         return
     if not hasattr(model, "tie_weights"):
         return
+    model.config.tie_word_embeddings = True
     model.tie_weights()
-    logger.info("Ensured tied input/output word embeddings")
+    logger.info("Enforced tied LFM input/output word embeddings")
 
 
 def load_tokenizer(
@@ -178,7 +188,7 @@ def load_model(
         dtype=torch.bfloat16,
         attn_implementation=attn_impl,
     )
-    _retie_word_embeddings_if_configured(model)
+    _enforce_lfm_tied_word_embeddings(model)
     model.config.use_cache = False
     if (
         install_memory_efficient_loss

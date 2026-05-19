@@ -22,7 +22,10 @@ from transformers.trainer import SCALER_NAME, SCHEDULER_NAME
 from transformers.trainer import TRAINER_STATE_NAME, TRAINING_ARGS_NAME
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
-from leap_finetune.utils.load_models import normalize_model_config_overrides
+from leap_finetune.utils.load_models import (
+    LFM_TIED_WORD_EMBEDDING_MODEL_TYPES,
+    normalize_model_config_overrides,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -365,21 +368,22 @@ def _unwrap_model_for_hf_export(model: torch.nn.Module, accelerator) -> torch.nn
         return accelerator.unwrap_model(model)
 
 
-def _canonicalize_tied_lm_head_for_hf_export(
+def _enforce_lfm_tied_lm_head_for_hf_export(
     *,
     config: Any,
     state_dict: dict[str, Any],
 ) -> None:
-    """Drop redundant LM head tensors for tied HF exports.
+    """Preserve the LFM tied-embedding architecture in HF exports.
 
     LFM2/LFM2-MoE configs tie input embeddings and the output projection by
     default. The public HF checkpoint should preserve that architecture and let
     HF/vLLM reconstruct the tie from config instead of saving a separate
     `lm_head.weight`.
     """
-    if not getattr(config, "tie_word_embeddings", False):
+    if getattr(config, "model_type", "") not in LFM_TIED_WORD_EMBEDDING_MODEL_TYPES:
         return
 
+    config.tie_word_embeddings = True
     removed = [
         key
         for key in list(state_dict)
@@ -484,7 +488,7 @@ def _save_hf_pretrained_model(
     )
     config = getattr(model_to_save, "config", None)
     if config is not None:
-        _canonicalize_tied_lm_head_for_hf_export(
+        _enforce_lfm_tied_lm_head_for_hf_export(
             config=config,
             state_dict=state_dict,
         )

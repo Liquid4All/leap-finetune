@@ -118,6 +118,15 @@ def _maybe_enable_grouped_mm(model: AutoModelForCausalLM) -> None:
     model.set_experts_implementation("grouped_mm")
 
 
+def _retie_word_embeddings_if_configured(model: AutoModelForCausalLM) -> None:
+    if not getattr(model.config, "tie_word_embeddings", False):
+        return
+    if not hasattr(model, "tie_weights"):
+        return
+    model.tie_weights()
+    logger.info("Ensured tied input/output word embeddings")
+
+
 def load_tokenizer(
     model_name: str,
     *,
@@ -169,6 +178,7 @@ def load_model(
         dtype=torch.bfloat16,
         attn_implementation=attn_impl,
     )
+    _retie_word_embeddings_if_configured(model)
     model.config.use_cache = False
     if (
         install_memory_efficient_loss

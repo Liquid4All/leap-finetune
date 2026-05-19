@@ -225,13 +225,17 @@ def _update_latest_pointer(run_dir: str, checkpoint_dir: str) -> None:
 def _save_scheduler_state(trainer, resume_dir: str) -> None:
     if trainer.lr_scheduler is None or _global_rank() != 0:
         return
-    torch.save(trainer.lr_scheduler.state_dict(), os.path.join(resume_dir, SCHEDULER_NAME))
+    torch.save(
+        trainer.lr_scheduler.state_dict(), os.path.join(resume_dir, SCHEDULER_NAME)
+    )
 
 
 def _load_scheduler_state(trainer, resume_dir: str) -> None:
     scheduler_path = os.path.join(resume_dir, SCHEDULER_NAME)
     if trainer.lr_scheduler is not None and os.path.isfile(scheduler_path):
-        trainer.lr_scheduler.load_state_dict(torch.load(scheduler_path, map_location="cpu", weights_only=True))
+        trainer.lr_scheduler.load_state_dict(
+            torch.load(scheduler_path, map_location="cpu", weights_only=True)
+        )
 
 
 def _save_scaler_state(trainer, resume_dir: str) -> None:
@@ -245,7 +249,9 @@ def _load_scaler_state(trainer, resume_dir: str) -> None:
     scaler = getattr(trainer.accelerator, "scaler", None)
     scaler_path = os.path.join(resume_dir, SCALER_NAME)
     if scaler is not None and os.path.isfile(scaler_path):
-        scaler.load_state_dict(torch.load(scaler_path, map_location="cpu", weights_only=True))
+        scaler.load_state_dict(
+            torch.load(scaler_path, map_location="cpu", weights_only=True)
+        )
 
 
 def _save_rng_state(trainer, checkpoint_dir: str) -> None:
@@ -282,12 +288,12 @@ def _canonicalize_hf_export_state_dict(
                 prefix = gate_up_match.group("prefix")
                 gate_proj, up_proj = value.chunk(2, dim=1)
                 for expert_idx in range(value.shape[0]):
-                    canonical_state_dict[
-                        f"{prefix}.{expert_idx}.w1.weight"
-                    ] = gate_proj[expert_idx]
-                    canonical_state_dict[
-                        f"{prefix}.{expert_idx}.w3.weight"
-                    ] = up_proj[expert_idx]
+                    canonical_state_dict[f"{prefix}.{expert_idx}.w1.weight"] = (
+                        gate_proj[expert_idx]
+                    )
+                    canonical_state_dict[f"{prefix}.{expert_idx}.w3.weight"] = up_proj[
+                        expert_idx
+                    ]
                 continue
 
             down_match = _LFM2_MOE_DOWN_PROJ_RE.match(key)
@@ -301,9 +307,9 @@ def _canonicalize_hf_export_state_dict(
 
                 prefix = down_match.group("prefix")
                 for expert_idx in range(value.shape[0]):
-                    canonical_state_dict[
-                        f"{prefix}.{expert_idx}.w2.weight"
-                    ] = value[expert_idx]
+                    canonical_state_dict[f"{prefix}.{expert_idx}.w2.weight"] = value[
+                        expert_idx
+                    ]
                 continue
 
         canonical_state_dict[key] = value
@@ -359,11 +365,35 @@ def _unwrap_model_for_hf_export(model: torch.nn.Module, accelerator) -> torch.nn
         return accelerator.unwrap_model(model)
 
 
-def _model_state_has_lm_head(state_dict: dict[str, Any]) -> bool:
-    return any(
-        key == "lm_head.weight" or key.endswith(".lm_head.weight")
-        for key in state_dict
-    )
+def _canonicalize_tied_lm_head_for_hf_export(
+    *,
+    config: Any,
+    state_dict: dict[str, Any],
+) -> None:
+    """Drop redundant LM head tensors for tied HF exports.
+
+    LFM2/LFM2-MoE configs tie input embeddings and the output projection by
+    default. The public HF checkpoint should preserve that architecture and let
+    HF/vLLM reconstruct the tie from config instead of saving a separate
+    `lm_head.weight`.
+    """
+    if not getattr(config, "tie_word_embeddings", False):
+        return
+
+    removed = [
+        key
+        for key in list(state_dict)
+        if key == "lm_head.weight" or key.endswith(".lm_head.weight")
+    ]
+    for key in removed:
+        state_dict.pop(key, None)
+
+    if removed:
+        logger.info(
+            "Dropped %s redundant lm_head weight tensor(s) from tied HF export; "
+            "loaders will reconstruct the output head from input embeddings.",
+            len(removed),
+        )
 
 
 def _rope_type(rope_config: dict[str, Any]) -> str | None:
@@ -409,7 +439,6 @@ def _apply_yarn_export_config(config: Any, original_max_position_embeddings) -> 
 def _apply_model_config_for_hf_export(
     *,
     model_to_save: torch.nn.Module,
-    state_dict: dict[str, Any],
     export_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Patch the config so HF/vLLM loaders see the same model semantics as training."""
@@ -435,15 +464,6 @@ def _apply_model_config_for_hf_export(
 
     _apply_yarn_export_config(config, original_max_position_embeddings)
 
-    if _model_state_has_lm_head(state_dict) and getattr(
-        config, "tie_word_embeddings", False
-    ):
-        logger.warning(
-            "HF export includes lm_head.weight while config ties embeddings; "
-            "setting tie_word_embeddings=False so loaders keep the trained head."
-        )
-        config.tie_word_embeddings = False
-
 
 def _save_hf_pretrained_model(
     *,
@@ -460,9 +480,14 @@ def _save_hf_pretrained_model(
 
     _apply_model_config_for_hf_export(
         model_to_save=model_to_save,
-        state_dict=state_dict,
         export_metadata=export_metadata,
     )
+    config = getattr(model_to_save, "config", None)
+    if config is not None:
+        _canonicalize_tied_lm_head_for_hf_export(
+            config=config,
+            state_dict=state_dict,
+        )
 
     os.makedirs(export_dir, exist_ok=True)
     model_to_save.save_pretrained(
@@ -544,7 +569,9 @@ def save_fsdp2_model_checkpoint(
 ) -> None:
     """Save the HF-export layer for a manual FSDP2 model."""
     global_rank = _global_rank()
-    logger.info("FSDP2 root export start rank=%s output_dir=%s", global_rank, output_dir)
+    logger.info(
+        "FSDP2 root export start rank=%s output_dir=%s", global_rank, output_dir
+    )
     staging_dir = None
     if checkpoint_staging_dir:
         staging_dir = _checkpoint_staging_dir(output_dir, checkpoint_staging_dir)
@@ -686,7 +713,10 @@ def save_manual_sharded_trainer_checkpoint(
         _save_rng_state(trainer, output_dir)
         trainer.state.save_to_json(os.path.join(output_dir, TRAINER_STATE_NAME))
         _update_latest_pointer(run_dir, output_dir)
-        if trainer.args.save_total_limit is not None and trainer.args.save_total_limit > 0:
+        if (
+            trainer.args.save_total_limit is not None
+            and trainer.args.save_total_limit > 0
+        ):
             rotate_named_checkpoints(run_dir, trainer.args.save_total_limit)
     _world_barrier()
 
@@ -741,7 +771,10 @@ def save_manual_sharded_hf_checkpoint(
         _save_rng_state(trainer, output_dir)
         trainer.state.save_to_json(os.path.join(output_dir, TRAINER_STATE_NAME))
         _update_latest_pointer(run_dir, output_dir)
-        if trainer.args.save_total_limit is not None and trainer.args.save_total_limit > 0:
+        if (
+            trainer.args.save_total_limit is not None
+            and trainer.args.save_total_limit > 0
+        ):
             rotate_named_checkpoints(run_dir, trainer.args.save_total_limit)
     _world_barrier()
 
@@ -875,7 +908,9 @@ def should_run_final_manual_sharded_save(
     return not os.path.isdir(output_dir)
 
 
-def load_manual_sharded_model_checkpoint(*, model: torch.nn.Module, checkpoint_dir: str) -> bool:
+def load_manual_sharded_model_checkpoint(
+    *, model: torch.nn.Module, checkpoint_dir: str
+) -> bool:
     """Load manual-sharded model state for resume if present."""
     resume_dir = _manual_sharded_resume_dir(checkpoint_dir)
     if not os.path.isdir(resume_dir):

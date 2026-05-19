@@ -210,7 +210,7 @@ def test_save_hf_pretrained_model_delegates_to_hf_and_copies_custom_code(
     assert (export_dir / "modeling_lfm2_moe.py").read_text() == "# modeling code\n"
 
 
-def test_save_hf_pretrained_model_preserves_yarn_and_trained_lm_head(
+def test_save_hf_pretrained_model_preserves_yarn_and_tied_lm_head_contract(
     tmp_path: Path,
 ):
     source_dir = tmp_path / "base"
@@ -248,7 +248,32 @@ def test_save_hf_pretrained_model_preserves_yarn_and_trained_lm_head(
     assert config["rope_scaling"]["type"] == "yarn"
     assert config["rope_scaling"]["factor"] == 10.0
     assert config["rope_scaling"]["original_max_position_embeddings"] == 128000
+    assert config["tie_word_embeddings"] is True
+    assert "lm_head.weight" not in model.saved_state_dict
+
+
+def test_save_hf_pretrained_model_preserves_intentionally_untied_lm_head(
+    tmp_path: Path,
+):
+    source_dir = tmp_path / "base"
+    export_dir = tmp_path / "export"
+    source_dir.mkdir()
+    model = ModelStub(source_dir)
+    state_dict = {
+        "model.embed_tokens.weight": torch.ones(2, 3),
+        "lm_head.weight": torch.zeros(2, 3),
+    }
+
+    _save_hf_pretrained_model(
+        model_to_save=model,
+        state_dict=state_dict,
+        export_dir=str(export_dir),
+        export_metadata={"model_config": {"tie_word_embeddings": False}},
+    )
+
+    config = json.loads((export_dir / "config.json").read_text())
     assert config["tie_word_embeddings"] is False
+    assert "lm_head.weight" in model.saved_state_dict
 
 
 def test_lfm2_rope_theta_override_is_mirrored_to_rope_parameters():

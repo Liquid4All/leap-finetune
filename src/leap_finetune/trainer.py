@@ -63,7 +63,9 @@ def _resolve_num_workers(
     return local_num_gpus
 
 
-def _build_scaling_config(ray_config: dict | None, *, num_workers: int) -> ScalingConfig:
+def _build_scaling_config(
+    ray_config: dict | None, *, num_workers: int
+) -> ScalingConfig:
     resources_per_worker = {"GPU": 1.0}
     if ray_config and isinstance(ray_config.get("resources_per_worker"), dict):
         resources_per_worker = dict(ray_config["resources_per_worker"])

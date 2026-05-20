@@ -37,11 +37,15 @@ def _render_export_block(is_multinode: bool) -> str:
             lines.append(f'export {key}="${{{key}:-{value}}}"')
 
     for key in _PASSTHROUGH_ENV_VARS:
-        if key in {
-            "NCCL_IB_DISABLE",
-            "LEAP_DISABLE_DATASETS_TORCH_SHM",
-            "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE",
-        } and is_multinode:
+        if (
+            key
+            in {
+                "NCCL_IB_DISABLE",
+                "LEAP_DISABLE_DATASETS_TORCH_SHM",
+                "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE",
+            }
+            and is_multinode
+        ):
             continue
 
         value = os.environ.get(key)
@@ -91,9 +95,9 @@ def generate_slurm_script(
 
     gpus_per_node = slurm_settings.get("gpus_per_node")
     gpus_directive = (
-        f'#SBATCH --gpus-per-node={gpus_per_node}'
+        f"#SBATCH --gpus-per-node={gpus_per_node}"
         if gpus_per_node is not None
-        else f'#SBATCH --gpus-per-task={slurm_settings["gpus_per_task"]}'
+        else f"#SBATCH --gpus-per-task={slurm_settings['gpus_per_task']}"
     )
 
     script_content = f"""#!/bin/bash

@@ -28,17 +28,11 @@ def _resolve_kuberay_cluster_spec(kuberay_cfg: dict) -> dict:
     head_gpu_count = int(kuberay_cfg.get("head_gpu_count", 0))
 
     if worker_replicas < 1:
-        raise ValueError(
-            f"kuberay.worker_replicas must be >= 1, got {worker_replicas}"
-        )
+        raise ValueError(f"kuberay.worker_replicas must be >= 1, got {worker_replicas}")
     if gpus_per_worker < 1:
-        raise ValueError(
-            f"kuberay.gpus_per_worker must be >= 1, got {gpus_per_worker}"
-        )
+        raise ValueError(f"kuberay.gpus_per_worker must be >= 1, got {gpus_per_worker}")
     if head_gpu_count < 0:
-        raise ValueError(
-            f"kuberay.head_gpu_count must be >= 0, got {head_gpu_count}"
-        )
+        raise ValueError(f"kuberay.head_gpu_count must be >= 0, got {head_gpu_count}")
 
     return {
         "gpu_type": gpu_type,
@@ -208,7 +202,9 @@ def _submit(config_dict: dict, kuberay_cfg: dict) -> None:
         print(f"Failed to create ConfigMap: {exc.reason}")
         sys.exit(1)
 
-    rayjob = _generate_rayjob_manifest(job_name, configmap_name, kuberay_cfg, output_dir)
+    rayjob = _generate_rayjob_manifest(
+        job_name, configmap_name, kuberay_cfg, output_dir
+    )
 
     try:
         custom_api.create_namespaced_custom_object(
@@ -279,8 +275,12 @@ def _generate_rayjob_manifest(
         "env": env_list,
     }
     if cluster_spec["head_gpu_count"] > 0:
-        head_container["resources"]["limits"][gpu_type] = str(cluster_spec["head_gpu_count"])
-        head_container["resources"]["requests"][gpu_type] = str(cluster_spec["head_gpu_count"])
+        head_container["resources"]["limits"][gpu_type] = str(
+            cluster_spec["head_gpu_count"]
+        )
+        head_container["resources"]["requests"][gpu_type] = str(
+            cluster_spec["head_gpu_count"]
+        )
 
     worker_container = {
         "name": "ray-worker",
@@ -316,7 +316,9 @@ def _generate_rayjob_manifest(
     worker_pod_spec["nodeSelector"] = kuberay_cfg.get(
         "worker_node_selector", common_node_selector
     )
-    head_pod_spec["tolerations"] = kuberay_cfg.get("head_tolerations", common_tolerations)
+    head_pod_spec["tolerations"] = kuberay_cfg.get(
+        "head_tolerations", common_tolerations
+    )
     worker_pod_spec["tolerations"] = kuberay_cfg.get(
         "worker_tolerations", common_tolerations
     )
@@ -332,7 +334,10 @@ def _generate_rayjob_manifest(
     return {
         "apiVersion": "ray.io/v1",
         "kind": "RayJob",
-        "metadata": {"name": job_name, "namespace": kuberay_cfg.get("namespace", "default")},
+        "metadata": {
+            "name": job_name,
+            "namespace": kuberay_cfg.get("namespace", "default"),
+        },
         "spec": {
             "submissionMode": "K8sJobMode",
             "entrypoint": (
@@ -343,7 +348,9 @@ def _generate_rayjob_manifest(
                 'main()"'
             ),
             "shutdownAfterJobFinishes": True,
-            "ttlSecondsAfterFinished": kuberay_cfg.get("ttl_seconds_after_finished", 300),
+            "ttlSecondsAfterFinished": kuberay_cfg.get(
+                "ttl_seconds_after_finished", 300
+            ),
             "rayClusterSpec": {
                 "rayVersion": ray_version,
                 "headGroupSpec": {

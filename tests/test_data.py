@@ -272,10 +272,24 @@ class TestDatasetLoader:
         shard_dir = tmp_path / "parquet_shards"
         shard_dir.mkdir()
         pd.DataFrame(
-            [{"messages": [{"role": "user", "content": "x"}, {"role": "assistant", "content": "y"}]}]
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "x"},
+                        {"role": "assistant", "content": "y"},
+                    ]
+                }
+            ]
         ).to_parquet(shard_dir / "train-00000-of-00002.parquet")
         pd.DataFrame(
-            [{"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]}]
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "a"},
+                        {"role": "assistant", "content": "b"},
+                    ]
+                }
+            ]
         ).to_parquet(shard_dir / "train-00001-of-00002.parquet")
 
         assert get_source_type(str(shard_dir)) == "parquet"

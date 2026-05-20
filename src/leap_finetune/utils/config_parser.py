@@ -206,7 +206,9 @@ def parse_job_config(config_input: str) -> JobConfig:
         ]
 
     for float_key in ("learning_rate", "weight_decay"):
-        if float_key in train_config_dict and isinstance(train_config_dict[float_key], str):
+        if float_key in train_config_dict and isinstance(
+            train_config_dict[float_key], str
+        ):
             train_config_dict[float_key] = float(train_config_dict[float_key])
 
     final_training_config = base_train_config.override(**train_config_dict)

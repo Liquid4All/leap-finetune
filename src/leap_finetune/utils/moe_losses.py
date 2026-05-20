@@ -190,7 +190,9 @@ def _run_module_list_experts(
         current_hidden_states = expert_layer(current_state) * routing_weights[
             top_x, idx, None
         ].to(current_state.dtype)
-        final_hidden_states.index_add_(0, top_x, current_hidden_states.to(torch.float32))
+        final_hidden_states.index_add_(
+            0, top_x, current_hidden_states.to(torch.float32)
+        )
 
     return final_hidden_states.to(flat_hidden_states.dtype).reshape(
         batch_size, sequence_length, hidden_dim
@@ -244,7 +246,10 @@ def _patch_block(block: nn.Module, config: MoETrainingConfig) -> None:
             routing_weights = InjectAuxLoss.apply(routing_weights, aux)
             block._moe_aux_loss = aux.detach()
 
-        if hasattr(block.experts, "forward") and type(block.experts).__name__ != "ModuleList":
+        if (
+            hasattr(block.experts, "forward")
+            and type(block.experts).__name__ != "ModuleList"
+        ):
             output = block.experts(
                 x,
                 selected_experts,

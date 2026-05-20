@@ -204,18 +204,14 @@ def moe_dpo_run(training_config: dict) -> None:
         excluded_keys = excluded_keys | {"deepspeed"}
 
     train_config_filtered = {
-        k: v
-        for k, v in train_config.items()
-        if k not in excluded_keys
+        k: v for k, v in train_config.items() if k not in excluded_keys
     }
     requested_save_strategy = train_config_filtered.get("save_strategy", "no")
     manual_sharded_checkpoint_format = train_config.get(
         "manual_sharded_checkpoint_format", "hf"
     )
 
-    wandb_logging = bool(
-        train_config.get("wandb_logging", False)
-    )
+    wandb_logging = bool(train_config.get("wandb_logging", False))
     init_wandb_if_enabled(job_name, wandb_logging)
 
     if "per_device_eval_batch_size" not in train_config_filtered:

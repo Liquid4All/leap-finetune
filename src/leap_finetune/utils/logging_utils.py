@@ -246,7 +246,12 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
     }
 
-    for key in ("NCCL_IB_DISABLE", "NCCL_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME", "NCCL_SOCKET_FAMILY"):
+    for key in (
+        "NCCL_IB_DISABLE",
+        "NCCL_SOCKET_IFNAME",
+        "GLOO_SOCKET_IFNAME",
+        "NCCL_SOCKET_FAMILY",
+    ):
         value = os.environ.get(key)
         if value:
             env_vars[key] = value

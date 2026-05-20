@@ -49,7 +49,9 @@ class LFMSFTTrainer(RayDataLoaderMixin, Trainer):
         self._cp_batch_validated = False
         self._cp_eval_batch_validated = False
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def compute_loss(
+        self, model, inputs, return_outputs=False, num_items_in_batch=None
+    ):
         if self.cp_config and self.cp_config["cp_size"] > 1 and "labels" in inputs:
             return compute_cp_loss_for_trainer(
                 self,

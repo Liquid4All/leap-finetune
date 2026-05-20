@@ -202,7 +202,12 @@ def install_memory_efficient_causal_lm_loss(model: nn.Module) -> None:
         logits_to_keep = kwargs.get("logits_to_keep", 0)
         num_items_in_batch = kwargs.pop("num_items_in_batch", None)
 
-        if labels is None or not self.training or args or logits_to_keep not in (0, None):
+        if (
+            labels is None
+            or not self.training
+            or args
+            or logits_to_keep not in (0, None)
+        ):
             return original_forward(*args, **kwargs)
 
         model_kwargs = {

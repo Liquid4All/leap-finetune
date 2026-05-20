@@ -37,8 +37,7 @@ def scale_cp_loss_for_trainer_num_items(
 ):
     """Mirror Trainer.compute_loss scaling when HF passes num_items_in_batch."""
     if not (
-        trainer.args.average_tokens_across_devices
-        and num_items_in_batch is not None
+        trainer.args.average_tokens_across_devices and num_items_in_batch is not None
     ):
         return output
 
@@ -130,9 +129,7 @@ def cp_prediction_step(
 
     if isinstance(outputs, dict):
         logits = tuple(
-            value
-            for key, value in outputs.items()
-            if key not in ignore_keys + ["loss"]
+            value for key, value in outputs.items() if key not in ignore_keys + ["loss"]
         )
     else:
         logits = outputs[1:]

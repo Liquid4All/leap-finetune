@@ -32,10 +32,7 @@ def permute_tokens(
     device = hidden_states.device
 
     token_idx = (
-        torch.arange(n_tokens, device=device)
-        .unsqueeze(1)
-        .expand(-1, top_k)
-        .reshape(-1)
+        torch.arange(n_tokens, device=device).unsqueeze(1).expand(-1, top_k).reshape(-1)
     )
     expert_ids = selected_experts.reshape(-1)
     flat_weights = routing_weights.reshape(-1)

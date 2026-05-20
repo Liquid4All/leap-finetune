@@ -62,9 +62,7 @@ def build_replica_group_blocks(
     if world_size < 1:
         raise ValueError(f"world_size must be >= 1, got {world_size}")
     if replica_group_size < 1:
-        raise ValueError(
-            f"replica_group_size must be >= 1, got {replica_group_size}"
-        )
+        raise ValueError(f"replica_group_size must be >= 1, got {replica_group_size}")
     if world_size % replica_group_size != 0:
         raise ValueError(
             f"world_size ({world_size}) must be divisible by replica_group_size "

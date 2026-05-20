@@ -123,7 +123,9 @@ class JobConfig:
             elif self.dataset.test_size is None:
                 table.add_row("Validation", "Disabled")
             else:
-                table.add_row("Validation Split", f"Random ({self.dataset.test_size:.2f})")
+                table.add_row(
+                    "Validation Split", f"Random ({self.dataset.test_size:.2f})"
+                )
             if self.dataset.limit:
                 table.add_row("Dataset Limit", f"{self.dataset.limit:,}")
         elif isinstance(self.dataset, tuple):

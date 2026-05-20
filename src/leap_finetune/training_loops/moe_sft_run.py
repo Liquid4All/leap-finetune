@@ -76,6 +76,7 @@ MOE_SFT_EXCLUDED_KEYS = SFT_EXCLUDED_KEYS | {
     "context_parallel_size",
 }
 
+
 class LFMMoeSFTTrainer(ManualShardedCheckpointMixin, Trainer):
     """SFT Trainer for MoE models with EP/FSDP2 support."""
 
@@ -159,7 +160,9 @@ class LFMMoeSFTTrainer(ManualShardedCheckpointMixin, Trainer):
     def _memory_trace_step(self) -> int:
         return int(getattr(getattr(self, "state", None), "global_step", 0))
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def compute_loss(
+        self, model, inputs, return_outputs=False, num_items_in_batch=None
+    ):
         # === 2. Run the local forward on the rank's current batch shard ===
         if self.cp_config and self.cp_config["cp_size"] > 1 and "labels" in inputs:
             output = compute_cp_loss_for_trainer(
@@ -257,18 +260,14 @@ def moe_sft_run(training_config: dict) -> None:
     )
 
     train_config_filtered = {
-        k: v
-        for k, v in train_config.items()
-        if k not in excluded_keys
+        k: v for k, v in train_config.items() if k not in excluded_keys
     }
     requested_save_strategy = train_config_filtered.get("save_strategy", "no")
     manual_sharded_checkpoint_format = train_config.get(
         "manual_sharded_checkpoint_format", "hf"
     )
 
-    wandb_logging = bool(
-        train_config.get("wandb_logging", False)
-    )
+    wandb_logging = bool(train_config.get("wandb_logging", False))
     init_wandb_if_enabled(job_name, wandb_logging)
 
     if "per_device_eval_batch_size" not in train_config_filtered:

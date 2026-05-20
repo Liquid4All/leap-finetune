@@ -84,10 +84,7 @@ def permute_tokens(
     # Flatten top-k: each (token, slot) pair → one entry
     # token_idx[i] = which token, expert_ids[i] = which expert
     token_idx = (
-        torch.arange(n_tokens, device=device)
-        .unsqueeze(1)
-        .expand(-1, top_k)
-        .reshape(-1)
+        torch.arange(n_tokens, device=device).unsqueeze(1).expand(-1, top_k).reshape(-1)
     )  # [n_tokens * top_k]
     expert_ids = selected_experts.reshape(-1)  # [n_tokens * top_k]
     flat_weights = routing_weights.reshape(-1)  # [n_tokens * top_k]
@@ -247,9 +244,9 @@ class EPTokenDispatcher:
         # Flatten to [ep_size * n_local_experts], with expert ids cycling 0..E-1
         device = tokens.device
         counts = self._received_tpe.flatten()  # [ep_size * n_local_experts]
-        expert_ids = torch.arange(
-            self.n_local_experts, device=device
-        ).repeat(self.ep_size)  # [0,1,..,E-1, 0,1,..,E-1, ...]
+        expert_ids = torch.arange(self.n_local_experts, device=device).repeat(
+            self.ep_size
+        )  # [0,1,..,E-1, 0,1,..,E-1, ...]
         expert_labels = expert_ids.repeat_interleave(counts)
 
         resort_indices = expert_labels.argsort(stable=True)
@@ -317,9 +314,7 @@ def compute_local_experts(
 
     # gate_up_proj: [n_local, 2*intermediate, hidden] → transpose to [n_local, hidden, 2*intermediate]
     # grouped_mm: [S, hidden] @ [n_local, hidden, 2*intermediate] → [S, 2*intermediate]
-    gate_up_out = _grouped_mm(
-        tokens, experts.gate_up_proj.transpose(-2, -1), offsets
-    )
+    gate_up_out = _grouped_mm(tokens, experts.gate_up_proj.transpose(-2, -1), offsets)
     gate, up = gate_up_out.chunk(2, dim=-1)
     activated = experts.act_fn(gate) * up
 

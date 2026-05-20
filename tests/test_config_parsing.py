@@ -396,7 +396,10 @@ class TestTrainingConfigOverrides:
             "peft_config": {"use_peft": False},
         }
         job = parse_job_config(write_config(config, tmp_path))
-        assert job.training_config.value["checkpoint_staging_dir"] == "/tmp/checkpoint-stage"
+        assert (
+            job.training_config.value["checkpoint_staging_dir"]
+            == "/tmp/checkpoint-stage"
+        )
 
     def test_relative_local_paths_resolve_from_config_dir(self, tmp_path):
         data_dir = tmp_path / "data"
@@ -997,10 +1000,13 @@ class TestCheckpointHelpers:
         self, tmp_path
     ):
         model = object()
-        assert load_manual_sharded_model_checkpoint(
-            model=model,
-            checkpoint_dir=str(tmp_path),
-        ) is False
+        assert (
+            load_manual_sharded_model_checkpoint(
+                model=model,
+                checkpoint_dir=str(tmp_path),
+            )
+            is False
+        )
 
     def test_update_latest_pointer_replaces_existing_target(self, tmp_path):
         run_dir = tmp_path / "outputs"

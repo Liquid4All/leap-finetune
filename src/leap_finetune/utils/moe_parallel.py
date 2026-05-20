@@ -442,7 +442,9 @@ def apply_fsdp2(
             checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT
         )
         n_ckpt = sum(
-            1 for module in model.modules() if type(module).__name__ == "Lfm2MoeDecoderLayer"
+            1
+            for module in model.modules()
+            if type(module).__name__ == "Lfm2MoeDecoderLayer"
         )
         if n_ckpt > 0:
             apply_activation_checkpointing(

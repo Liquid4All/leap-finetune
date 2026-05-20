@@ -161,8 +161,7 @@ def _all_gather_fixed_seq(
 ) -> list[torch.Tensor]:
     """All-gather equal-length sequence shards across the CP group."""
     return [
-        chunk.contiguous()
-        for chunk in _CPAllGather.apply(tensor.contiguous(), group)
+        chunk.contiguous() for chunk in _CPAllGather.apply(tensor.contiguous(), group)
     ]
 
 
@@ -246,9 +245,7 @@ def _prepend_cp_left_halo(
 
     extended_mask = attention_mask
     if attention_mask is not None:
-        gathered_mask_halos = _all_gather_cp_halos(
-            attention_mask, halo_width, cp_group
-        )
+        gathered_mask_halos = _all_gather_cp_halos(attention_mask, halo_width, cp_group)
         if cp_rank == 0:
             halo_mask = torch.zeros_like(gathered_mask_halos[0])
         else:
@@ -419,7 +416,9 @@ def patch_short_conv_for_cp(
 ) -> None:
     """Monkey-patch the LFM short-conv path to prepend a minimal left halo."""
     original_forward = conv_module.forward
-    halo_width = min(getattr(conv_module, "L_cache", CP_CONV_LEFT_HALO) - 1, CP_CONV_LEFT_HALO)
+    halo_width = min(
+        getattr(conv_module, "L_cache", CP_CONV_LEFT_HALO) - 1, CP_CONV_LEFT_HALO
+    )
 
     def cp_short_conv_forward(
         hidden_states: torch.Tensor,
@@ -596,11 +595,7 @@ def validate_cp_batch_replicated(
     dist.all_gather_object(gathered, fingerprint, group=cp_group)
 
     expected = gathered[0]
-    mismatched = [
-        rank
-        for rank, item in enumerate(gathered)
-        if item != expected
-    ]
+    mismatched = [rank for rank, item in enumerate(gathered) if item != expected]
     if mismatched:
         raise RuntimeError(
             "Context parallel ranks received different pre-split batches. "
@@ -626,7 +621,9 @@ def validate_cp_model_support(model: nn.Module, train_config: dict) -> None:
         return
 
     layer_types = getattr(getattr(model, "config", None), "layer_types", None) or []
-    has_conv_layers = any("conv" in str(layer_type).lower() for layer_type in layer_types)
+    has_conv_layers = any(
+        "conv" in str(layer_type).lower() for layer_type in layer_types
+    )
     if not has_conv_layers:
         has_conv_layers = any(
             "conv" in type(module).__name__.lower() for module in model.modules()

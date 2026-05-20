@@ -61,8 +61,14 @@ def test_generate_rayjob_manifest_creates_worker_group_pool():
 
     assert head_spec["serviceType"] == "ClusterIP"
     assert head_spec["rayStartParams"]["dashboard-host"] == "0.0.0.0"
-    assert head_spec["template"]["spec"]["containers"][0]["resources"]["limits"]["cpu"] == "2"
-    assert "nvidia.com/gpu" not in head_spec["template"]["spec"]["containers"][0]["resources"]["limits"]
+    assert (
+        head_spec["template"]["spec"]["containers"][0]["resources"]["limits"]["cpu"]
+        == "2"
+    )
+    assert (
+        "nvidia.com/gpu"
+        not in head_spec["template"]["spec"]["containers"][0]["resources"]["limits"]
+    )
 
     assert worker_spec["replicas"] == 2
     assert worker_spec["minReplicas"] == 2
@@ -74,4 +80,9 @@ def test_generate_rayjob_manifest_creates_worker_group_pool():
         ]
         == "4"
     )
-    assert worker_spec["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"] == "80Gi"
+    assert (
+        worker_spec["template"]["spec"]["containers"][0]["resources"]["limits"][
+            "memory"
+        ]
+        == "80Gi"
+    )

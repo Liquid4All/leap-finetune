@@ -62,8 +62,7 @@ class ReplicaGroupDataConfig(DataConfig):
         locality_hints = None
         if self._enable_shard_locality and worker_handles is not None:
             locality_hints = [
-                worker_handles[group_ranks[0]]
-                for _, group_ranks, _ in replica_blocks
+                worker_handles[group_ranks[0]] for _, group_ranks, _ in replica_blocks
             ]
 
         for name, ds in datasets.items():

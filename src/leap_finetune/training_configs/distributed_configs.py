@@ -26,9 +26,7 @@ MOE_FSDP_CONFIG_LARGE = {
 }
 
 
-def resolve_reshard_after_forward(
-    train_config: dict, default: bool
-) -> bool:
+def resolve_reshard_after_forward(train_config: dict, default: bool) -> bool:
     """Resolve reshard_after_forward from config, then default."""
     config_value = train_config.get("reshard_after_forward")
     if config_value is not None:
@@ -36,9 +34,7 @@ def resolve_reshard_after_forward(
     return default
 
 
-def resolve_fsdp_cpu_offload(
-    train_config: dict, default: bool = False
-) -> bool:
+def resolve_fsdp_cpu_offload(train_config: dict, default: bool = False) -> bool:
     """Resolve fsdp_cpu_offload from config, then default."""
     config_value = train_config.get("fsdp_cpu_offload")
     if config_value is not None:

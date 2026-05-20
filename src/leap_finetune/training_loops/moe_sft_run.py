@@ -44,6 +44,7 @@ from leap_finetune.utils.memory_trace import (
 )
 from leap_finetune.utils.trainer_mixins import (
     ManualShardedCheckpointMixin,
+    run_training_safely,
     validate_manual_sharded_training_args,
 )
 from leap_finetune.utils.model_utils import (
@@ -413,37 +414,24 @@ def moe_sft_run(training_config: dict) -> None:
 
     dist_barrier()
 
-    try:
-        logger.info("Starting trainer.train() for MoE SFT")
-        trainer.train(resume_from_checkpoint=resume_from)
-        logger.info("trainer.train() returned for MoE SFT")
-        if (use_ep or use_fsdp2) and should_run_final_manual_sharded_save(
+    logger.info("Starting trainer.train() for MoE SFT")
+    run_training_safely(trainer, resume_from_checkpoint=resume_from)
+    logger.info("trainer.train() returned for MoE SFT")
+    if (use_ep or use_fsdp2) and should_run_final_manual_sharded_save(
+        trainer=trainer,
+        requested_save_strategy=requested_save_strategy,
+    ):
+        logger.info("Running explicit final manual-sharded checkpoint save")
+        save_manual_sharded_checkpoint(
             trainer=trainer,
-            requested_save_strategy=requested_save_strategy,
-        ):
-            logger.info("Running explicit final manual-sharded checkpoint save")
-            save_manual_sharded_checkpoint(
-                trainer=trainer,
-                model=trainer.model,
-                trial=None,
-                checkpoint_format=manual_sharded_checkpoint_format,
-                ep_group=ep_config["ep_group"] if ep_config is not None else None,
-                export_metadata=trainer.get_manual_sharded_export_metadata(),
-            )
-            logger.info("Explicit final manual-sharded checkpoint save completed")
-        logger.info("MoE SFT training completed successfully")
-    except RuntimeError as e:
-        error_msg = str(e)
-        if any(
-            keyword in error_msg.lower()
-            for keyword in ["cuda error", "ecc error", "nccl", "collective", "timeout"]
-        ):
-            logger.warning(
-                "Training completed but hit distributed error during cleanup: %s",
-                error_msg,
-            )
-        else:
-            raise
+            model=trainer.model,
+            trial=None,
+            checkpoint_format=manual_sharded_checkpoint_format,
+            ep_group=ep_config["ep_group"] if ep_config is not None else None,
+            export_metadata=trainer.get_manual_sharded_export_metadata(),
+        )
+        logger.info("Explicit final manual-sharded checkpoint save completed")
+    logger.info("MoE SFT training completed successfully")
 
     if peft_config and is_rank_zero():
         merge_and_save_peft_model(

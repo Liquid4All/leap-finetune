@@ -3,6 +3,8 @@ import pytest
 from leap_finetune.data_loaders.tool_call_utils import (
     ToolFormatInfo,
     detect_tool_format,
+    normalize_messages_for_chat_template,
+    normalize_row_for_chat_template,
     normalize_tool_format,
     validate_tool_format,
     _tool_calls_to_pythonic,
@@ -314,6 +316,91 @@ class TestToolCallsToPythonic:
         ]
         result = _tool_calls_to_pythonic(tc)
         assert result == '<|tool_call_start|>[f(x="hello", y=42)]<|tool_call_end|>'
+
+
+class TestNormalizeForChatTemplate:
+    def test_json_string_arguments_are_parsed_without_mutating_input(self):
+        messages = [
+            {"role": "user", "content": "find shoes"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"query": "women\'s shoes"}',
+                        }
+                    }
+                ],
+            },
+        ]
+
+        normalized = normalize_messages_for_chat_template(messages)
+
+        assert normalized[1]["tool_calls"][0]["function"]["arguments"] == {
+            "query": "women's shoes"
+        }
+        assert isinstance(messages[1]["tool_calls"][0]["function"]["arguments"], str)
+
+    def test_pythonic_string_arguments_raise_before_template_rendering(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "f", "arguments": 'x="hello", y=42'}}
+                ],
+            }
+        ]
+
+        with pytest.raises(ValueError, match="JSON object string"):
+            normalize_messages_for_chat_template(messages)
+
+    def test_non_object_json_string_arguments_raise_before_template_rendering(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "f", "arguments": '["not", "kwargs"]'}}
+                ],
+            }
+        ]
+
+        with pytest.raises(ValueError, match="decode to an object"):
+            normalize_messages_for_chat_template(messages)
+
+    def test_row_normalizer_handles_dpo_conversational_fields(self):
+        row = {
+            "prompt": [{"role": "user", "content": "hi"}],
+            "chosen": [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"name": "f", "arguments": '{"x": "chosen"}'},
+                    ],
+                }
+            ],
+            "rejected": [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"name": "f", "arguments": '{"x": "rejected"}'},
+                    ],
+                }
+            ],
+        }
+
+        normalized = normalize_row_for_chat_template(row)
+
+        assert normalized["chosen"][0]["tool_calls"][0]["arguments"] == {"x": "chosen"}
+        assert normalized["rejected"][0]["tool_calls"][0]["arguments"] == {
+            "x": "rejected"
+        }
+        assert isinstance(row["chosen"][0]["tool_calls"][0]["arguments"], str)
 
 
 # === Edge cases the current converter mishandles ===

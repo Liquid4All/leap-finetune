@@ -9,6 +9,10 @@ from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from trl.data_utils import pack_dataset
 
 from leap_finetune.data_loaders.image_loader import load_image
+from leap_finetune.data_loaders.tool_call_utils import (
+    normalize_messages_for_chat_template,
+    normalize_row_for_chat_template,
+)
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -84,7 +88,7 @@ def create_vlm_collate_fn(processor):
                                 img = load_image(content["image"])
                                 content["image"] = img
                                 loaded_images.append(img)
-                valid_samples.append(sample_copy)
+                valid_samples.append(normalize_messages_for_chat_template(sample_copy))
                 all_loaded_images.extend(loaded_images)
             except Exception as e:
                 skip_count += 1
@@ -165,8 +169,9 @@ def tokenize_sft(
     """
     if "messages" in row:
         need_masks = assistant_only_loss or completion_only_loss
+        messages = normalize_messages_for_chat_template(row["messages"])
         result = tokenizer.apply_chat_template(
-            row["messages"],
+            messages,
             tokenize=True,
             truncation=truncate,
             max_length=max_length if truncate else None,
@@ -290,6 +295,8 @@ def tokenize_dpo(
     """
     # Extract prompt if not already present
     row = maybe_extract_prompt(row)
+
+    row = normalize_row_for_chat_template(row)
 
     # Apply chat template (converts conversational → strings, no-op for strings)
     row = maybe_apply_chat_template(row, tokenizer)

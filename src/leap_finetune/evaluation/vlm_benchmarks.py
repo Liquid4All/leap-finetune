@@ -5,6 +5,9 @@ import numpy as np
 import torch
 
 from leap_finetune.data_loaders.image_loader import load_image
+from leap_finetune.data_loaders.tool_call_utils import (
+    normalize_messages_for_chat_template,
+)
 from leap_finetune.evaluation.base import Benchmark
 from leap_finetune.evaluation.data_loaders import load_benchmark_samples
 from leap_finetune.evaluation.metrics import compute_metric
@@ -186,7 +189,7 @@ def _prepare_messages(messages: list[dict]) -> tuple[list[dict], list]:
                 img = load_image(item["image"])
                 item["image"] = img
                 loaded.append(img)
-    return messages, loaded
+    return normalize_messages_for_chat_template(messages), loaded
 
 
 def _extract_text(content) -> str:

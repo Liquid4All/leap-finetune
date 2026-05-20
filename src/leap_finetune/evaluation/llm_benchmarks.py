@@ -3,6 +3,9 @@ from collections.abc import Callable
 import numpy as np
 import torch
 
+from leap_finetune.data_loaders.tool_call_utils import (
+    normalize_messages_for_chat_template,
+)
 from leap_finetune.evaluation.base import Benchmark
 from leap_finetune.evaluation.data_loaders import load_benchmark_samples
 from leap_finetune.evaluation.metrics import compute_metric
@@ -49,7 +52,7 @@ class LLMGenerationBenchmark(Benchmark):
                 item["text"] for item in ground_truth if item.get("type") == "text"
             )
 
-        prompt_messages = messages[:-1]
+        prompt_messages = normalize_messages_for_chat_template(messages[:-1])
         inputs = self.tokenizer.apply_chat_template(
             prompt_messages,
             tokenize=True,
@@ -108,7 +111,7 @@ class LLMLogprobBenchmark(Benchmark):
         options = sample["options"]
         answer_id = int(sample["answer_id"])
 
-        prompt_messages = sample["messages"]
+        prompt_messages = normalize_messages_for_chat_template(sample["messages"])
         prompt_inputs = self.tokenizer.apply_chat_template(
             prompt_messages,
             tokenize=True,
@@ -120,9 +123,12 @@ class LLMLogprobBenchmark(Benchmark):
 
         option_scores = []
         for option in options:
-            full_conv = prompt_messages + [
-                {"role": "assistant", "content": option.strip()}
-            ]
+            full_conv = normalize_messages_for_chat_template(
+                prompt_messages
+                + [
+                    {"role": "assistant", "content": option.strip()},
+                ]
+            )
             full_inputs = self.tokenizer.apply_chat_template(
                 full_conv,
                 tokenize=True,

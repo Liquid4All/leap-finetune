@@ -238,6 +238,114 @@ def _tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
     return f"{TOOL_CALL_START}[{', '.join(calls)}]{TOOL_CALL_END}"
 
 
+def _normalize_argument_payload_for_template(args):
+    if args is None:
+        return {}
+    if not isinstance(args, str):
+        return args
+
+    try:
+        parsed_args = json.loads(args)
+    except json.JSONDecodeError:
+        raise ValueError(
+            "Structured tool_call arguments must be a dict, JSON object string, "
+            "or None before chat-template rendering"
+        ) from None
+
+    if parsed_args is None:
+        return {}
+    if isinstance(parsed_args, dict):
+        return parsed_args
+    raise ValueError(
+        "Structured tool_call arguments JSON must decode to an object before "
+        "chat-template rendering"
+    )
+
+
+def _normalize_tool_call_arguments_for_template(tool_calls: list[dict]) -> list[dict]:
+    """Canonicalize structured tool-call arguments before chat-template rendering.
+
+    This intentionally does not convert tool calls into content. Training
+    preprocessing owns that conversion. This helper is for eval/serving-style
+    histories that keep structured `tool_calls` and rely on the chat template
+    to serialize them.
+    """
+    normalized_tool_calls = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            normalized_tool_calls.append(tool_call)
+            continue
+
+        new_tool_call = dict(tool_call)
+        func = tool_call.get("function")
+        if isinstance(func, dict):
+            new_func = dict(func)
+            new_func["arguments"] = _normalize_argument_payload_for_template(
+                new_func.get("arguments", {})
+            )
+            new_tool_call["function"] = new_func
+        else:
+            new_tool_call["arguments"] = _normalize_argument_payload_for_template(
+                new_tool_call.get("arguments", {})
+            )
+
+        normalized_tool_calls.append(new_tool_call)
+
+    return normalized_tool_calls
+
+
+def _is_message_list(value) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, dict) and "role" in item for item in value
+    )
+
+
+def normalize_messages_for_chat_template(messages: list[dict]) -> list[dict]:
+    """Normalize structured tool-call arguments before applying a chat template.
+
+    Use this on prompt histories for eval/serving paths that preserve
+    structured `tool_calls`. It parses JSON-object string arguments into dicts
+    so the template emits `func(k="v")` instead of malformed
+    `func({"k": "v"})`.
+    """
+    normalized_messages = []
+    modified = False
+
+    for message in messages:
+        if not isinstance(message, dict):
+            normalized_messages.append(message)
+            continue
+
+        new_message = dict(message)
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            new_tool_calls = _normalize_tool_call_arguments_for_template(tool_calls)
+            if new_tool_calls != tool_calls:
+                new_message["tool_calls"] = new_tool_calls
+                modified = True
+
+        normalized_messages.append(new_message)
+
+    return normalized_messages if modified else messages
+
+
+def normalize_row_for_chat_template(row: dict) -> dict:
+    """Normalize any conversational fields before TRL/HF chat templating."""
+    normalized_row = None
+    for key in ("messages", "prompt", "chosen", "rejected"):
+        value = row.get(key)
+        if not _is_message_list(value):
+            continue
+
+        normalized_value = normalize_messages_for_chat_template(value)
+        if normalized_value is not value:
+            if normalized_row is None:
+                normalized_row = dict(row)
+            normalized_row[key] = normalized_value
+
+    return row if normalized_row is None else normalized_row
+
+
 def normalize_tool_format(row: dict, model_family: str) -> dict:
     """Auto-fix tool call format mismatches. Stateless, used as Ray .map() fn."""
     messages = row.get("messages") or row.get("conversations")

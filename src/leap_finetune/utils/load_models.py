@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LFM_TIED_WORD_EMBEDDING_MODEL_TYPES = {"lfm2", "lfm2_moe"}
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_LFM25_DEFAULT_CHAT_TEMPLATE_PATH = (
+    _REPO_ROOT / "job_configs/chat_templates/lfm25_tool_call_chat_template.jinja"
+)
 
 
 def _get_attn_implementation() -> str:
@@ -33,12 +37,37 @@ def _resolve_model_id(model_name: str) -> str:
     model_path = pathlib.Path(model_name)
     if model_path.exists() and model_path.is_dir():
         return model_name
+    if "/" in model_name or "://" in model_name:
+        return model_name
     return f"LiquidAI/{model_name}"
+
+
+def _is_lfm25_chat_template_model(model_name: str) -> bool:
+    lowered = model_name.lower()
+    return "lfm2.5" in lowered or "lfm2-24b" in lowered or "lfm2_24b" in lowered
+
+
+def _default_chat_template_path(model_name: str | None) -> pathlib.Path | None:
+    if not model_name:
+        return None
+    model_path = pathlib.Path(model_name)
+    if model_path.exists() and model_path.is_dir():
+        return None
+    if not _is_lfm25_chat_template_model(model_name):
+        return None
+    if not _LFM25_DEFAULT_CHAT_TEMPLATE_PATH.exists():
+        logger.warning(
+            "Default LFM2.5 chat template not found at %s",
+            _LFM25_DEFAULT_CHAT_TEMPLATE_PATH,
+        )
+        return None
+    return _LFM25_DEFAULT_CHAT_TEMPLATE_PATH
 
 
 def _resolve_chat_template(
     chat_template: str | None = None,
     chat_template_path: str | None = None,
+    model_name: str | None = None,
 ) -> str | None:
     if chat_template and chat_template_path:
         raise ValueError("Specify either chat_template or chat_template_path, not both")
@@ -46,7 +75,15 @@ def _resolve_chat_template(
     if chat_template_path:
         return pathlib.Path(chat_template_path).expanduser().read_text()
 
-    return chat_template
+    if chat_template:
+        return chat_template
+
+    default_template_path = _default_chat_template_path(model_name)
+    if default_template_path:
+        logger.info("Using default LFM2.5 chat template: %s", default_template_path)
+        return default_template_path.read_text()
+
+    return None
 
 
 def _apply_chat_template_override(
@@ -54,8 +91,9 @@ def _apply_chat_template_override(
     *,
     chat_template: str | None = None,
     chat_template_path: str | None = None,
+    model_name: str | None = None,
 ) -> AutoTokenizer:
-    resolved = _resolve_chat_template(chat_template, chat_template_path)
+    resolved = _resolve_chat_template(chat_template, chat_template_path, model_name)
     if resolved:
         tokenizer.chat_template = resolved
         logger.info("Applied tokenizer chat template override")
@@ -150,6 +188,7 @@ def load_tokenizer(
         tokenizer,
         chat_template=chat_template,
         chat_template_path=chat_template_path,
+        model_name=model_name,
     )
 
 
@@ -203,6 +242,7 @@ def load_model(
         tokenizer,
         chat_template=chat_template,
         chat_template_path=chat_template_path,
+        model_name=model_name,
     )
 
     if enable_grouped_mm:

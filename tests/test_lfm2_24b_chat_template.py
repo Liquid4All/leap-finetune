@@ -1,7 +1,12 @@
 import ast
 from pathlib import Path
 
+import pytest
 from transformers.utils.chat_template_utils import render_jinja_template
+
+from leap_finetune.data_loaders.tool_call_utils import (
+    normalize_messages_for_chat_template,
+)
 
 
 LFM25_TEMPLATE_PATH = Path(
@@ -46,6 +51,18 @@ def _tool_call_payload(rendered: str) -> str:
     start = rendered.index("<|tool_call_start|>") + len("<|tool_call_start|>")
     end = rendered.index("<|tool_call_end|>")
     return rendered[start:end]
+
+
+def _render_with_assistant_indices(messages, template_path):
+    rendered, generation_indices = render_jinja_template(
+        [messages],
+        chat_template=template_path.read_text(),
+        return_assistant_tokens_mask=True,
+        add_generation_prompt=False,
+        bos_token="<s>",
+        strftime_now=lambda _: "2026-05-18",
+    )
+    return rendered[0], generation_indices[0]
 
 
 def test_string_tool_arguments_are_escaped_as_valid_python_literals():
@@ -109,6 +126,53 @@ def test_flat_tool_call_schema_renders_like_openai_nested_schema():
     assert '<|tool_call_start|>[search(query="shoes")]<|tool_call_end|>' in rendered
 
 
+def test_json_string_tool_arguments_are_normalized_before_template_rendering():
+    messages = normalize_messages_for_chat_template(
+        [
+            {"role": "user", "content": "find shoes"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"query": "women\'s shoes"}',
+                        }
+                    }
+                ],
+            },
+        ]
+    )
+
+    rendered = _render(messages)
+    payload = _tool_call_payload(rendered)
+
+    ast.parse(payload, mode="eval")
+    assert 'search(query="women\'s shoes")' in payload
+
+
+def test_template_requires_normalized_mapping_arguments():
+    with pytest.raises(Exception):
+        _render(
+            [
+                {"role": "user", "content": "find shoes"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "search",
+                                "arguments": '{"query": "shoes"}',
+                            }
+                        }
+                    ],
+                },
+            ]
+        )
+
+
 def test_lfm25_renders_assistant_content_before_structured_tool_calls():
     rendered = _render(
         [
@@ -158,6 +222,26 @@ def test_legacy_lfm2_tool_role_output_is_wrapped_by_template():
 
     assert "<|im_start|>tool\n<|tool_response_start|>" in rendered
     assert "<|tool_response_end|><|im_end|>" in rendered
+
+
+def test_legacy_lfm2_marks_assistant_generation_span():
+    rendered, generation_indices = _render_with_assistant_indices(
+        [
+            {"role": "user", "content": "find shoes"},
+            {
+                "role": "assistant",
+                "content": "<|tool_call_start|>[search()]<|tool_call_end|>",
+            },
+            {"role": "tool", "content": '{"ok": true}'},
+        ],
+        template_path=LEGACY_LFM2_TEMPLATE_PATH,
+    )
+
+    assert len(generation_indices) == 1
+    start, end = generation_indices[0]
+    assert rendered[start:end] == (
+        "<|tool_call_start|>[search()]<|tool_call_end|><|im_end|>\n"
+    )
 
 
 def test_tools_are_serialized_with_family_specific_contracts():

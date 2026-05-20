@@ -28,14 +28,16 @@
   - Strip `tool_calls` after conversion.
   - Preserve model-family ordering when assistant prose and structured `tool_calls` coexist: legacy LFM2 writes tool-call first; LFM2.5/24B writes prose first and tool-call second.
   - Handle dict arguments, JSON-string arguments, empty arguments, and `None` arguments.
+  - Parse JSON-string `function.arguments` into named pythonic arguments before any chat template renders the row.
   - Reject foreign tool-call formats with actionable validation errors.
   - Strip legacy markers when training LFM2.5/24B-family models.
 - Chat templates own message serialization only:
   - Render the system message.
   - Render `tools=` into the model-family-specific system-prompt format.
   - Render message roles/content into ChatML.
-  - Long-term, do not repair, reorder, or synthesize assistant tool calls from structured `tool_calls`.
-  - Short-term, if eval/serving passes structured history through the template, rendering must be robust and match preprocessing semantics.
+  - Do not repair, reorder, or synthesize assistant tool calls from dirty structured `tool_calls`.
+  - Structured `message.tool_calls` support is a compatibility fallback for eval/serving histories that already use dict arguments.
+  - JSON-string `function.arguments` in structured history must be normalized before templating. The Jinja templates intentionally do not duplicate the loader's JSON parsing/validation logic.
 - Canonical tracked templates:
 - `job_configs/chat_templates/lfm2_tool_call_chat_template.jinja`: legacy LFM2, tool definitions wrapped with `<|tool_list_start|>` / `<|tool_list_end|>`, and `role="tool"` content wrapped with `<|tool_response_start|>` / `<|tool_response_end|>` during rendering.
 - `job_configs/chat_templates/lfm25_tool_call_chat_template.jinja`: LFM2.5/24B, plain `List of tools: ...`, assistant calls as `<|tool_call_start|>...<|tool_call_end|>`, and bare ChatML `role="tool"` content.
@@ -45,7 +47,9 @@
 - The active 24B Shopify template is kept equivalent to the tracked LFM2.5 canonical template.
 - `job_configs/chat_templates/lfm2_tool_call_chat_template.jinja` tracks the legacy LFM2 contract.
 - `job_configs/chat_templates/lfm25_tool_call_chat_template.jinja` tracks the LFM2.5/24B contract.
-- Template-side structured `tool_calls` fallback now escapes string arguments, accepts null assistant content, and accepts flat or nested tool-call schemas.
+- Template-side structured `tool_calls` fallback now escapes string argument values, accepts null assistant content, and accepts flat or nested tool-call schemas.
+- Template-side structured `tool_calls` fallback does not parse JSON-string arguments; preprocessing remains the canonical path for Shopify/OpenAI-style JSON-string arguments.
+- Direct chat-template call sites normalize structured JSON-string arguments before rendering via `normalize_messages_for_chat_template()` / `normalize_row_for_chat_template()`.
 - Preprocessing now preserves family-specific assistant prose/tool-call order when converting structured tool calls into content.
 - Validation is family-aware: legacy LFM2 rejects text before pre-baked tool-call markers, while LFM2.5/24B allows it.
 

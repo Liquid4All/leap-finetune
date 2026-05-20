@@ -36,8 +36,6 @@
         {%- set func_args = func.get("arguments", {}) -%}
         {%- if func_args is none -%}
             {%- set rendered_args = "" -%}
-        {%- elif func_args is string -%}
-            {%- set rendered_args = func_args | trim -%}
         {%- else -%}
             {%- set args_ns = namespace(arg_strings=[]) -%}
             {%- for arg_name, arg_value in func_args.items() -%}

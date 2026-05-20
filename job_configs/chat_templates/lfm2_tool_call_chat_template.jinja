@@ -32,10 +32,16 @@
 {%- for message in messages -%}
     {{- "<|im_start|>" + message["role"] + "\n" -}}
     {%- set content = parse_content(message.get("content")) -%}
-    {%- if message["role"] == "tool" -%}
+    {%- if message["role"] == "assistant" -%}
+        {%- generation -%}
+        {{- content + "<|im_end|>\n" -}}
+        {%- endgeneration -%}
+    {%- else -%}
+        {%- if message["role"] == "tool" -%}
         {%- set content = "<|tool_response_start|>" + content + "<|tool_response_end|>" -%}
+        {%- endif -%}
+        {{- content + "<|im_end|>\n" -}}
     {%- endif -%}
-    {{- content + "<|im_end|>\n" -}}
 {%- endfor -%}
 {%- if add_generation_prompt -%}
     {{- "<|im_start|>assistant\n" -}}

@@ -1,0 +1,220 @@
+"""Sidecar entry point: load a saved checkpoint into vLLM, run every
+configured benchmark, then attach to the training run's wandb and
+back-fill ``benchmark/<bench>/<metric>`` at the originating training
+step. Invoked by ``SidecarEvalCallback`` via sbatch, not directly.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sys
+import traceback
+from pathlib import Path
+
+logger = logging.getLogger("leap_finetune.async_eval")
+
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Async eval sidecar runner.")
+    p.add_argument("--checkpoint", required=True, type=Path)
+    p.add_argument("--benchmark-configs", required=True, type=Path)
+    p.add_argument("--modality", required=True, choices=["text", "vlm"])
+    p.add_argument("--trigger-step", required=True, type=int)
+    p.add_argument("--output-dir", required=True, type=Path)
+    p.add_argument("--vllm-gpus", type=int, default=1)
+    p.add_argument("--tensor-parallel-size", type=int, default=1)
+    p.add_argument("--gpu-memory-utilization", type=float, default=0.9)
+    p.add_argument("--dtype", default="bfloat16")
+    p.add_argument("--max-model-len", type=int, default=None)
+    p.add_argument("--wandb-run-id", default=None)
+    p.add_argument("--wandb-project", default=None)
+    return p.parse_args()
+
+
+def _setup_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stdout,
+    )
+
+
+def _load_benchmarks(args: argparse.Namespace):
+    """Load tokenizer/processor from the checkpoint dir, then build benchmarks."""
+    with args.benchmark_configs.open() as f:
+        bench_configs = json.load(f)
+
+    if args.modality == "text":
+        from transformers import AutoTokenizer
+
+        from leap_finetune.evaluation import create_llm_benchmarks_from_config
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(args.checkpoint), trust_remote_code=True
+        )
+        return create_llm_benchmarks_from_config(bench_configs, tokenizer)
+
+    from transformers import AutoProcessor
+
+    from leap_finetune.evaluation import create_vlm_benchmarks_from_config
+
+    processor = AutoProcessor.from_pretrained(
+        str(args.checkpoint), trust_remote_code=True
+    )
+    return create_vlm_benchmarks_from_config(bench_configs, processor)
+
+
+def _run_one_benchmark(bench, backend) -> dict[str, float]:
+    """Score one benchmark; returns metric dict averaged by count."""
+    samples = bench.get_samples()
+    if not samples:
+        logger.warning("[%s] no samples loaded; skipping", bench.name)
+        return {}
+
+    result = bench.evaluate_with_backend(backend, samples)
+    averaged: dict[str, float] = {}
+    for metric, total in result.metrics.items():
+        avg = total / result.count if result.count > 0 else 0.0
+        averaged[f"benchmark/{bench.name}/{metric}"] = avg
+    return averaged
+
+
+def _log_to_wandb(args: argparse.Namespace, results: dict[str, float]) -> None:
+    """Attach to the training run and log at ``step=trigger_step`` so the
+    benchmark point lands on the same global-step axis as training. Wandb
+    may emit a backwards-step warning if training has advanced past
+    trigger_step; the value still lands at the correct step in history.
+    """
+    if not args.wandb_run_id:
+        logger.info("--wandb-run-id not set; skipping wandb log")
+        return
+
+    try:
+        import wandb
+
+        init_kwargs = {
+            "id": args.wandb_run_id,
+            "resume": "allow",
+            # 90s default times out on busy clusters; bump for robustness.
+            "settings": wandb.Settings(init_timeout=300),
+        }
+        if args.wandb_project:
+            init_kwargs["project"] = args.wandb_project
+
+        wandb.init(**init_kwargs)
+        # Log at the originating training step. The explicit ``step=``
+        # makes wandb's internal _step jump to trigger_step for this
+        # write, so the benchmark point lands on the same axis as
+        # training metrics that follow.
+        if not results:
+            logger.info("no benchmark results to log")
+        else:
+            wandb.log(results, step=args.trigger_step)
+            logger.info(
+                "logged %d metrics to wandb at step %d",
+                len(results),
+                args.trigger_step,
+            )
+        wandb.finish()
+    except ImportError:
+        logger.warning("wandb not installed; skipping log")
+    except Exception:
+        logger.exception("wandb logging failed")
+
+
+def main() -> int:
+    _setup_logging()
+    args = _parse_args()
+
+    logger.info(
+        "async eval starting: step=%d ckpt=%s modality=%s vllm_gpus=%d",
+        args.trigger_step,
+        args.checkpoint,
+        args.modality,
+        args.vllm_gpus,
+    )
+
+    try:
+        benchmarks = _load_benchmarks(args)
+        logger.info("loaded %d benchmarks", len(benchmarks))
+    except Exception:
+        logger.exception("benchmark construction failed; aborting")
+        return 2
+
+    if not benchmarks:
+        logger.warning("no benchmarks to run; exiting cleanly")
+        return 0
+
+    # vLLM EngineCore CUDA init occasionally races with the parent training
+    # job's CUDA state propagation (especially at on_train_begin, when Ray
+    # workers are still settling). Retry the spawn a few times with backoff
+    # before giving up — the eval node is healthy, we just hit a transient.
+    import time
+    from leap_finetune.evaluation import VLLMInProcessBackend
+
+    _MAX_VLLM_RETRIES = 3
+    _RETRY_BACKOFF_S = 30
+    backend = None
+    for attempt in range(1, _MAX_VLLM_RETRIES + 1):
+        try:
+            backend = VLLMInProcessBackend(
+                model_path=str(args.checkpoint),
+                tensor_parallel_size=args.tensor_parallel_size,
+                dtype=args.dtype,
+                gpu_memory_utilization=args.gpu_memory_utilization,
+                max_model_len=args.max_model_len,
+            )
+            break
+        except Exception as e:
+            transient = (
+                "CUDA unknown error" in str(e)
+                or "Engine core initialization failed" in str(e)
+            )
+            if not transient or attempt == _MAX_VLLM_RETRIES:
+                logger.exception(
+                    "vLLM startup failed (attempt %d/%d, transient=%s)",
+                    attempt, _MAX_VLLM_RETRIES, transient,
+                )
+                return 3
+            logger.warning(
+                "vLLM startup transient failure (attempt %d/%d); "
+                "sleeping %ds then retrying. Error: %s",
+                attempt, _MAX_VLLM_RETRIES, _RETRY_BACKOFF_S, str(e)[:200],
+            )
+            time.sleep(_RETRY_BACKOFF_S)
+
+    results: dict[str, float] = {}
+    try:
+        for bench in benchmarks:
+            try:
+                metrics = _run_one_benchmark(bench, backend)
+                results.update(metrics)
+                logger.info("[%s] OK: %s", bench.name, metrics)
+            except NotImplementedError as e:
+                logger.warning(
+                    "[%s] vLLM backend does not support this benchmark "
+                    "(%s); skipping. Use mode=sync for this benchmark.",
+                    bench.name,
+                    e,
+                )
+            except Exception:
+                logger.error(
+                    "[%s] failed; skipping. Other benchmarks continue.\n%s",
+                    bench.name,
+                    traceback.format_exc(),
+                )
+    finally:
+        try:
+            backend.close()
+        except Exception:
+            pass
+
+    _log_to_wandb(args, results)
+    logger.info("async eval done")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

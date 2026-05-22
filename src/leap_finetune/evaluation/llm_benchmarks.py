@@ -96,9 +96,7 @@ class LLMGenerationBenchmark(Benchmark):
             messages = sample["messages"]
             gt = messages[-1]["content"]
             if isinstance(gt, list):
-                gt = " ".join(
-                    item["text"] for item in gt if item.get("type") == "text"
-                )
+                gt = " ".join(item["text"] for item in gt if item.get("type") == "text")
             ground_truths.append(gt)
             requests.append(
                 GenerateRequest(

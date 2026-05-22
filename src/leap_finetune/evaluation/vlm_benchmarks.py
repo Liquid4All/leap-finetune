@@ -123,6 +123,7 @@ class VLMGenerationBenchmark(Benchmark):
 
         if skipped_bad_image:
             import logging
+
             logging.getLogger(__name__).warning(
                 "[%s] skipped %d sample(s) with unreadable images",
                 getattr(self, "name", "<benchmark>"),

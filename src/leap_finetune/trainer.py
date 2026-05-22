@@ -267,15 +267,11 @@ def ray_trainer(job_config: dict) -> None:
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in train_gpu_ids)
         training_num_gpus = len(train_gpu_ids)
 
-        eval_port = int(
-            (async_eval_cfg.get("reserved") or {}).get("server_port", 8100)
-        )
+        eval_port = int((async_eval_cfg.get("reserved") or {}).get("server_port", 8100))
         eval_host = resolve_server_host(None)
         # Hand the worker the server URL + carved GPU ids via train_loop_config.
         train_loop_config["async_eval_server_url"] = f"http://{eval_host}:{eval_port}"
-        train_loop_config["async_eval_gpu_ids"] = ",".join(
-            str(g) for g in eval_gpu_ids
-        )
+        train_loop_config["async_eval_gpu_ids"] = ",".join(str(g) for g in eval_gpu_ids)
         print(
             f"[async_eval/reserved] reserved GPU(s) {eval_gpu_ids} for vLLM at "
             f"{train_loop_config['async_eval_server_url']}; training on {train_gpu_ids}"

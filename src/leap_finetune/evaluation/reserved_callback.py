@@ -148,7 +148,6 @@ class ReservedEvalCallback(TrainerCallback):
     _server_process = None  # subprocess.Popen of trl vllm-serve
 
     def _respawn_server(self, ckpt_path: Path) -> None:
-        import os
         import shlex
         import subprocess
         import sys
@@ -206,6 +205,7 @@ class ReservedEvalCallback(TrainerCallback):
         # (LOCAL_RANK, RANK, etc.) before pinning CUDA_VISIBLE_DEVICES to
         # the carved-out eval GPUs.
         from leap_finetune.evaluation.sidecar_callback import _clean_subprocess_env
+
         env = _clean_subprocess_env()
         env["CUDA_VISIBLE_DEVICES"] = self.eval_gpu_ids
 
@@ -315,8 +315,7 @@ class ReservedEvalCallback(TrainerCallback):
         # train-end, we'll wait for it instead of dropping it on the floor.
         if self._thread is not None and self._thread.is_alive():
             logger.info(
-                "[async_eval/reserved] draining in-flight eval cycles "
-                "(up to %ds)...",
+                "[async_eval/reserved] draining in-flight eval cycles (up to %ds)...",
                 600,
             )
             self._input_q.put(None)

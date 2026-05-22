@@ -292,6 +292,15 @@ def parse_job_config(config_input: str) -> JobConfig:
     # === Benchmark evaluation config ===
     benchmark_configs = config_dict.get("benchmarks")
 
+    # Async eval block (sync | sidecar | reserved). Validated on the
+    # driver so misconfig errors surface before a worker is spawned;
+    # the raw dict is what we serialize into train_loop_config.
+    async_eval_raw = config_dict.get("async_eval")
+    if async_eval_raw is not None:
+        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+
+        AsyncEvalConfig.from_dict(async_eval_raw)
+
     # === GRPO-specific top-level blocks ===
     # These are only meaningful for training_type in ("grpo", "vlm_grpo") but
     # we parse them unconditionally so customers get a clear error if they
@@ -324,6 +333,7 @@ def parse_job_config(config_input: str) -> JobConfig:
         training_config=final_training_config,
         peft_config=peft_config,
         benchmark_configs=benchmark_configs,
+        async_eval=async_eval_raw,
         rewards=rewards_cfg,
         rl_env=rl_env_cfg,
         grpo_rollout=grpo_rollout_cfg,

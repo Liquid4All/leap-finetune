@@ -28,9 +28,12 @@ dataset:
 
 rewards:
   # Ships with leap-finetune. Strict format (0.1) + Hungarian-matched
-  # IoU-F1 (1.0). Works at any GT cardinality including 1 (degrades to
-  # plain IoU thresholded) and 0 (rewards correct abstention).
-  recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+  # CIoU-F1 (1.0). CIoU = IoU − center-distance − aspect-ratio penalty,
+  # so the matcher prefers center-aligned + same-shape pairs even when
+  # raw overlap ties. F1 naturally penalizes false positives (drags
+  # precision) and false negatives (drags recall). Works at any GT
+  # cardinality including 1 and 0 (rewards correct abstention).
+  recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingCIoURecipe"
 
 training_config:
   extends: "DEFAULT_VLM_GRPO"

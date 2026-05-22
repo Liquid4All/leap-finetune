@@ -162,14 +162,21 @@ the same.
 ## Phase 2 — GRPO
 
 GRPO trains on the held-out 30% slice the SFT run never saw, using the
-shipped `VLMGroundingIoURecipe`:
+shipped `VLMGroundingCIoURecipe`:
 
 - **strict-format reward** (weight 0.1): the completion must parse as a
   JSON array of `{"label", "bbox"}` dicts.
-- **iou_f1 reward** (weight 1.0): Hungarian-matches predicted boxes
-  against ground truth and scores the F1 of the matched IoUs. Degrades
-  to plain IoU when ground truth has one box; rewards correct
-  abstention on zero-box prompts.
+- **ciou_f1 reward** (weight 1.0): Hungarian-matches predicted boxes
+  against ground truth (matcher itself runs on CIoU so it prefers
+  center-aligned + same-shape pairs), then scores the F1 of the
+  matched CIoUs. F1 naturally penalizes false positives (drags
+  precision) and false negatives (drags recall). Degrades to a single
+  CIoU when ground truth has one box; rewards correct abstention on
+  zero-box prompts.
+
+If you'd rather use plain IoU (no center-distance or aspect-ratio
+penalty), swap `VLMGroundingCIoURecipe` → `VLMGroundingIoURecipe` in
+the YAML.
 
 ### 1. Point the GRPO YAML at your SFT checkpoint
 

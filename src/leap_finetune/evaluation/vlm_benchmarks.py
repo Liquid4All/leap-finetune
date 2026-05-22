@@ -1,13 +1,21 @@
 import copy
+import logging
 from collections.abc import Callable
 
 import numpy as np
 import torch
 
 from leap_finetune.data_loading.image_loader import load_image
-from leap_finetune.evaluation.base import Benchmark
+from leap_finetune.evaluation.backend import (
+    GenerateRequest,
+    InferenceBackend,
+    LogprobRequest,
+)
+from leap_finetune.evaluation.base import Benchmark, BenchmarkResult
 from leap_finetune.evaluation.data_loaders import load_benchmark_samples
 from leap_finetune.evaluation.metrics import compute_metric
+
+logger = logging.getLogger(__name__)
 
 
 class VLMGenerationBenchmark(Benchmark):
@@ -83,6 +91,73 @@ class VLMGenerationBenchmark(Benchmark):
             )
         finally:
             _close_images(loaded)
+
+    def evaluate_with_backend(
+        self, backend: InferenceBackend, samples: list
+    ) -> BenchmarkResult:
+        """Build batched VLM generation requests with PIL images, dispatch, score.
+
+        Loaded PIL images are closed after the backend call returns.
+        """
+        requests: list[GenerateRequest] = []
+        ground_truths: list[str] = []
+        all_loaded: list = []
+        skipped_bad_image = 0
+        for sample in samples:
+            messages = sample["messages"]
+            try:
+                prompt, loaded = _prepare_messages(messages[:-1])
+            except Exception:
+                skipped_bad_image += 1
+                continue
+            ground_truths.append(_extract_text(messages[-1]["content"]))
+            all_loaded.extend(loaded)
+            requests.append(
+                GenerateRequest(
+                    messages=prompt,
+                    max_new_tokens=self.max_new_tokens,
+                    temperature=0.0,
+                    images=loaded if loaded else None,
+                )
+            )
+
+        if skipped_bad_image:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[%s] skipped %d sample(s) with unreadable images",
+                getattr(self, "name", "<benchmark>"),
+                skipped_bad_image,
+            )
+
+        try:
+            results = backend.generate(requests)
+        finally:
+            _close_images(all_loaded)
+
+        total_score = 0.0
+        count = 0
+        for sample, result, gt in zip(samples, results, ground_truths):
+            try:
+                if callable(self.metric):
+                    score = self.metric(result.text, gt, **self.metric_kwargs)
+                else:
+                    score = compute_metric(
+                        self.metric,
+                        result.text,
+                        gt,
+                        match_mode=self.match_mode,
+                        **self.metric_kwargs,
+                    )
+                total_score += score
+                count += 1
+            except Exception:
+                logger.warning(
+                    "[%s] Scoring failed on sample %s",
+                    self.name,
+                    sample.get("id", count),
+                    exc_info=True,
+                )
+        return BenchmarkResult(metrics={"score": total_score}, count=count)
 
 
 class VLMLogprobBenchmark(Benchmark):
@@ -164,6 +239,53 @@ class VLMLogprobBenchmark(Benchmark):
             return 1.0 if int(np.argmax(option_scores)) == answer_id else 0.0
         finally:
             _close_images(loaded)
+
+    def evaluate_with_backend(
+        self, backend: InferenceBackend, samples: list
+    ) -> BenchmarkResult:
+        """Build batched VLM logprob requests, dispatch to backend, argmax.
+
+        Note: vLLM's multimodal logprob support is more constrained than text;
+        callers (async runners) should be prepared to fall back to HFBackend
+        if a particular vLLM build doesn't support image+logprob requests.
+        """
+        requests: list[LogprobRequest] = []
+        answer_ids: list[int] = []
+        all_loaded: list = []
+        for sample in samples:
+            prompt, loaded = _prepare_messages(sample["messages"])
+            all_loaded.extend(loaded)
+            requests.append(
+                LogprobRequest(
+                    messages=prompt,
+                    continuations=list(sample["options"]),
+                    images=loaded if loaded else None,
+                )
+            )
+            answer_ids.append(int(sample["answer_id"]))
+
+        try:
+            results = backend.logprobs(requests)
+        finally:
+            _close_images(all_loaded)
+
+        total_score = 0.0
+        count = 0
+        for sample, result, ans_id in zip(samples, results, answer_ids):
+            try:
+                if not result.logprobs:
+                    raise ValueError("backend returned empty logprobs")
+                score = 1.0 if int(np.argmax(result.logprobs)) == ans_id else 0.0
+                total_score += score
+                count += 1
+            except Exception:
+                logger.warning(
+                    "[%s] Scoring failed on sample %s",
+                    self.name,
+                    sample.get("id", count),
+                    exc_info=True,
+                )
+        return BenchmarkResult(metrics={"score": total_score}, count=count)
 
 
 # === Helpers ===

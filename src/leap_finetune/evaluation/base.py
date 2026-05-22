@@ -1,6 +1,10 @@
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from leap_finetune.evaluation.backend import InferenceBackend
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +26,8 @@ class Benchmark(ABC):
 
     Subclass and implement:
       - ``load_samples()`` — return evaluation data (called once, cached).
-      - ``score_sample(model, sample, device)`` — score a single sample.
+      - ``score_sample(model, sample, device)`` — score a single sample (sync path).
+      - Optionally ``evaluate_with_backend(backend, samples)`` for async paths.
     """
 
     def __init__(self, name: str):
@@ -59,6 +64,18 @@ class Benchmark(ABC):
                     exc_info=True,
                 )
         return BenchmarkResult(metrics={"score": total_score}, count=count)
+
+    def evaluate_with_backend(
+        self, backend: "InferenceBackend", samples: list
+    ) -> BenchmarkResult:
+        """Score ``samples`` via an :class:`InferenceBackend`. Subclasses
+        opt in by overriding: build batched requests, dispatch to the
+        backend, score the responses with their existing scorer.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support evaluate_with_backend; "
+            "implement it or use mode: sync."
+        )
 
     def get_samples(self) -> list:
         if self._samples is None:

@@ -19,6 +19,8 @@ class JobConfig:
     training_config: TrainingConfig = TrainingConfig.DEFAULT_SFT
     peft_config: PeftConfig | None = PeftConfig.DEFAULT_LORA
     benchmark_configs: dict | None = None
+    # Optional async benchmark eval block. None or {} == today's sync behavior.
+    async_eval: dict | None = None
     # GRPO-specific: reward function specs (raw YAML list/dict, resolved on the
     # driver before being passed to the trainer). None for non-GRPO runs.
     rewards: list | dict | None = None
@@ -62,6 +64,7 @@ class JobConfig:
             "dataset": dataset_to_use,
             "peft_config": self.peft_config.value if self.peft_config else None,
             "benchmark_configs": self.benchmark_configs,
+            "async_eval": self.async_eval,
             # GRPO-specific fields — carried through to workers when set
             "rewards": self.rewards,
             "rl_env": self.rl_env,

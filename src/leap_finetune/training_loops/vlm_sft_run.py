@@ -9,9 +9,10 @@ from ray.train.huggingface.transformers import prepare_trainer
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.tokenize_data import create_vlm_collate_fn
 from leap_finetune.evaluation import (
-    BenchmarkEvalCallback,
     create_vlm_benchmarks_from_config,
+    make_eval_callback,
 )
+from leap_finetune.training_loops.sft_run import _get_wandb_run_id
 from leap_finetune.training_configs.vlm_sft_config import (
     DEFAULT_LR_MULTIPLIERS,
     VLM_SFT_EXCLUDED_KEYS,
@@ -179,12 +180,23 @@ def vlm_sft_run(training_config: dict) -> None:
 
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
 
-    # Add benchmark evaluation callback if configured
+    # Add benchmark evaluation callback if configured (sync | sidecar | reserved)
     benchmark_configs = training_config.get("benchmark_configs")
     if benchmark_configs and benchmark_configs.get("benchmarks"):
         benchmarks = create_vlm_benchmarks_from_config(benchmark_configs, processor)
         if benchmarks:
-            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
+            trainer.add_callback(
+                make_eval_callback(
+                    benchmarks=benchmarks,
+                    async_eval_cfg=training_config.get("async_eval"),
+                    benchmark_configs=benchmark_configs,
+                    server_url=training_config.get("async_eval_server_url"),
+                    eval_gpu_ids=training_config.get("async_eval_gpu_ids", ""),
+                    output_dir=output_dir,
+                    wandb_run_id=_get_wandb_run_id(),
+                    config_dir=training_config.get("config_dir"),
+                )
+            )
 
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)

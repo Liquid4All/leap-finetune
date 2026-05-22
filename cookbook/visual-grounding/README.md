@@ -159,11 +159,37 @@ the same.
 
 ---
 
-## What's next
+## Phase 2 — GRPO
 
-- `configs/grpo_grounding.yaml` — Phase 2 trains on the held-out
-  `./job_datasets/grounding/grounding_grpo/train.parquet` (already
-  produced by step 1 above) using the existing
-  `VLMGroundingIoURecipe`: strict-format reward (0.1) + Hungarian-matched
-  IoU-F1 reward (1.0). The GRPO model starts from the SFT checkpoint
-  and learns to recover IoU points lost to greedy decoding.
+GRPO trains on the held-out 30% slice the SFT run never saw, using the
+shipped `VLMGroundingIoURecipe`:
+
+- **strict-format reward** (weight 0.1): the completion must parse as a
+  JSON array of `{"label", "bbox"}` dicts.
+- **iou_f1 reward** (weight 1.0): Hungarian-matches predicted boxes
+  against ground truth and scores the F1 of the matched IoUs. Degrades
+  to plain IoU when ground truth has one box; rewards correct
+  abstention on zero-box prompts.
+
+### 1. Point the GRPO YAML at your SFT checkpoint
+
+Open `configs/grpo_grounding.yaml` and replace the placeholder:
+
+```yaml
+model_name: "./job_datasets/grounding-cookbook/outputs/visual_grounding_sft/<RUN_NAME>/checkpoint-<STEP>"
+```
+
+with the actual SFT checkpoint path. The peak RefCOCO checkpoint from
+Phase 1 (typically the `save_steps`-boundary closest to the RefCOCO
+trio's joint maximum) is the right pick.
+
+### 2. Launch
+
+```bash
+sbatch cookbook/visual-grounding/configs/grpo_grounding.sh
+```
+
+Same four async-eval benchmarks as Phase 1 — wandb will show the
+RefCOCO trio + the in-distribution test slice climbing further as
+GRPO pushes the SFT prior toward higher IoU under the strict-format
+constraint.

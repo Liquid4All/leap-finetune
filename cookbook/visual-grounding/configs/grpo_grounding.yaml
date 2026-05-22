@@ -1,0 +1,131 @@
+# Visual Grounding GRPO — Phase 2 of the cookbook.
+#
+# Starts from the SFT checkpoint (Phase 1) and refines on the held-out
+# 30% GRPO pool that the SFT run never saw. Reward:
+#   * strict_format_reward (0.1) — completion must parse as JSON bbox array.
+#   * iou_f1_reward (1.0)        — Hungarian-matched soft F1 over IoUs.
+# Both ship with leap-finetune at rewards/tasks/vlm_grounding/recipe.py.
+#
+# Pre-reqs (one-time):
+#   python cookbook/visual-grounding/prepare_data.py  --output ./job_datasets/grounding-cookbook/data
+#   python cookbook/visual-grounding/prepare_evals.py --output ./job_datasets/grounding-cookbook/data/grounding_evals
+#
+# Launch:
+#   uv run leap-finetune cookbook/visual-grounding/configs/grpo_grounding.yaml
+#   sbatch cookbook/visual-grounding/configs/grpo_grounding.sh
+
+project_name: "visual_grounding_grpo"
+# Point this at your Phase 1 SFT checkpoint — the GRPO run resumes
+# from the model SFT just taught the JSON bbox format to.
+model_name: "./job_datasets/grounding-cookbook/outputs/visual_grounding_sft/<RUN_NAME>/checkpoint-<STEP>"
+training_type: "vlm_grpo"
+
+dataset:
+  # 30% of MGrounding-630k held out from SFT entirely (seed 42, deterministic).
+  path: "./job_datasets/grounding-cookbook/data/grounding_grpo"
+  type: "vlm_grpo"
+  test_size: 0.01
+
+rewards:
+  # Ships with leap-finetune. Strict format (0.1) + Hungarian-matched
+  # IoU-F1 (1.0). Works at any GT cardinality including 1 (degrades to
+  # plain IoU thresholded) and 0 (rewards correct abstention).
+  recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+
+training_config:
+  extends: "DEFAULT_VLM_GRPO"
+
+  output_dir: "./job_datasets/grounding-cookbook/outputs/visual_grounding_grpo"
+
+  # --- core optimization ---
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  num_generations: 4                       # rollouts per prompt
+  learning_rate: 1e-6
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+
+  # --- generation / completion budget ---
+  max_completion_length: 256
+  temperature: 1.0
+  top_p: 1.0
+  top_k: 0
+
+  # --- GRPO / TRL v1 loss knobs ---
+  beta: 0.01                               # KL-to-ref brake — prevents format collapse
+  epsilon: 0.2                             # PPO-style ratio clip
+  loss_type: "dapo"
+  scale_rewards: "group"
+  mask_truncated_completions: true
+
+  # --- vLLM rollout + IS correction ---
+  # token_truncate (not TRL's default sequence_mask): per-token IS
+  # clipping so outlier tokens get clipped instead of zeroing whole
+  # sequences. Critical for stable GRPO on multi-bbox completions.
+  use_vllm: true
+  vllm_mode: "colocate"
+  vllm_gpu_memory_utilization: 0.25
+  vllm_enable_sleep_mode: false
+  vllm_importance_sampling_correction: true
+  vllm_importance_sampling_mode: "token_truncate"
+
+  # --- image handling ---
+  do_image_splitting: true
+
+  # --- eval + checkpoint schedule ---
+  eval_strategy: "steps"
+  eval_steps: 2000
+  eval_on_start: true
+  save_strategy: "steps"
+  save_steps: 2000
+  save_total_limit: 3
+  logging_steps: 10
+  logging_first_step: true
+  log_completions: false
+  num_completions_to_print: 4
+
+  # --- tracking ---
+  wandb_logging: true
+
+  # --- memory ---
+  bf16: true
+  gradient_checkpointing: true
+
+# Async benchmarks — fires sbatch each eval_steps; training never pauses.
+benchmarks:
+  max_new_tokens: 256
+  benchmarks:
+    - name: "refcoco_val"
+      path: "./job_datasets/grounding-cookbook/data/grounding_evals/refcoco_val.jsonl"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+    - name: "refcoco_plus_val"
+      path: "./job_datasets/grounding-cookbook/data/grounding_evals/refcoco_plus_val.jsonl"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+    - name: "refcocog_val"
+      path: "./job_datasets/grounding-cookbook/data/grounding_evals/refcocog_val.jsonl"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+    - name: "mgrounding_test"
+      path: "./job_datasets/grounding-cookbook/data/grounding_test/test.parquet"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+      limit: 500
+
+async_eval:
+  mode: sidecar
+  vllm_gpus: 1
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.85
+  dtype: bfloat16
+  # No sbatch.time → inherits partition default.
+  on_overlap: queue                          # overlapping evals OK; each carries
+                                             # its own trigger_step + wandb_run_id.
+  failure:
+    max_consecutive: 3
+
+peft_config:
+  use_peft: false

@@ -504,13 +504,18 @@ By default, every `eval_steps` blocks training until benchmarks finish. For larg
 
 Three modes (default is `sync` = today's behavior):
 
-| Mode       | Pauses training? | GPUs reserved                    | Latency                   | Best for                                               |
-| ---------- | ---------------- | -------------------------------- | ------------------------- | ------------------------------------------------------ |
-| `sync`     | Yes              | None                             | Immediate                 | Small/fast eval suites; default                        |
-| `sidecar`  | **No**           | None (slurm-scheduled per cycle) | Slurm queue + eval time   | Tight clusters; eval should be free of training cost   |
-| `reserved` | **No**           | N throughout the run             | ~30–60s respawn per cycle | Customers with spare GPUs who want predictable latency |
+| Mode       | Engine          | Pauses training? | GPUs reserved                    | Latency                   | Multi-node training  | Best for                                              |
+| ---------- | --------------- | ---------------- | -------------------------------- | ------------------------- | -------------------- | ----------------------------------------------------- |
+| `sync`     | HF transformers | Yes              | None                             | Immediate                 | ✓                    | Small/fast eval suites; default                       |
+| `sidecar`  | vLLM            | **No**           | None (slurm-scheduled per cycle) | Slurm queue + eval time   | ✓                    | Tight clusters; eval should be free of training cost  |
+| `reserved` | vLLM            | **No**           | N throughout the run             | ~30–60s respawn per cycle | **Single-node only** | Spare GPUs on one node, want predictable eval latency |
 
-Both async modes serve generation through vLLM (TRL `vllm-serve`). Logprob benchmarks fall back to a sync HF model inside the runner if the chosen vLLM build doesn't support them.
+`reserved` mode carves its GPUs off the same SLURM allocation as
+training via the driver's `CUDA_VISIBLE_DEVICES`, which only affects
+the head node. Multi-node training will raise `NotImplementedError`
+at startup — use `sidecar` instead, which scales to any node count.
+
+Both async modes serve generation through vLLM. Logprob benchmarks fall back to a sync HF model inside the runner if the chosen vLLM build doesn't support them.
 
 ```yaml
 # Opt in by adding this block. See job_configs/sft_with_async_eval_example.yaml

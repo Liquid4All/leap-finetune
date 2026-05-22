@@ -29,10 +29,17 @@ logger = logging.getLogger(__name__)
 
 _MARKER_NAME = ".in_flight"
 _STAGING_KEEP = 10
-_SACCT_TERMINAL_STATES = frozenset({
-    "COMPLETED", "FAILED", "CANCELLED", "TIMEOUT",
-    "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED",
-})
+_SACCT_TERMINAL_STATES = frozenset(
+    {
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED",
+        "TIMEOUT",
+        "OUT_OF_MEMORY",
+        "NODE_FAIL",
+        "PREEMPTED",
+    }
+)
 
 # Env vars that leak from the Ray training worker and would break a fresh
 # vLLM init in the eval subprocess. Stripped before sbatch / Popen so
@@ -283,25 +290,31 @@ class SidecarEvalCallback(TrainerCallback):
         logger.info(
             "[async_eval/sidecar] waiting for step-%d sidecar (job %s) "
             "before training proceeds",
-            trigger_step, jobid,
+            trigger_step,
+            jobid,
         )
         start = time.time()
         while time.time() - start < timeout:
             result = subprocess.run(
                 ["sacct", "-j", jobid, "-o", "State", "-n", "-P"],
-                capture_output=True, text=True, check=False,
+                capture_output=True,
+                text=True,
+                check=False,
             )
             states = [s.strip() for s in result.stdout.splitlines() if s.strip()]
             main = states[0] if states else ""
             if any(t in main for t in _SACCT_TERMINAL_STATES):
                 logger.info(
                     "[async_eval/sidecar] step-%d sidecar finished: %s (%.1fs)",
-                    trigger_step, main, time.time() - start,
+                    trigger_step,
+                    main,
+                    time.time() - start,
                 )
                 return
             time.sleep(poll_interval)
         logger.warning(
             "[async_eval/sidecar] step-%d sidecar still running after %ds; "
             "proceeding with training",
-            trigger_step, timeout,
+            trigger_step,
+            timeout,
         )

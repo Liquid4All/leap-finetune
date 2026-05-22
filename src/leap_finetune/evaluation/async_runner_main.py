@@ -168,20 +168,24 @@ def main() -> int:
             )
             break
         except Exception as e:
-            transient = (
-                "CUDA unknown error" in str(e)
-                or "Engine core initialization failed" in str(e)
-            )
+            transient = "CUDA unknown error" in str(
+                e
+            ) or "Engine core initialization failed" in str(e)
             if not transient or attempt == _MAX_VLLM_RETRIES:
                 logger.exception(
                     "vLLM startup failed (attempt %d/%d, transient=%s)",
-                    attempt, _MAX_VLLM_RETRIES, transient,
+                    attempt,
+                    _MAX_VLLM_RETRIES,
+                    transient,
                 )
                 return 3
             logger.warning(
                 "vLLM startup transient failure (attempt %d/%d); "
                 "sleeping %ds then retrying. Error: %s",
-                attempt, _MAX_VLLM_RETRIES, _RETRY_BACKOFF_S, str(e)[:200],
+                attempt,
+                _MAX_VLLM_RETRIES,
+                _RETRY_BACKOFF_S,
+                str(e)[:200],
             )
             time.sleep(_RETRY_BACKOFF_S)
 

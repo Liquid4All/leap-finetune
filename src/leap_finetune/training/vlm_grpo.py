@@ -12,8 +12,8 @@ from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_loading import load_vlm_model
 from leap_finetune.data_loading.image_loader import load_image
 from leap_finetune.evaluation import (
-    BenchmarkEvalCallback,
     create_vlm_benchmarks_from_config,
+    make_eval_callback,
 )
 from leap_finetune.rl.rewards import resolve_reward_specs
 from leap_finetune.training.default_configs.grpo_configs import VLM_GRPO_EXCLUDED_KEYS
@@ -26,6 +26,7 @@ from leap_finetune.training.peft.peft import (
 )
 from leap_finetune.training.utils.logging import (
     finish_tracker,
+    get_wandb_run_id,
     is_rank_zero,
 )
 from leap_finetune.training.utils.trainer_lifecycle import run_training_safely
@@ -426,7 +427,18 @@ def vlm_grpo_run(training_config: dict) -> None:
     if benchmark_configs and benchmark_configs.get("benchmarks"):
         benchmarks = create_vlm_benchmarks_from_config(benchmark_configs, processor)
         if benchmarks:
-            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
+            trainer.add_callback(
+                make_eval_callback(
+                    benchmarks=benchmarks,
+                    async_eval_cfg=training_config.get("async_eval"),
+                    benchmark_configs=benchmark_configs,
+                    server_url=training_config.get("async_eval_server_url"),
+                    eval_gpu_ids=training_config.get("async_eval_gpu_ids", ""),
+                    output_dir=output_dir,
+                    wandb_run_id=get_wandb_run_id(),
+                    config_dir=training_config.get("config_dir"),
+                )
+            )
 
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)

@@ -495,6 +495,12 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
                     base_dir=config_dir,
                 )
 
+    async_eval_cfg = job_config.async_eval
+    if async_eval_cfg is not None:
+        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+
+        AsyncEvalConfig.from_dict(async_eval_cfg)
+
     _validate_parallelism_config(
         final_train_values,
         training_type,
@@ -516,6 +522,7 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
         rewards=rewards_cfg,
         rl_env=rl_env_cfg,
         grpo_rollout=grpo_rollout_cfg,
+        async_eval=async_eval_cfg,
         config_dir=str(config_dir),
     )
 

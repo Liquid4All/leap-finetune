@@ -182,6 +182,7 @@ class JobConfig(BaseModel):
     rewards: list[Any] | dict[str, Any] | None = None
     rl_env: dict[str, Any] | None = None
     grpo_rollout: dict[str, Any] | None = None
+    async_eval: dict[str, Any] | None = None
     config_dir: str | None = None
 
     @model_validator(mode="after")
@@ -233,6 +234,7 @@ class ResolvedJobConfig:
     rewards: list[Any] | dict[str, Any] | None
     rl_env: dict[str, Any] | None
     grpo_rollout: dict[str, Any] | None
+    async_eval: dict[str, Any] | None
     config_dir: str | None = None
 
     def to_dict(self, dataset: tuple[Dataset, Dataset] | None = None) -> dict[str, Any]:
@@ -250,5 +252,6 @@ class ResolvedJobConfig:
             "rewards": self.rewards,
             "rl_env": self.rl_env,
             "grpo_rollout": self.grpo_rollout,
+            "async_eval": self.async_eval,
             "config_dir": self.config_dir,
         }

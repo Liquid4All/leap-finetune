@@ -119,6 +119,18 @@ def finish_tracker(tracker: str) -> None:
         pass
 
 
+def get_wandb_run_id() -> str | None:
+    """Best-effort fetch of the active wandb run id from rank 0."""
+    if not is_rank_zero():
+        return None
+    try:
+        import wandb
+
+        return wandb.run.id if wandb.run is not None else None
+    except Exception:
+        return None
+
+
 def setup_training_environment() -> None:
     """Configure training environment. Only prints messages on driver process."""
     global _ENV_DONE

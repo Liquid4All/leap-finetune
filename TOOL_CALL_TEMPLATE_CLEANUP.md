@@ -39,14 +39,13 @@
   - Structured `message.tool_calls` support is a compatibility fallback for eval/serving histories that already use dict arguments.
   - JSON-string `function.arguments` in structured history must be normalized before templating. The Jinja templates intentionally do not duplicate the loader's JSON parsing/validation logic.
 - Canonical tracked templates:
-- `job_configs/chat_templates/lfm2_tool_call_chat_template.jinja`: legacy LFM2, tool definitions wrapped with `<|tool_list_start|>` / `<|tool_list_end|>`, and `role="tool"` content wrapped with `<|tool_response_start|>` / `<|tool_response_end|>` during rendering.
-- `job_configs/chat_templates/lfm25_tool_call_chat_template.jinja`: LFM2.5/24B, plain `List of tools: ...`, assistant calls as `<|tool_call_start|>...<|tool_call_end|>`, and bare ChatML `role="tool"` content.
+- `job_configs/chat_templates/lfm2_chat_template.jinja`: legacy LFM2, tool definitions wrapped with `<|tool_list_start|>` / `<|tool_list_end|>`, and `role="tool"` content wrapped with `<|tool_response_start|>` / `<|tool_response_end|>` during rendering.
+- `job_configs/chat_templates/lfm2_5_chat_template.jinja`: LFM2.5, plain `List of tools: ...`, assistant calls as `<|tool_call_start|>...<|tool_call_end|>`, and bare ChatML `role="tool"` content.
 
 ## Implemented Fixes
 
-- The active 24B Shopify template is kept equivalent to the tracked LFM2.5 canonical template.
-- `job_configs/chat_templates/lfm2_tool_call_chat_template.jinja` tracks the legacy LFM2 contract.
-- `job_configs/chat_templates/lfm25_tool_call_chat_template.jinja` tracks the LFM2.5/24B contract.
+- `job_configs/chat_templates/lfm2_chat_template.jinja` tracks the legacy LFM2 contract.
+- `job_configs/chat_templates/lfm2_5_chat_template.jinja` tracks the LFM2.5 contract.
 - Template-side structured `tool_calls` fallback now escapes string argument values, accepts null assistant content, and accepts flat or nested tool-call schemas.
 - Template-side structured `tool_calls` fallback does not parse JSON-string arguments; preprocessing remains the canonical path for Shopify/OpenAI-style JSON-string arguments.
 - Direct chat-template call sites normalize structured JSON-string arguments before rendering via `normalize_messages_for_chat_template()` / `normalize_row_for_chat_template()`.

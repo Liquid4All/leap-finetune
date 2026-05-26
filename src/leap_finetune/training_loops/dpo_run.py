@@ -1,23 +1,25 @@
 import logging
 from typing import cast
 
-import ray.train
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 
-from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
     create_llm_benchmarks_from_config,
 )
-from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
-from leap_finetune.utils.load_models import load_model
+from leap_finetune.utils.training.runtime import (
+    default_eval_batch_size,
+    get_ray_train_eval_datasets,
+    init_tracking_from_config,
+    load_causal_lm_for_training,
+    setup_training_worker,
+)
+from leap_finetune.utils.callbacks import LeapCheckpointCallback
 from leap_finetune.utils.logging_utils import (
     finish_tracker,
-    init_tracker,
     is_rank_zero,
-    setup_worker_logging,
 )
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
@@ -38,12 +40,8 @@ class LFMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
 
 def dpo_run(training_config: dict) -> None:
     """DPO training loop for Ray-pretokenized datasets."""
-    setup_worker_logging()
-
-    train_ds_ray = ray.train.get_dataset_shard("train")
-    eval_ds_ray = ray.train.get_dataset_shard("eval")
-    train_dataset = ray_dataset_to_hf(train_ds_ray)
-    eval_dataset = ray_dataset_to_hf(eval_ds_ray) if eval_ds_ray is not None else None
+    setup_training_worker()
+    train_dataset, eval_dataset = get_ray_train_eval_datasets()
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -74,21 +72,14 @@ def dpo_run(training_config: dict) -> None:
         k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
-    tracker = train_config.get("tracker", "none")
-    if tracker == "none" and train_config.get("wandb_logging", False):
-        tracker = "wandb"
-    init_tracker(
+    tracker = init_tracking_from_config(
         job_name,
-        tracker,
-        train_config.get("trackio_space_id"),
+        train_config,
         output_dir=output_dir if output_dir else None,
         resume_from_checkpoint=resume_from,
     )
 
-    if "per_device_eval_batch_size" not in train_config_filtered:
-        train_config_filtered["per_device_eval_batch_size"] = train_config_filtered.get(
-            "per_device_train_batch_size", 1
-        )
+    default_eval_batch_size(train_config_filtered)
 
     config_kwargs = {
         "report_to": tracker,
@@ -103,12 +94,10 @@ def dpo_run(training_config: dict) -> None:
             "context_parallel_size > 1 is currently supported for SFT/MoE SFT only. "
             "DPO needs a CP-aware preference loss/eval path before it can be enabled."
         )
-    model_config = training_config.get("model_config")
-    model, tokenizer = load_model(
-        model_name,
-        model_config=model_config,
-        chat_template=train_config.get("chat_template"),
-        chat_template_path=train_config.get("chat_template_path"),
+    model, tokenizer = load_causal_lm_for_training(
+        training_config,
+        model_name=model_name,
+        train_config=train_config,
     )
 
     if peft_config:

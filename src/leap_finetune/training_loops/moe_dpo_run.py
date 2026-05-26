@@ -1,28 +1,30 @@
 import logging
 from typing import cast
 
-import ray.train
 import torch
 import torch.distributed as dist
 from ray.train.huggingface.transformers import prepare_trainer
-from ray.train.torch import get_device as get_ray_torch_device
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 
-from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.sampling import get_length_grouped_sampler
+from leap_finetune.utils.training.runtime import (
+    default_eval_batch_size,
+    get_ray_train_eval_datasets,
+    init_tracking_from_config,
+    load_causal_lm_for_training,
+    setup_training_worker,
+)
 from leap_finetune.training_configs.distributed_configs import (
     resolve_fsdp_cpu_offload,
     resolve_reshard_after_forward,
 )
 from leap_finetune.utils.callbacks import LeapCheckpointCallback, MoEMetricsCallback
 from leap_finetune.utils.context_parallel import dist_barrier
-from leap_finetune.utils.load_models import load_model
 from leap_finetune.utils.logging_utils import (
-    init_wandb_if_enabled,
+    finish_tracker,
     is_rank_zero,
-    setup_worker_logging,
 )
 from leap_finetune.utils.trainer_mixins import (
     ManualShardedCheckpointMixin,
@@ -162,17 +164,8 @@ class LFMMoeDPOTrainer(ManualShardedCheckpointMixin, DPOTrainer):
 
 def moe_dpo_run(training_config: dict) -> None:
     """MoE DPO training loop with revised EP support."""
-    setup_worker_logging()
-    if torch.cuda.is_available():
-        worker_device = get_ray_torch_device()
-        if worker_device.type == "cuda":
-            torch.cuda.set_device(worker_device)
-            logger.info("Pinned Ray worker to CUDA device %s", worker_device)
-
-    train_ds_ray = ray.train.get_dataset_shard("train")
-    eval_ds_ray = ray.train.get_dataset_shard("eval")
-    train_dataset = ray_dataset_to_hf(train_ds_ray)
-    eval_dataset = ray_dataset_to_hf(eval_ds_ray) if eval_ds_ray is not None else None
+    setup_training_worker()
+    train_dataset, eval_dataset = get_ray_train_eval_datasets()
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -183,6 +176,7 @@ def moe_dpo_run(training_config: dict) -> None:
     ep_size = moe_config_dict.get("expert_parallel_size", 1) or 1
     train_config = training_config.get("train_config", {})
     resume_from = train_config.get("resume_from_checkpoint")
+    output_dir = train_config.get("output_dir", "")
     cp_size = train_config.get("context_parallel_size", 1)
     if cp_size > 1:
         raise ValueError(
@@ -212,16 +206,16 @@ def moe_dpo_run(training_config: dict) -> None:
         "manual_sharded_checkpoint_format", "hf"
     )
 
-    wandb_logging = bool(train_config.get("wandb_logging", False))
-    init_wandb_if_enabled(job_name, wandb_logging)
-
-    if "per_device_eval_batch_size" not in train_config_filtered:
-        train_config_filtered["per_device_eval_batch_size"] = train_config_filtered.get(
-            "per_device_train_batch_size", 1
-        )
+    tracker = init_tracking_from_config(
+        job_name,
+        train_config,
+        output_dir=output_dir if output_dir else None,
+        resume_from_checkpoint=resume_from,
+    )
+    default_eval_batch_size(train_config_filtered)
 
     config_kwargs = {
-        "report_to": "wandb" if wandb_logging else "none",
+        "report_to": tracker,
         "run_name": job_name,
         **train_config_filtered,
     }
@@ -244,12 +238,10 @@ def moe_dpo_run(training_config: dict) -> None:
 
     training_args = DPOConfig(**config_kwargs)
 
-    model_config = training_config.get("model_config")
-    model, tokenizer = load_model(
-        model_name,
-        model_config=model_config,
-        chat_template=train_config.get("chat_template"),
-        chat_template_path=train_config.get("chat_template_path"),
+    model, tokenizer = load_causal_lm_for_training(
+        training_config,
+        model_name=model_name,
+        train_config=train_config,
     )
 
     ep_config = None
@@ -339,3 +331,4 @@ def moe_dpo_run(training_config: dict) -> None:
         merge_and_save_peft_model(
             model, tokenizer, training_args.output_dir, run_name_template
         )
+    finish_tracker(tracker)

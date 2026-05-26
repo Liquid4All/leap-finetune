@@ -1,3 +1,5 @@
+"""Trainer integration helpers for context-parallel SFT."""
+
 import torch
 from transformers import Trainer
 from transformers.trainer_pt_utils import nested_detach
@@ -12,6 +14,71 @@ from leap_finetune.utils.context_parallel import (
 
 def cp_enabled(cp_config: dict | None) -> bool:
     return bool(cp_config and cp_config.get("cp_size", 1) > 1)
+
+
+class ContextParallelSFTMixin:
+    """Trainer hooks for CP-sharded causal LM SFT loss/eval behavior."""
+
+    def __init__(self, cp_config: dict | None = None, **kwargs):
+        self.cp_config = cp_config
+        self._cp_batch_validated = False
+        self._cp_eval_batch_validated = False
+        super().__init__(**kwargs)
+
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs=False,
+        num_items_in_batch=None,
+    ):
+        if cp_enabled(self.cp_config) and "labels" in inputs:
+            return compute_cp_loss_for_trainer(
+                self,
+                model,
+                inputs,
+                return_outputs=return_outputs,
+                num_items_in_batch=num_items_in_batch,
+            )
+        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        if cp_enabled(self.cp_config) and "labels" in inputs:
+            return cp_prediction_step(
+                self,
+                model,
+                inputs,
+                prediction_loss_only,
+                ignore_keys,
+            )
+        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
+
+    def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
+        if cp_enabled(self.cp_config):
+            if not self._cp_batch_validated:
+                validate_cp_batch_replicated(
+                    inputs,
+                    self.cp_config["cp_group"],
+                    self.cp_config["cp_rank"],
+                    self.cp_config["cp_size"],
+                )
+                self._cp_batch_validated = True
+            inputs = split_batch_for_cp(
+                inputs,
+                self.cp_config["cp_rank"],
+                self.cp_config["cp_size"],
+            )
+
+        loss = super().training_step(model, inputs, num_items_in_batch, **kwargs)
+
+        if cp_enabled(self.cp_config):
+            loss = aggregate_cp_loss(
+                loss,
+                self.cp_config["cp_group"],
+                self.cp_config["cp_size"],
+            )
+
+        return loss
 
 
 def split_cp_inputs_if_needed(inputs: dict, cp_config: dict | None) -> dict:

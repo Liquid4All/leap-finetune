@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LFM_TIED_WORD_EMBEDDING_MODEL_TYPES = {"lfm2", "lfm2_moe"}
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-_LFM25_DEFAULT_CHAT_TEMPLATE_PATH = (
-    _REPO_ROOT / "job_configs/chat_templates/lfm25_tool_call_chat_template.jinja"
+_LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH = (
+    _REPO_ROOT / "job_configs/chat_templates/lfm2_5_chat_template.jinja"
 )
 
 
@@ -55,13 +55,13 @@ def _default_chat_template_path(model_name: str | None) -> pathlib.Path | None:
         return None
     if not _is_lfm25_chat_template_model(model_name):
         return None
-    if not _LFM25_DEFAULT_CHAT_TEMPLATE_PATH.exists():
+    if not _LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH.exists():
         logger.warning(
             "Default LFM2.5 chat template not found at %s",
-            _LFM25_DEFAULT_CHAT_TEMPLATE_PATH,
+            _LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH,
         )
         return None
-    return _LFM25_DEFAULT_CHAT_TEMPLATE_PATH
+    return _LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH
 
 
 def _resolve_chat_template(

@@ -1,38 +1,29 @@
 import logging
 
-import ray.train
-import torch.distributed as dist
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import Trainer, TrainingArguments
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
-from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
     create_llm_benchmarks_from_config,
 )
 from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
-from leap_finetune.training_loops.cp_trainer_utils import (
-    compute_cp_loss_for_trainer,
-    cp_enabled,
-    cp_prediction_step,
+from leap_finetune.utils.training.context_parallel import (
+    ContextParallelSFTMixin,
 )
-from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
-from leap_finetune.utils.context_parallel import (
-    aggregate_cp_loss,
-    apply_cp_to_model,
-    create_parallel_process_groups,
-    split_batch_for_cp,
-    validate_cp_batch_replicated,
-    validate_cp_config,
-    validate_cp_model_support,
+from leap_finetune.utils.training.runtime import (
+    default_eval_batch_size,
+    get_ray_train_eval_datasets,
+    init_tracking_from_config,
+    load_causal_lm_for_training,
+    setup_context_parallel,
+    setup_training_worker,
 )
-from leap_finetune.utils.load_models import load_model
+from leap_finetune.utils.callbacks import LeapCheckpointCallback
 from leap_finetune.utils.logging_utils import (
     finish_tracker,
-    init_tracker,
     is_rank_zero,
-    setup_worker_logging,
 )
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
@@ -40,54 +31,10 @@ from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_
 logger = logging.getLogger(__name__)
 
 
-class LFMSFTTrainer(RayDataLoaderMixin, Trainer):
+class LFMSFTTrainer(ContextParallelSFTMixin, RayDataLoaderMixin, Trainer):
     """SFT trainer with Ray-sharded data loaders and optional CP loss handling."""
 
-    def __init__(self, cp_config: dict | None = None, **kwargs):
-        super().__init__(**kwargs)
-        self.cp_config = cp_config
-        self._cp_batch_validated = False
-        self._cp_eval_batch_validated = False
-
-    def compute_loss(
-        self, model, inputs, return_outputs=False, num_items_in_batch=None
-    ):
-        if self.cp_config and self.cp_config["cp_size"] > 1 and "labels" in inputs:
-            return compute_cp_loss_for_trainer(
-                self,
-                model,
-                inputs,
-                return_outputs=return_outputs,
-                num_items_in_batch=num_items_in_batch,
-            )
-        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
-
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
-        if cp_enabled(self.cp_config) and "labels" in inputs:
-            return cp_prediction_step(
-                self, model, inputs, prediction_loss_only, ignore_keys
-            )
-        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
-
-    def training_step(self, model, inputs, num_items_in_batch=None, **kwargs):
-        if self.cp_config and self.cp_config["cp_size"] > 1:
-            if not self._cp_batch_validated:
-                validate_cp_batch_replicated(
-                    inputs,
-                    self.cp_config["cp_group"],
-                    self.cp_config["cp_rank"],
-                    self.cp_config["cp_size"],
-                )
-                self._cp_batch_validated = True
-            inputs = split_batch_for_cp(
-                inputs, self.cp_config["cp_rank"], self.cp_config["cp_size"]
-            )
-        loss = super().training_step(model, inputs, num_items_in_batch, **kwargs)
-        if self.cp_config and self.cp_config["cp_size"] > 1:
-            loss = aggregate_cp_loss(
-                loss, self.cp_config["cp_group"], self.cp_config["cp_size"]
-            )
-        return loss
+    pass
 
 
 def build_sft_data_collator(tokenizer, train_config: dict):
@@ -102,12 +49,8 @@ def build_sft_data_collator(tokenizer, train_config: dict):
 
 def sft_run(training_config: dict) -> None:
     """SFT training loop for Ray-pretokenized datasets."""
-    setup_worker_logging()
-
-    train_ds_ray = ray.train.get_dataset_shard("train")
-    eval_ds_ray = ray.train.get_dataset_shard("eval")
-    train_dataset = ray_dataset_to_hf(train_ds_ray)
-    eval_dataset = ray_dataset_to_hf(eval_ds_ray) if eval_ds_ray is not None else None
+    setup_training_worker()
+    train_dataset, eval_dataset = get_ray_train_eval_datasets()
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -128,21 +71,14 @@ def sft_run(training_config: dict) -> None:
         k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
-    tracker = train_config.get("tracker", "none")
-    if tracker == "none" and train_config.get("wandb_logging", False):
-        tracker = "wandb"
-    init_tracker(
+    tracker = init_tracking_from_config(
         job_name,
-        tracker,
-        train_config.get("trackio_space_id"),
+        train_config,
         output_dir=output_dir if output_dir else None,
         resume_from_checkpoint=resume_from,
     )
 
-    if "per_device_eval_batch_size" not in train_config_filtered:
-        train_config_filtered["per_device_eval_batch_size"] = train_config_filtered.get(
-            "per_device_train_batch_size", 1
-        )
+    default_eval_batch_size(train_config_filtered)
 
     config_kwargs = {
         "report_to": tracker,
@@ -152,26 +88,13 @@ def sft_run(training_config: dict) -> None:
     }
     training_args = TrainingArguments(**config_kwargs)
 
-    cp_size = train_config.get("context_parallel_size", 1)
-    model_config = training_config.get("model_config")
-    model, tokenizer = load_model(
-        model_name,
-        model_config=model_config,
-        chat_template=train_config.get("chat_template"),
-        chat_template_path=train_config.get("chat_template_path"),
+    model, tokenizer = load_causal_lm_for_training(
+        training_config,
+        model_name=model_name,
+        train_config=train_config,
     )
 
-    cp_config = None
-    if cp_size > 1:
-        validate_cp_model_support(model, train_config)
-        max_length = train_config.get("max_length")
-        validate_cp_config(
-            cp_size,
-            max_length=max_length,
-            world_size=dist.get_world_size(),
-        )
-        cp_config = create_parallel_process_groups(cp_size)
-        apply_cp_to_model(model, cp_config)
+    cp_config = setup_context_parallel(model, train_config)
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)

@@ -9,15 +9,8 @@ from leap_finetune.data_loaders.tool_call_utils import (
 )
 
 
-LFM25_TEMPLATE_PATH = Path(
-    "job_configs/chat_templates/lfm25_tool_call_chat_template.jinja"
-)
-LFM24B_TEMPLATE_PATH = Path(
-    "job_configs/chat_templates/lfm2_24b_tool_call_chat_template.jinja"
-)
-LEGACY_LFM2_TEMPLATE_PATH = Path(
-    "job_configs/chat_templates/lfm2_tool_call_chat_template.jinja"
-)
+LFM2_5_TEMPLATE_PATH = Path("job_configs/chat_templates/lfm2_5_chat_template.jinja")
+LEGACY_LFM2_TEMPLATE_PATH = Path("job_configs/chat_templates/lfm2_chat_template.jinja")
 
 SAMPLE_TOOLS = [
     {
@@ -35,7 +28,7 @@ SAMPLE_TOOLS = [
 ]
 
 
-def _render(messages, template_path=LFM25_TEMPLATE_PATH, tools=None):
+def _render(messages, template_path=LFM2_5_TEMPLATE_PATH, tools=None):
     rendered, _ = render_jinja_template(
         [messages],
         chat_template=template_path.read_text(),
@@ -173,7 +166,7 @@ def test_template_requires_normalized_mapping_arguments():
         )
 
 
-def test_lfm25_renders_assistant_content_before_structured_tool_calls():
+def test_lfm2_5_renders_assistant_content_before_structured_tool_calls():
     rendered = _render(
         [
             {"role": "user", "content": "find shoes"},
@@ -190,7 +183,7 @@ def test_lfm25_renders_assistant_content_before_structured_tool_calls():
     assert "I will search now.<|tool_call_start|>" in rendered
 
 
-def test_lfm25_tool_role_output_remains_bare_chatml_content():
+def test_lfm2_5_tool_role_output_remains_bare_chatml_content():
     rendered = _render(
         [
             {"role": "user", "content": "find shoes"},
@@ -247,33 +240,15 @@ def test_legacy_lfm2_marks_assistant_generation_span():
 def test_tools_are_serialized_with_family_specific_contracts():
     messages = [{"role": "user", "content": "find shoes"}]
 
-    lfm25 = _render(messages, tools=SAMPLE_TOOLS)
+    lfm2_5 = _render(messages, tools=SAMPLE_TOOLS)
     legacy_lfm2 = _render(
         messages,
         template_path=LEGACY_LFM2_TEMPLATE_PATH,
         tools=SAMPLE_TOOLS,
     )
 
-    assert "List of tools: " in lfm25
-    assert "<|tool_list_start|>" not in lfm25
-    assert "<|tool_list_end|>" not in lfm25
+    assert "List of tools: " in lfm2_5
+    assert "<|tool_list_start|>" not in lfm2_5
+    assert "<|tool_list_end|>" not in lfm2_5
     assert "<|tool_list_start|>" in legacy_lfm2
     assert "<|tool_list_end|>" in legacy_lfm2
-
-
-def test_24b_template_matches_canonical_lfm25_tool_contract():
-    messages = [
-        {"role": "user", "content": "find shoes"},
-        {
-            "role": "assistant",
-            "content": "<|tool_call_start|>[search()]<|tool_call_end|>",
-        },
-        {"role": "tool", "content": '{"ok": true}'},
-    ]
-
-    canonical = _render(messages, template_path=LFM25_TEMPLATE_PATH, tools=SAMPLE_TOOLS)
-    active_24b = _render(
-        messages, template_path=LFM24B_TEMPLATE_PATH, tools=SAMPLE_TOOLS
-    )
-
-    assert active_24b == canonical

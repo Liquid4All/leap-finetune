@@ -1,5 +1,5 @@
 from leap_finetune.utils.load_models import (
-    _LFM25_DEFAULT_CHAT_TEMPLATE_PATH,
+    _LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH,
     _resolve_chat_template,
     _resolve_model_id,
 )
@@ -24,10 +24,10 @@ def test_resolve_model_id_keeps_existing_local_dir(tmp_path):
     assert _resolve_model_id(str(model_dir)) == str(model_dir)
 
 
-def test_resolve_chat_template_defaults_lfm25_models_to_tracked_template():
+def test_resolve_chat_template_defaults_lfm2_5_models_to_tracked_template():
     resolved = _resolve_chat_template(model_name="LiquidAI/LFM2-24B-A2B")
 
-    assert resolved == _LFM25_DEFAULT_CHAT_TEMPLATE_PATH.read_text()
+    assert resolved == _LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH.read_text()
 
 
 def test_resolve_chat_template_keeps_lfm2_models_on_tokenizer_default():

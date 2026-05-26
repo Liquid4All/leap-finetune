@@ -2,11 +2,9 @@ import logging
 import math
 
 import torch
-import ray.train
-from transformers import Trainer, TrainingArguments
 from ray.train.huggingface.transformers import prepare_trainer
+from transformers import Trainer, TrainingArguments
 
-from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.data_loaders.tokenize_data import create_vlm_collate_fn
 from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
@@ -16,13 +14,16 @@ from leap_finetune.training_configs.vlm_sft_config import (
     DEFAULT_LR_MULTIPLIERS,
     VLM_SFT_EXCLUDED_KEYS,
 )
-from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
+from leap_finetune.utils.training.runtime import (
+    get_ray_train_eval_datasets,
+    init_tracking_from_config,
+    setup_training_worker,
+)
+from leap_finetune.utils.callbacks import LeapCheckpointCallback
 from leap_finetune.utils.load_models import load_vlm_model
 from leap_finetune.utils.logging_utils import (
     finish_tracker,
-    init_tracker,
     is_rank_zero,
-    setup_worker_logging,
 )
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
@@ -118,13 +119,8 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
 def vlm_sft_run(training_config: dict) -> None:
     """VLM SFT training loop for Ray Train."""
 
-    setup_worker_logging()
-
-    train_ds_ray = ray.train.get_dataset_shard("train")
-    eval_ds_ray = ray.train.get_dataset_shard("eval")
-
-    train_dataset = ray_dataset_to_hf(train_ds_ray)
-    eval_dataset = ray_dataset_to_hf(eval_ds_ray) if eval_ds_ray is not None else None
+    setup_training_worker()
+    train_dataset, eval_dataset = get_ray_train_eval_datasets()
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -156,13 +152,9 @@ def vlm_sft_run(training_config: dict) -> None:
     }
 
     # Configure experiment tracking
-    tracker = train_config.get("tracker", "none")
-    if tracker == "none" and train_config.get("wandb_logging", False):
-        tracker = "wandb"
-    init_tracker(
+    tracker = init_tracking_from_config(
         job_name,
-        tracker,
-        train_config.get("trackio_space_id"),
+        train_config,
         output_dir=output_dir if output_dir else None,
         resume_from_checkpoint=resume_from,
     )

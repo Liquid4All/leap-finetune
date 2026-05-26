@@ -90,6 +90,56 @@ def test_validate_cp_model_support_rejects_packed_hybrid_conv():
             )
 
 
+def test_setup_context_parallel_applies_model_and_moe_partition(monkeypatch):
+    from leap_finetune.utils.training.runtime import setup_context_parallel
+
+    calls = []
+    cp_config = {"cp_group": "group", "cp_rank": 0, "cp_size": 2}
+    model = nn.Module()
+
+    monkeypatch.setattr(
+        "leap_finetune.utils.training.runtime.validate_cp_model_support",
+        lambda patched_model, train_config: calls.append(
+            ("validate_model", patched_model, train_config)
+        ),
+    )
+    monkeypatch.setattr(
+        "leap_finetune.utils.training.runtime.validate_cp_config",
+        lambda cp_size, max_length=None, world_size=None: calls.append(
+            ("validate_config", cp_size, max_length, world_size)
+        ),
+    )
+    monkeypatch.setattr(
+        "leap_finetune.utils.training.runtime.create_parallel_process_groups",
+        lambda cp_size: calls.append(("create_groups", cp_size)) or cp_config,
+    )
+    monkeypatch.setattr(
+        "leap_finetune.utils.training.runtime.apply_cp_to_model",
+        lambda patched_model, config: calls.append(("apply_cp", patched_model, config)),
+    )
+    monkeypatch.setattr(
+        "leap_finetune.utils.training.runtime.set_moe_sequence_partition_group",
+        lambda patched_model, group: calls.append(
+            ("set_moe_group", patched_model, group)
+        ),
+    )
+
+    result = setup_context_parallel(
+        model,
+        {"context_parallel_size": 2, "max_length": 16},
+        enable_moe_sequence_partition=True,
+    )
+
+    assert result is cp_config
+    assert calls == [
+        ("validate_model", model, {"context_parallel_size": 2, "max_length": 16}),
+        ("validate_config", 2, 16, None),
+        ("create_groups", 2),
+        ("apply_cp", model, cp_config),
+        ("set_moe_group", model, "group"),
+    ]
+
+
 def test_prefix_gather_attention_uses_contiguous_visible_prefix(monkeypatch):
     captured = {}
 

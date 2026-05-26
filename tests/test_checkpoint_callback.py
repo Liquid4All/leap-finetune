@@ -1,7 +1,7 @@
 import pytest
 from transformers import TrainingArguments
 
-from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
+from leap_finetune.utils.callbacks import LeapCheckpointCallback
 
 pytestmark = pytest.mark.configs
 

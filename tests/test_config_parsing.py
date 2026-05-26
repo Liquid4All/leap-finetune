@@ -4,7 +4,7 @@ import pytest
 import yaml
 from peft import LoraConfig
 
-from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
+from leap_finetune.utils.callbacks import LeapCheckpointCallback
 from leap_finetune.utils.config_parser import (
     generate_run_name,
     parse_job_config,

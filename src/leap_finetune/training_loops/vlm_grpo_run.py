@@ -353,6 +353,70 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         finally:
             processor.__class__ = real_cls
 
+    def _reconcile_image_tokens(self, model, model_inputs: dict, logits_to_keep: int):
+        """Guarantee ``#image-placeholders == #vision-features`` before the
+        forward, so LFM2-VL's ``masked_scatter`` can never assert.
+
+        The expected feature count is exactly what the model's
+        ``pixel_unshuffle`` produces: ``Σ floor(h/df)·floor(w/df)`` over
+        ``spatial_shapes`` rows (df = downsample_factor). The actual count
+        is the number of ``image_token_id`` in ``input_ids``. Any surplus
+        is a stray image token the policy sampled during rollout — replace
+        the trailing surplus (always in the completion region) with pad.
+        """
+        ids = model_inputs.get("input_ids")
+        spatial = model_inputs.get("spatial_shapes")
+        if not isinstance(ids, torch.Tensor) or not isinstance(spatial, torch.Tensor):
+            return  # text-only batch — nothing to reconcile
+
+        proc = self.processing_class
+        image_token_id = getattr(proc, "image_token_id", None)
+        if image_token_id is None:
+            image_token_id = getattr(
+                getattr(model, "config", None), "image_token_id", None
+            )
+        if image_token_id is None:
+            return
+
+        df = int(getattr(proc.image_processor, "downsample_factor", 2) or 2)
+        expected = int(((spatial[:, 0] // df) * (spatial[:, 1] // df)).sum().item())
+        actual = int((ids == image_token_id).sum().item())
+        if actual == expected:
+            return
+
+        if actual < expected:
+            # Fewer placeholders than features — a data/collation bug, not a
+            # rollout stray. Can't fix by trimming; log loudly and let the
+            # forward surface it.
+            logger.error(
+                "[vlm_grpo] image-token UNDERFLOW: placeholders=%d < features=%d "
+                "(spatial_shapes rows=%d) — not a rollout stray, investigate data",
+                actual,
+                expected,
+                spatial.shape[0],
+            )
+            return
+
+        # actual > expected: trim the surplus stray tokens, scanning from the
+        # END (completion side) so structural prompt placeholders are last to go.
+        surplus = actual - expected
+        pad_id = getattr(proc, "pad_token_id", None) or getattr(
+            getattr(proc, "tokenizer", None), "pad_token_id", 0
+        )
+        flat = ids.reshape(-1)
+        img_positions = (flat == image_token_id).nonzero(as_tuple=True)[0]
+        to_pad = img_positions[-surplus:]  # last `surplus` image tokens
+        flat[to_pad] = pad_id
+        model_inputs["input_ids"] = flat.reshape(ids.shape)
+        logger.warning(
+            "[vlm_grpo] reconciled %d surplus image-token(s): "
+            "placeholders %d -> %d (features=%d)",
+            surplus,
+            actual,
+            expected,
+            expected,
+        )
+
     def _get_per_token_logps_and_entropies(
         self,
         model,
@@ -407,74 +471,14 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
             model_inputs["logits_to_keep"] = logits_to_keep + 1
         model_inputs["use_cache"] = False
 
-        # GRPO rollouts can sample the image-placeholder token by accident at
-        # high temperatures. That token has no matching vision feature, so it
-        # breaks ``get_placeholder_mask``'s count check
-        # (placeholders > features). Sanitize the completion region by
-        # replacing any image_token_id with pad_token_id; the structural
-        # prompt-side placeholders (which DO have matching features) are
-        # untouched.
-        image_token_id = getattr(model.config, "image_token_id", None)
-        has_images = forward_kwargs.get("pixel_values") is not None
-        if image_token_id is not None and has_images:
-            ids = model_inputs["input_ids"]
-            comp_start = ids.size(1) - logits_to_keep
-            comp = ids[:, comp_start:]
-            mask = comp == image_token_id
-            n_stray = int(mask.sum().item())
-            if n_stray:
-                pad_id = getattr(self.processing_class, "pad_token_id", None) or getattr(
-                    getattr(self.processing_class, "tokenizer", None), "pad_token_id", 0
-                )
-                comp = comp.masked_fill(mask, pad_id)
-                model_inputs["input_ids"] = torch.cat(
-                    [ids[:, :comp_start], comp], dim=1
-                )
-                logger.debug(
-                    "[vlm_grpo] sanitized %d stray image-token(s) in completion",
-                    n_stray,
-                )
+        # GRPO rollouts can sample the image-placeholder token at high
+        # temperature. Such a token has no matching vision feature, so
+        # image-placeholder count > feature count and the LFM2-VL forward
+        # dies in ``masked_scatter`` (CUDA assert, unrecoverable). Reconcile
+        # the counts before the forward so it can never happen.
+        self._reconcile_image_tokens(model, model_inputs, logits_to_keep)
 
-        try:
-            logits = model(**model_inputs).logits
-        except ValueError as e:
-            # When the placeholder/feature off-by-one fires, dump every
-            # tensor shape + value range that could explain it, then
-            # re-raise so the training run still fails (we want the data,
-            # not silent skip).
-            if "Image features and image tokens do not match" not in str(e):
-                raise
-            try:
-                img_id = getattr(model.config, "image_token_id", None)
-                ids = model_inputs["input_ids"]
-                pv = model_inputs.get("pixel_values")
-                ss = model_inputs.get("spatial_shapes")
-                pam = model_inputs.get("pixel_attention_mask")
-                n_ph = (
-                    int((ids == img_id).sum().item()) if img_id is not None else -1
-                )
-                per_seq_ph = (
-                    (ids == img_id).sum(dim=1).tolist() if img_id is not None else None
-                )
-                print(
-                    "[vlm_grpo:offby1] DUMP\n"
-                    f"  err={e}\n"
-                    f"  num_images={num_images}\n"
-                    f"  input_ids.shape={tuple(ids.shape)} placeholders_total={n_ph}\n"
-                    f"  placeholders_per_seq={per_seq_ph}\n"
-                    f"  pixel_values.shape={tuple(pv.shape) if isinstance(pv, torch.Tensor) else pv}\n"
-                    f"  spatial_shapes.shape={tuple(ss.shape) if isinstance(ss, torch.Tensor) else ss}\n"
-                    f"  spatial_shapes_values={ss.tolist() if isinstance(ss, torch.Tensor) else ss}\n"
-                    f"  pam.sum(dim=1)={pam.sum(dim=1).tolist() if isinstance(pam, torch.Tensor) else pam}\n"
-                    f"  hw_product_per_image="
-                    f"{(ss[:, 0] * ss[:, 1]).tolist() if isinstance(ss, torch.Tensor) else None}\n"
-                    f"  expected_features_per_image="
-                    f"{((ss[:, 0] // 2) * (ss[:, 1] // 2)).tolist() if isinstance(ss, torch.Tensor) else None}",
-                    flush=True,
-                )
-            except Exception as dump_err:
-                print(f"[vlm_grpo:offby1] dump failed: {dump_err}", flush=True)
-            raise
+        logits = model(**model_inputs).logits
         # Drop next-token logit, keep only the completion region.
         logits = logits[:, :-1, :]
         logits = logits[:, -logits_to_keep:, :]

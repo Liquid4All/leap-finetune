@@ -40,6 +40,169 @@ from leap_finetune.utils.vlm_optimizer import build_vlm_param_groups, log_per_gr
 logger = logging.getLogger(__name__)
 
 
+_LFM2VL_PER_IMAGE_KEYS = (
+    "spatial_shapes",
+    "image_sizes",
+    "pixel_attention_mask",
+    "pixel_position_ids",
+    "mm_token_type_ids",
+)
+
+# Diagnostic toggle — one log per worker so we know our patches saw real data.
+_LEAP_SPLIT_LOGGED = False
+
+
+def _patch_trl_split_pixel_values_for_lfm2vl() -> None:
+    """Make TRL's batch splitter aware of LFM2-VL's per-image layout.
+
+    Upstream ``trl.trainer.utils.split_pixel_values_by_grid`` assumes a
+    Qwen-VL layout (``pixel_values`` is one big concat of all patches,
+    sliced via ``image_grid_thw.prod(-1)``). LFM2-VL's layout is
+    per-image: ``pixel_values`` shape ``(total_images, max_patches,
+    embed_dim)`` paired with ``spatial_shapes``. Without a split-aware
+    path here, TRL's per-rank distribution falls back to row-by-row
+    slicing that cuts through multi-image samples, and the downstream
+    forward fails with "Image features and image tokens do not match".
+
+    We split every per-image tensor in lock-step using ``num_images``,
+    and the matching ``unsplit_pixel_values_by_grid`` patch below
+    re-merges them with ``torch.cat(..., dim=0)``. Qwen-style batches
+    (``image_grid_thw`` present) are forwarded to the original. Single-
+    image and tiled-image batches bail out unchanged (the patch's
+    ``pv.size(0) == sum(num_images)`` guard fails for tiled inputs).
+    Idempotent.
+    """
+    try:
+        from trl.trainer import utils as _trl_utils
+    except Exception:
+        return
+    if getattr(_trl_utils.split_pixel_values_by_grid, "_leap_lfm2vl_patched", False):
+        return
+    _orig = _trl_utils.split_pixel_values_by_grid
+
+    def patched(batch):
+        # Qwen-VL path is unchanged.
+        if (
+            "image_grid_thw" in batch
+            and "pixel_values" in batch
+            and "num_images" in batch
+        ):
+            return _orig(batch)
+        if (
+            "pixel_values" in batch
+            and "num_images" in batch
+            and ("spatial_shapes" in batch or "image_sizes" in batch)
+            and isinstance(batch["pixel_values"], torch.Tensor)
+        ):
+            pv = batch["pixel_values"]
+            num_images = batch["num_images"]
+            # Tiled inputs put extra rows in pixel_values per image; bail.
+            if pv.size(0) != sum(num_images):
+                return batch
+            split_pv = list(torch.split(pv, list(num_images), dim=0))
+            new_batch = {**batch, "pixel_values": split_pv}
+            # Every per-image tensor must follow the same split so they
+            # stay aligned through the collator and per-rank distribution.
+            for key in _LFM2VL_PER_IMAGE_KEYS:
+                v = batch.get(key)
+                if isinstance(v, torch.Tensor) and v.size(0) == sum(num_images):
+                    new_batch[key] = list(torch.split(v, list(num_images), dim=0))
+            # One-shot diagnostic to confirm split inputs are consistent
+            # (only the FIRST call per worker logs).
+            global _LEAP_SPLIT_LOGGED
+            if not _LEAP_SPLIT_LOGGED:
+                _LEAP_SPLIT_LOGGED = True
+                ss = batch.get("spatial_shapes") or batch.get("image_sizes")
+                pam = batch.get("pixel_attention_mask")
+                print(
+                    f"[vlm_grpo:split] num_images={num_images} "
+                    f"pv={tuple(pv.shape)} "
+                    f"ss={tuple(ss.shape) if isinstance(ss, torch.Tensor) else None} "
+                    f"pam.sum(dim=1)="
+                    f"{pam.sum(dim=1).tolist() if isinstance(pam, torch.Tensor) else None}",
+                    flush=True,
+                )
+            return new_batch
+        return _orig(batch)
+
+    patched._leap_lfm2vl_patched = True  # type: ignore[attr-defined]
+    _trl_utils.split_pixel_values_by_grid = patched
+
+    # TRL's unsplit only merges pixel_values + image_grid_thw; the
+    # remaining per-image tensors stay as lists after our split, which
+    # crashes the vision tower. Re-merge them here.
+    _orig_unsplit = _trl_utils.unsplit_pixel_values_by_grid
+
+    def patched_unsplit(batch):
+        batch = _orig_unsplit(batch)
+        for key in _LFM2VL_PER_IMAGE_KEYS:
+            v = batch.get(key)
+            if (
+                isinstance(v, list)
+                and v
+                and all(isinstance(t, torch.Tensor) for t in v)
+            ):
+                batch = {**batch, key: torch.cat(v, dim=0)}
+        return batch
+
+    patched_unsplit._leap_lfm2vl_patched = True  # type: ignore[attr-defined]
+    _trl_utils.unsplit_pixel_values_by_grid = patched_unsplit
+
+    # grpo_trainer.py imports the names directly, so rebind them there too.
+    try:
+        from trl.trainer import grpo_trainer as _trl_grpo
+
+        _trl_grpo.split_pixel_values_by_grid = patched
+        _trl_grpo.unsplit_pixel_values_by_grid = patched_unsplit
+    except Exception:
+        pass
+    logger.info("[vlm_grpo] patched TRL split/unsplit_pixel_values_by_grid for LFM2-VL")
+
+
+def _patch_vllm_rollout_for_multi_image(trainer: GRPOTrainer) -> None:
+    """Inject ``mm_processor_kwargs`` into TRL's vLLM rollout prompts.
+
+    TRL's ``vllm_generation`` builds rollout prompt dicts with
+    ``multi_modal_data`` but doesn't pass ``mm_processor_kwargs``.
+    Upstream vLLM 0.19's LFM2-VL multi-image preprocessor crashes on
+    empty ``spatial_shapes`` (the same bug the async eval backend works
+    around per-prompt). We wrap ``llm.generate`` and inject safe-default
+    kwargs on every multi-image prompt — single-image batches are
+    untouched.
+    """
+    if not getattr(trainer.args, "use_vllm", False):
+        return
+    vllm_gen = getattr(trainer, "vllm_generation", None)
+    if vllm_gen is None or not hasattr(vllm_gen, "llm"):
+        return
+
+    orig_generate = vllm_gen.llm.generate
+    # Keep ``use_thumbnail`` at the processor's default (True). Turning
+    # it off causes a placeholder-vs-feature count mismatch against the
+    # training-side HF processor — surfaces as "Image features and image
+    # tokens do not match".
+    _MULTI_IMAGE_KWARGS = {
+        "do_image_splitting": False,
+        "min_tiles": 1,
+        "max_tiles": 1,
+    }
+
+    def patched_generate(prompts, sampling_params=None, use_tqdm=False, **kwargs):
+        if isinstance(prompts, list):
+            for p in prompts:
+                if not (isinstance(p, dict) and "multi_modal_data" in p):
+                    continue
+                images = p["multi_modal_data"].get("image")
+                if isinstance(images, list) and len(images) > 1:
+                    p.setdefault("mm_processor_kwargs", dict(_MULTI_IMAGE_KWARGS))
+        return orig_generate(
+            prompts, sampling_params=sampling_params, use_tqdm=use_tqdm, **kwargs
+        )
+
+    vllm_gen.llm.generate = patched_generate
+    logger.info("[vlm_grpo] patched vLLM rollout for multi-image prompts")
+
+
 class LFMVLMGRPOTrainer(GRPOTrainer):
     """VLM GRPO trainer with three additions on top of ``trl.GRPOTrainer``:
 
@@ -244,7 +407,74 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
             model_inputs["logits_to_keep"] = logits_to_keep + 1
         model_inputs["use_cache"] = False
 
-        logits = model(**model_inputs).logits
+        # GRPO rollouts can sample the image-placeholder token by accident at
+        # high temperatures. That token has no matching vision feature, so it
+        # breaks ``get_placeholder_mask``'s count check
+        # (placeholders > features). Sanitize the completion region by
+        # replacing any image_token_id with pad_token_id; the structural
+        # prompt-side placeholders (which DO have matching features) are
+        # untouched.
+        image_token_id = getattr(model.config, "image_token_id", None)
+        has_images = forward_kwargs.get("pixel_values") is not None
+        if image_token_id is not None and has_images:
+            ids = model_inputs["input_ids"]
+            comp_start = ids.size(1) - logits_to_keep
+            comp = ids[:, comp_start:]
+            mask = comp == image_token_id
+            n_stray = int(mask.sum().item())
+            if n_stray:
+                pad_id = getattr(self.processing_class, "pad_token_id", None) or getattr(
+                    getattr(self.processing_class, "tokenizer", None), "pad_token_id", 0
+                )
+                comp = comp.masked_fill(mask, pad_id)
+                model_inputs["input_ids"] = torch.cat(
+                    [ids[:, :comp_start], comp], dim=1
+                )
+                logger.debug(
+                    "[vlm_grpo] sanitized %d stray image-token(s) in completion",
+                    n_stray,
+                )
+
+        try:
+            logits = model(**model_inputs).logits
+        except ValueError as e:
+            # When the placeholder/feature off-by-one fires, dump every
+            # tensor shape + value range that could explain it, then
+            # re-raise so the training run still fails (we want the data,
+            # not silent skip).
+            if "Image features and image tokens do not match" not in str(e):
+                raise
+            try:
+                img_id = getattr(model.config, "image_token_id", None)
+                ids = model_inputs["input_ids"]
+                pv = model_inputs.get("pixel_values")
+                ss = model_inputs.get("spatial_shapes")
+                pam = model_inputs.get("pixel_attention_mask")
+                n_ph = (
+                    int((ids == img_id).sum().item()) if img_id is not None else -1
+                )
+                per_seq_ph = (
+                    (ids == img_id).sum(dim=1).tolist() if img_id is not None else None
+                )
+                print(
+                    "[vlm_grpo:offby1] DUMP\n"
+                    f"  err={e}\n"
+                    f"  num_images={num_images}\n"
+                    f"  input_ids.shape={tuple(ids.shape)} placeholders_total={n_ph}\n"
+                    f"  placeholders_per_seq={per_seq_ph}\n"
+                    f"  pixel_values.shape={tuple(pv.shape) if isinstance(pv, torch.Tensor) else pv}\n"
+                    f"  spatial_shapes.shape={tuple(ss.shape) if isinstance(ss, torch.Tensor) else ss}\n"
+                    f"  spatial_shapes_values={ss.tolist() if isinstance(ss, torch.Tensor) else ss}\n"
+                    f"  pam.sum(dim=1)={pam.sum(dim=1).tolist() if isinstance(pam, torch.Tensor) else pam}\n"
+                    f"  hw_product_per_image="
+                    f"{(ss[:, 0] * ss[:, 1]).tolist() if isinstance(ss, torch.Tensor) else None}\n"
+                    f"  expected_features_per_image="
+                    f"{((ss[:, 0] // 2) * (ss[:, 1] // 2)).tolist() if isinstance(ss, torch.Tensor) else None}",
+                    flush=True,
+                )
+            except Exception as dump_err:
+                print(f"[vlm_grpo:offby1] dump failed: {dump_err}", flush=True)
+            raise
         # Drop next-token logit, keep only the completion region.
         logits = logits[:, :-1, :]
         logits = logits[:, -logits_to_keep:, :]
@@ -417,6 +647,14 @@ def vlm_grpo_run(training_config: dict) -> None:
         processing_class=processor,
         rollout_func=rollout_func,
     )
+
+    # LFM2-VL multi-image fixes:
+    #   1. TRL's per-sample splitter assumes Qwen-VL pixel_values layout;
+    #      patch it to split by num_images for LFM2-VL.
+    #   2. vLLM rollout preprocessor needs mm_processor_kwargs for
+    #      multi-image batches. No-op for text or single-image.
+    _patch_trl_split_pixel_values_for_lfm2vl()
+    _patch_vllm_rollout_for_multi_image(trainer)
 
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
 

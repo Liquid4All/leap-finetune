@@ -5,7 +5,7 @@ import pytest
 import torch
 from datasets import Dataset
 
-from leap_finetune.data_loaders.validate_loader import (
+from leap_finetune.data_loading.validate_dataset_format import (
     get_row_filter,
     normalize_columns,
     validate_dataset_format,
@@ -54,7 +54,7 @@ class TestVLMGRPORowFilter:
     def setup_method(self):
         # Patch is_image_loadable to always return True so we don't need
         # real files on disk for schema tests.
-        from leap_finetune.data_loaders import image_loader
+        from leap_finetune.data_loading import image_loader
 
         self._orig = image_loader.is_image_loadable
         image_loader.is_image_loadable = lambda s: True
@@ -63,7 +63,7 @@ class TestVLMGRPORowFilter:
         self.f = get_row_filter("vlm_grpo")
 
     def teardown_method(self):
-        from leap_finetune.data_loaders import image_loader
+        from leap_finetune.data_loading import image_loader
 
         image_loader.is_image_loadable = self._orig
 
@@ -260,7 +260,7 @@ class TestValidateGRPODatasetFormat:
 
     def test_vlm_grpo_with_good_samples_passes(self, monkeypatch):
         # Patch image loader to skip actual disk checks
-        from leap_finetune.data_loaders import image_loader
+        from leap_finetune.data_loading import image_loader
 
         monkeypatch.setattr(image_loader, "is_image_loadable", lambda s: True)
 
@@ -1084,7 +1084,7 @@ class TestVLMGRPOImageLift:
         accelerator). We only need to exercise the overridden method, so
         we bypass init and rely on ``super().`` dispatching via the MRO.
         """
-        from leap_finetune.training_loops.vlm_grpo_run import LFMVLMGRPOTrainer
+        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
 
         return LFMVLMGRPOTrainer.__new__(LFMVLMGRPOTrainer)
 
@@ -1262,7 +1262,7 @@ class TestVLMGRPOSpatialShapesAlias:
         return _StubProcessor()
 
     def _build_instance(self, processor):
-        from leap_finetune.training_loops.vlm_grpo_run import LFMVLMGRPOTrainer
+        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
 
         instance = LFMVLMGRPOTrainer.__new__(LFMVLMGRPOTrainer)
         instance.processing_class = processor
@@ -1295,7 +1295,7 @@ class TestVLMGRPOSpatialShapesAlias:
     def test_context_manager_noop_when_no_processor(self):
         """Unit-test construction via ``__new__`` has no processor; the
         context manager must be a safe no-op rather than AttributeError."""
-        from leap_finetune.training_loops.vlm_grpo_run import LFMVLMGRPOTrainer
+        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
 
         instance = LFMVLMGRPOTrainer.__new__(LFMVLMGRPOTrainer)
         # No processing_class attribute set
@@ -1307,7 +1307,7 @@ class TestVLMGRPOSpatialShapesAlias:
         undo the alias at the model-forward boundary: it receives
         ``image_sizes`` (from TRL's propagated dict) and must forward
         it to the model as ``spatial_shapes``."""
-        from leap_finetune.training_loops.vlm_grpo_run import LFMVLMGRPOTrainer
+        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
 
         instance = LFMVLMGRPOTrainer.__new__(LFMVLMGRPOTrainer)
         # LFM2-VL's forward accepts these names:

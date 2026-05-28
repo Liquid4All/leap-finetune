@@ -3,30 +3,33 @@ from __future__ import annotations
 import logging
 from typing import cast
 
-import ray.train
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import PreTrainedTokenizerBase
 from trl import GRPOConfig, GRPOTrainer
 
-from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
+from leap_finetune.checkpointing.callback import LeapCheckpointCallback
+from leap_finetune.checkpointing.model_info import is_moe_model_from_name
+from leap_finetune.checkpointing.model_loading import load_model
 from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
     create_llm_benchmarks_from_config,
 )
 from leap_finetune.rl.rewards import resolve_reward_specs
-from leap_finetune.training_configs.grpo_configs import GRPO_EXCLUDED_KEYS
-from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
-from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
-from leap_finetune.utils.load_models import load_model
-from leap_finetune.utils.logging_utils import (
-    finish_tracker,
-    init_tracker,
-    is_rank_zero,
-    setup_worker_logging,
+from leap_finetune.training.default_configs.grpo_configs import GRPO_EXCLUDED_KEYS
+from leap_finetune.training.peft.peft import (
+    apply_peft_to_model,
+    merge_and_save_peft_model,
 )
-from leap_finetune.utils.model_utils import is_moe_model_from_name
-from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
-from leap_finetune.utils.trainer_mixins import run_training_safely
+from leap_finetune.training.utils.logging import (
+    finish_tracker,
+    is_rank_zero,
+)
+from leap_finetune.training.utils.trainer_lifecycle import run_training_safely
+from leap_finetune.training.utils.worker_setup import (
+    get_ray_train_eval_datasets,
+    init_tracking_from_config,
+    setup_training_worker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,20 +42,16 @@ logger = logging.getLogger(__name__)
 
 
 def grpo_run(training_config: dict) -> None:
-    setup_worker_logging()
-
-    train_ds_ray = ray.train.get_dataset_shard("train")
-    eval_ds_ray = ray.train.get_dataset_shard("eval")
-    train_dataset = ray_dataset_to_hf(train_ds_ray)
-    eval_dataset = ray_dataset_to_hf(eval_ds_ray) if eval_ds_ray is not None else None
+    setup_training_worker()
+    train_dataset, eval_dataset = get_ray_train_eval_datasets()
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
     job_name = training_config.get("job_name", "leap-ft-run")
 
-    # MoE variants auto-switch to FSDP for full fine-tuning.
     is_moe = is_moe_model_from_name(model_name)
-    use_fsdp = is_moe and peft_config is None
+    if is_moe:
+        raise ValueError("GRPO for MoE models is not supported in this EP branch")
 
     train_config = training_config.get("train_config", {})
     run_name_template = train_config.get("leap_run_name_template")
@@ -62,20 +61,13 @@ def grpo_run(training_config: dict) -> None:
         logger.info("Resuming from checkpoint: %s", resume_from)
 
     excluded_keys = GRPO_EXCLUDED_KEYS | {"leap_run_name_template"}
-    if use_fsdp:
-        excluded_keys = excluded_keys | {"deepspeed"}
     train_config_filtered = {
         k: v for k, v in train_config.items() if k not in excluded_keys
     }
 
-    # Configure experiment tracking (same pattern as SFT/DPO)
-    tracker = train_config.get("tracker", "none")
-    if tracker == "none" and train_config.get("wandb_logging", False):
-        tracker = "wandb"
-    init_tracker(
+    tracker = init_tracking_from_config(
         job_name,
-        tracker,
-        train_config.get("trackio_space_id"),
+        train_config,
         output_dir=output_dir if output_dir else None,
         resume_from_checkpoint=resume_from,
     )
@@ -85,10 +77,6 @@ def grpo_run(training_config: dict) -> None:
         "run_name": job_name,
         **train_config_filtered,
     }
-    if use_fsdp:
-        config_kwargs["fsdp"] = MOE_FSDP_CONFIG["fsdp"]
-        config_kwargs["fsdp_config"] = MOE_FSDP_CONFIG["fsdp_config"]
-
     training_args = GRPOConfig(**config_kwargs)
 
     model, tokenizer = load_model(model_name)

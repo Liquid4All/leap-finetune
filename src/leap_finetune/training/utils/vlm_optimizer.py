@@ -3,9 +3,8 @@
 VLMs need per-component learning rates: the vision encoder trains at a lower
 LR (typically 0.1×) to preserve pretrained features, while the projector and
 LM backbone train at the base rate. This module holds the param-group builder
-and the per-group LR logging hook that both ``LFMVLMTrainer`` (in
-``training_loops/vlm_sft_run.py``) and ``LFMVLMGRPOTrainer`` (in
-``training_loops/vlm_grpo_run.py``) call.
+and the per-group LR logging hook that both ``LFMVLMTrainer`` and
+``LFMVLMGRPOTrainer`` call.
 
 Keeping the logic here ensures there is exactly one source of truth for VLM
 LR policy across SFT and GRPO.

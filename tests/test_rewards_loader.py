@@ -4,7 +4,7 @@ import textwrap
 import pytest
 
 from leap_finetune.rl.rewards import resolve_reward_specs
-from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
+from leap_finetune import LEAP_FINETUNE_DIR
 
 pytestmark = pytest.mark.configs
 
@@ -14,17 +14,6 @@ pytestmark = pytest.mark.configs
 
 REPO_ROOT = LEAP_FINETUNE_DIR
 SHIPPED_REWARDS = REPO_ROOT / "rewards"
-
-
-def test_legacy_reward_import_path_remains_available():
-    from leap_finetune.rewards import (  # noqa: PLC0415
-        Recipe as LegacyRecipe,
-        resolve_reward_specs as legacy_resolve_reward_specs,
-    )
-    from leap_finetune.rl.rewards import Recipe  # noqa: PLC0415
-
-    assert LegacyRecipe is Recipe
-    assert legacy_resolve_reward_specs is resolve_reward_specs
 
 
 class TestResolveRewardSpecs:

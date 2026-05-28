@@ -9,21 +9,6 @@ from leap_finetune.rl.environments.env_reward import env_reward
 pytestmark = pytest.mark.configs
 
 
-# === Compatibility imports ===
-
-
-def test_legacy_rl_envs_import_path_remains_available():
-    from leap_finetune.rl_envs.adapter import (  # noqa: PLC0415
-        build_openenv_rollout_func as legacy_build_openenv_rollout_func,
-    )
-    from leap_finetune.rl_envs.env_reward import (  # noqa: PLC0415
-        env_reward as legacy_env_reward,
-    )
-
-    assert legacy_build_openenv_rollout_func is build_openenv_rollout_func
-    assert legacy_env_reward is env_reward
-
-
 # === env_reward extractor ===
 
 

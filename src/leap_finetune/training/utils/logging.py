@@ -5,7 +5,6 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from pathlib import Path
-import shutil
 
 _ENV_DONE = False
 
@@ -120,37 +119,6 @@ def finish_tracker(tracker: str) -> None:
         pass
 
 
-# Backward-compatible alias
-finish_wandb_if_enabled = finish_tracker
-
-
-def worker_process_setup_hook() -> None:
-    """
-    Configure logging on Ray worker processes.
-
-    Passed to ray.init(runtime_env=RuntimeEnv(worker_process_setup_hook=...))
-    Runs once when each worker process starts, before any tasks execute.
-    """
-    # Only show ERROR level logs from Ray components
-    logging.getLogger("ray.data").setLevel(logging.ERROR)
-    logging.getLogger("ray.train").setLevel(logging.ERROR)
-    logging.getLogger("ray").setLevel(logging.ERROR)
-    warnings.filterwarnings("ignore")
-
-
-def setup_worker_logging() -> None:
-    """
-    Configure logging for Ray Train workers.
-
-    Must be called from within a Ray Train worker (not driver).
-    Disables progress bars on non-rank-0 workers to avoid duplicate logs.
-    """
-    if not is_rank_zero():
-        import datasets
-
-        datasets.disable_progress_bars()
-
-
 def setup_training_environment() -> None:
     """Configure training environment. Only prints messages on driver process."""
     global _ENV_DONE
@@ -162,6 +130,7 @@ def setup_training_environment() -> None:
     os.environ.setdefault("DS_DISABLE_CONFIG_PRINT", "1")
     os.environ.setdefault("DEEPSPEED_LOG_LEVEL", "ERROR")
     os.environ.setdefault("RAY_DATA_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE", "1")
     # Skip noisy duplicate logs from workers (NCCL warnings, object store warnings, SplitCoordinator)
     os.environ.setdefault(
         "RAY_DEDUP_LOGS_SKIP_REGEX",
@@ -172,11 +141,12 @@ def setup_training_environment() -> None:
     if "WANDB_API_KEY" not in os.environ and "WANDB_MODE" not in os.environ:
         os.environ["WANDB_MODE"] = "offline"
 
-    # Use per-process cache directories to avoid permission errors with multiple Ray workers
+    # Keep JIT/compiler caches under the worker temp root instead of /tmp.
     pid = os.getpid()
-    cache = f"/tmp/triton_cache_{pid}"
-    os.makedirs(cache, exist_ok=True)
-    os.environ["TRITON_CACHE_DIR"] = cache
+    temp_root = os.environ.get("TMPDIR", str(Path.home() / "tmp-ray"))
+    cache = Path(temp_root) / f"triton_cache_{pid}"
+    cache.mkdir(parents=True, exist_ok=True)
+    os.environ["TRITON_CACHE_DIR"] = str(cache)
 
     # Disable DeepSpeed Triton autotune to prevent /dev/shm permission errors
     os.environ.setdefault("DS_TRITON_AUTOTUNE", "0")
@@ -207,50 +177,6 @@ def setup_training_environment() -> None:
     if not is_worker:
         print("Training environment configured ✅")
     _ENV_DONE = True
-
-
-def get_ray_env_vars(
-    ray_temp_dir: str | None, multi_node: bool = False
-) -> dict[str, str]:
-    """Env vars for ray.init runtime_env. Multi-node skips the loopback NCCL pin."""
-    env_vars = {
-        "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
-        "TORCH_NCCL_BLOCKING_WAIT": "1",
-        "NCCL_TIMEOUT": "300",
-        "RAY_DISABLE_IMPORT_WARNING": "1",
-        "RAY_memory_monitor_refresh_ms": "0",
-        "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
-        "RAY_IGNORE_UNHANDLED_ERRORS": "1",
-        "RAY_LOG_TO_DRIVER": "0",
-        "RAY_DEDUP_LOGS": "1",
-        "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
-    }
-
-    if ray_temp_dir is not None:
-        env_vars["TMPDIR"] = ray_temp_dir
-        env_vars["TEMP"] = ray_temp_dir
-        env_vars["TMP"] = ray_temp_dir
-
-    if not multi_node:
-        # NCCL loopback pin is safe on a single node and avoids IB issues;
-        # on multi-node it would break cross-node collectives.
-        env_vars["NCCL_IB_DISABLE"] = "1"
-        env_vars["NCCL_SOCKET_IFNAME"] = "lo"
-
-    wandb_api_key = os.environ.get("WANDB_API_KEY")
-    wandb_mode = os.environ.get("WANDB_MODE")
-    if wandb_api_key:
-        env_vars["WANDB_API_KEY"] = wandb_api_key
-        if wandb_mode:
-            env_vars["WANDB_MODE"] = wandb_mode
-    else:
-        env_vars["WANDB_MODE"] = wandb_mode if wandb_mode else "offline"
-
-    judge_config = os.environ.get("LEAP_JUDGE_LLM_CONFIG")
-    if judge_config:
-        env_vars["LEAP_JUDGE_LLM_CONFIG"] = judge_config
-
-    return env_vars
 
 
 def print_next_steps_panel(output_dir: str) -> None:
@@ -285,77 +211,3 @@ def print_next_steps_panel(output_dir: str) -> None:
             expand=True,
         )
     )
-
-
-def select_ray_temp_dir(preferred: str | None = None) -> str:
-    """Pick a temp directory on a filesystem with >10% free space when possible.
-
-    Falls back to the path with the highest free ratio if none meet the threshold.
-    """
-    candidates: list[str] = []
-    env_tmp = os.environ.get("RAY_TMPDIR")
-    if env_tmp:
-        candidates.append(env_tmp)
-    if preferred:
-        candidates.append(preferred)
-    user = os.environ.get("USER", "default")
-    home_default = str(Path.home() / "ray_temp")
-    candidates.extend(
-        [
-            f"/tmp/{user}/ray",
-            home_default,
-            "/tmp/ray",
-        ]
-    )
-
-    best_path = home_default
-    best_ratio = -1.0
-    for path in candidates:
-        try:
-            base = Path(path)
-            base.mkdir(parents=True, exist_ok=True)
-            usage = shutil.disk_usage(str(base))
-            ratio = usage.free / usage.total if usage.total else 0.0
-            if ratio > 0.10:
-                return str(base)
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best_path = str(base)
-        except OSError:
-            continue
-
-    return best_path
-
-
-def _paths_with_free_space(
-    candidates: list[str], min_free_ratio: float = 0.10
-) -> list[str]:
-    qualified: list[str] = []
-    for path in candidates:
-        try:
-            base = Path(path)
-            base.mkdir(parents=True, exist_ok=True)
-            usage = shutil.disk_usage(str(base))
-            ratio = usage.free / usage.total if usage.total else 0.0
-            if ratio >= min_free_ratio:
-                qualified.append(str(base))
-        except OSError:
-            continue
-    return qualified
-
-
-def select_object_spilling_dir(ray_temp_dir: str | None = None) -> str:
-    """Choose a directory with enough free space for Ray object spilling."""
-    home = str(Path.home())
-    candidates = [
-        os.path.join(ray_temp_dir or home, "spill"),
-        f"{home}/ray_spill",
-    ]
-    good = _paths_with_free_space(candidates, min_free_ratio=0.10)
-    target = good[0] if good else candidates[-1]
-    Path(target).mkdir(parents=True, exist_ok=True)
-    return target
-
-
-def should_connect_existing_cluster(*args, **kwargs):  # simple check
-    return bool(os.environ.get("RAY_ADDRESS"))

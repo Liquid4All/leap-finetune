@@ -2,31 +2,39 @@ import logging
 import math
 
 import torch
-import ray.train
-from transformers import Trainer, TrainingArguments
 from ray.train.huggingface.transformers import prepare_trainer
+from transformers import Trainer, TrainingArguments
 
-from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
-from leap_finetune.data_loaders.tokenize_data import create_vlm_collate_fn
-from leap_finetune.evaluation import (
-    BenchmarkEvalCallback,
-    create_vlm_benchmarks_from_config,
-)
-from leap_finetune.training_configs.vlm_sft_config import (
+from leap_finetune.data_loading.tokenize_data import create_vlm_collate_fn
+from leap_finetune.training.default_configs.vlm_sft_configs import (
     DEFAULT_LR_MULTIPLIERS,
     VLM_SFT_EXCLUDED_KEYS,
 )
-from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
-from leap_finetune.utils.load_models import load_vlm_model
-from leap_finetune.utils.logging_utils import (
-    finish_tracker,
-    init_tracker,
-    is_rank_zero,
-    setup_worker_logging,
+from leap_finetune.training.utils.worker_setup import (
+    get_ray_train_eval_datasets,
+    init_tracking_from_config,
+    setup_training_worker,
 )
-from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
-from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
-from leap_finetune.utils.vlm_optimizer import build_vlm_param_groups, log_per_group_lrs
+from leap_finetune.checkpointing.callback import LeapCheckpointCallback
+from leap_finetune.checkpointing.model_loading import load_vlm_model
+from leap_finetune.training.utils.logging import (
+    finish_tracker,
+    is_rank_zero,
+)
+from leap_finetune.training.peft.peft import (
+    apply_peft_to_model,
+    merge_and_save_peft_model,
+)
+from leap_finetune.training.utils.trainer_mixins import (
+    RayDataLoaderMixin,
+)
+from leap_finetune.training.utils.trainer_lifecycle import (
+    run_training_safely,
+)
+from leap_finetune.training.utils.vlm_optimizer import (
+    build_vlm_param_groups,
+    log_per_group_lrs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +82,8 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
 def vlm_sft_run(training_config: dict) -> None:
     """VLM SFT training loop for Ray Train."""
 
-    setup_worker_logging()
-
-    train_ds_ray = ray.train.get_dataset_shard("train")
-    eval_ds_ray = ray.train.get_dataset_shard("eval")
-
-    train_dataset = ray_dataset_to_hf(train_ds_ray)
-    eval_dataset = ray_dataset_to_hf(eval_ds_ray)
+    setup_training_worker()
+    train_dataset, eval_dataset = get_ray_train_eval_datasets()
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
@@ -99,7 +102,7 @@ def vlm_sft_run(training_config: dict) -> None:
             "vision_encoder_lr_multiplier"
         ]
 
-    # Resume path is already resolved by config_parser
+    # Resume path is already resolved by the config parser.
     resume_from = train_config.get("resume_from_checkpoint")
     output_dir = train_config.get("output_dir", "")
     if resume_from:
@@ -112,13 +115,9 @@ def vlm_sft_run(training_config: dict) -> None:
     }
 
     # Configure experiment tracking
-    tracker = train_config.get("tracker", "none")
-    if tracker == "none" and train_config.get("wandb_logging", False):
-        tracker = "wandb"
-    init_tracker(
+    tracker = init_tracking_from_config(
         job_name,
-        tracker,
-        train_config.get("trackio_space_id"),
+        train_config,
         output_dir=output_dir if output_dir else None,
         resume_from_checkpoint=resume_from,
     )
@@ -178,13 +177,6 @@ def vlm_sft_run(training_config: dict) -> None:
     )
 
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
-
-    # Add benchmark evaluation callback if configured
-    benchmark_configs = training_config.get("benchmark_configs")
-    if benchmark_configs and benchmark_configs.get("benchmarks"):
-        benchmarks = create_vlm_benchmarks_from_config(benchmark_configs, processor)
-        if benchmarks:
-            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
 
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)

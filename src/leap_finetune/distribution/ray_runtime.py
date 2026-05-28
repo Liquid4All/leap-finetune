@@ -50,6 +50,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "NCCL_SOCKET_IFNAME",
         "GLOO_SOCKET_IFNAME",
         "NCCL_SOCKET_FAMILY",
+        "LEAP_JUDGE_LLM_CONFIG",
     ):
         value = os.environ.get(key)
         if value:

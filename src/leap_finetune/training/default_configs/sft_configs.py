@@ -1,7 +1,8 @@
-from leap_finetune.utils.constants import SFT_OUTPUT_PATH
+from leap_finetune import SFT_OUTPUT_PATH
 
-# Keys that exist in SFTConfig but not in TrainingArguments.
-# Must be filtered out when building TrainingArguments for plain Trainer.
+# Keys that do not belong in TrainingArguments.
+# Some of these are still consumed by preprocessing/collation (for example
+# assistant/completion-only loss masking) and must not be dropped upstream.
 SFT_EXCLUDED_KEYS = {
     "training_type",
     "wandb_logging",
@@ -9,6 +10,7 @@ SFT_EXCLUDED_KEYS = {
     "trackio_space_id",
     "packing",
     "max_length",
+    "drop_overlength",
     "packing_strategy",
     "eval_packing",
     "padding_free",
@@ -18,7 +20,13 @@ SFT_EXCLUDED_KEYS = {
     "dataset_num_proc",
     "completion_only_loss",
     "assistant_only_loss",
+    "chat_template",
+    "chat_template_path",
+    "reshard_after_forward",
+    "fsdp_cpu_offload",
     "resume_from_checkpoint",
+    "checkpoint_staging_dir",
+    "manual_sharded_checkpoint_format",
 }
 
 
@@ -116,7 +124,7 @@ DEFAULT_SFT = {
 # Base MoE SFT config - distributed strategy is applied automatically in runner
 # based on PEFT presence: DeepSpeed for LoRA, FSDP for full fine-tuning
 MOE_SFT = {
-    "training_type": "sft",
+    "training_type": "moe_sft",
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 2,  # MoE models typically need fewer epochs
     "per_device_train_batch_size": 2,  # Reduced to save memory
@@ -129,6 +137,7 @@ MOE_SFT = {
     "eval_strategy": "epoch",
     "max_grad_norm": 1.0,
     "bf16": True,
+    "manual_sharded_checkpoint_format": "hf",
     # Distributed strategy will be set automatically:
     # - With PEFT: uses MOE_DEEPSPEED_CONFIG
     # - Without PEFT: uses FSDP_CONFIG

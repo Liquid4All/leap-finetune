@@ -1,7 +1,9 @@
 import inspect
 from enum import Enum
 
-from . import dpo_configs, grpo_configs, peft_configs, sft_configs, vlm_sft_config
+from leap_finetune.training.peft import peft_configs
+
+from . import dpo_configs, grpo_configs, sft_configs, vlm_sft_configs
 
 
 def _discover_configs(
@@ -17,6 +19,7 @@ def _discover_configs(
         "MULTI",
     ),
 ):
+    """Collect exported config objects that should be addressable from YAML."""
     configs = {}
     for name, value in inspect.getmembers(module):
         if name.startswith("_"):
@@ -34,13 +37,14 @@ def _discover_configs(
 _training_config_dict = {}
 _training_config_dict.update(_discover_configs(sft_configs))
 _training_config_dict.update(_discover_configs(dpo_configs))
-_training_config_dict.update(_discover_configs(vlm_sft_config))
 _training_config_dict.update(_discover_configs(grpo_configs))
+_training_config_dict.update(_discover_configs(vlm_sft_configs))
 
 TrainingConfig = Enum("TrainingConfig", _training_config_dict)
 
 
 def override(self, **overrides):
+    """Return a one-off config enum member with non-None YAML overrides applied."""
     config_dict = self.value.copy()
     filtered_overrides = {k: v for k, v in overrides.items() if v is not None}
     config_dict.update(filtered_overrides)

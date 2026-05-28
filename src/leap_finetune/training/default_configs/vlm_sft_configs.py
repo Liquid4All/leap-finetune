@@ -1,4 +1,4 @@
-from leap_finetune.utils.constants import SFT_OUTPUT_PATH
+from leap_finetune import SFT_OUTPUT_PATH
 
 ########################
 #   DEEPSPEED CONFIGS   #
@@ -43,6 +43,14 @@ VLM_SFT_EXCLUDED_KEYS = {
     "lr_multipliers",
     "vision_encoder_lr_multiplier",
     "resume_from_checkpoint",
+    "model_config",
+    "chat_template",
+    "chat_template_path",
+    "leap_run_name_template",
+    "reshard_after_forward",
+    "fsdp_cpu_offload",
+    "checkpoint_staging_dir",
+    "manual_sharded_checkpoint_format",
 }
 
 # Per-component LR multipliers (applied to base learning_rate).

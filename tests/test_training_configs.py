@@ -1,6 +1,6 @@
 import pytest
 
-from leap_finetune.utils.config_parser import parse_job_config
+from leap_finetune.config.parser import parse_job_config
 
 from conftest import BASE_DPO_DATASET, BASE_SFT_DATASET, BASE_VLM_DATASET, write_config
 
@@ -22,7 +22,7 @@ class TestConfigPipelineIntegrity:
         }
         job = parse_job_config(write_config(config, tmp_path))
         d = job.to_dict()
-        from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
+        from leap_finetune.training.default_configs.sft_configs import SFT_EXCLUDED_KEYS
 
         excluded = SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
         filtered = {k: v for k, v in d["training_config"].items() if k not in excluded}
@@ -54,7 +54,9 @@ class TestConfigPipelineIntegrity:
         }
         job = parse_job_config(write_config(config, tmp_path))
         d = job.to_dict()
-        from leap_finetune.training_configs.vlm_sft_config import VLM_SFT_EXCLUDED_KEYS
+        from leap_finetune.training.default_configs.vlm_sft_configs import (
+            VLM_SFT_EXCLUDED_KEYS,
+        )
 
         excluded = VLM_SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
         filtered = {k: v for k, v in d["training_config"].items() if k not in excluded}
@@ -71,7 +73,7 @@ class TestConfigPipelineIntegrity:
         }
         job = parse_job_config(write_config(config, tmp_path))
         d = job.to_dict()
-        from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
+        from leap_finetune.training.default_configs.sft_configs import SFT_EXCLUDED_KEYS
 
         excluded = SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
         filtered = {k: v for k, v in d["training_config"].items() if k not in excluded}
@@ -111,7 +113,9 @@ class TestConfigPipelineIntegrity:
         }
         job = parse_job_config(write_config(config, tmp_path))
         d = job.to_dict()
-        from leap_finetune.training_configs.vlm_sft_config import VLM_SFT_EXCLUDED_KEYS
+        from leap_finetune.training.default_configs.vlm_sft_configs import (
+            VLM_SFT_EXCLUDED_KEYS,
+        )
 
         excluded = VLM_SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
         filtered = {k: v for k, v in d["training_config"].items() if k not in excluded}
@@ -131,9 +135,11 @@ class TestConfigPipelineIntegrity:
         }
         job = parse_job_config(write_config(config, tmp_path))
         d = job.to_dict()
-        from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
-        from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
-        from leap_finetune.utils.model_utils import is_moe_model_from_name
+        from leap_finetune.distribution.distributed_configs import (
+            MOE_FSDP_CONFIG,
+        )
+        from leap_finetune.training.default_configs.sft_configs import SFT_EXCLUDED_KEYS
+        from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 
         is_moe = is_moe_model_from_name(d["model_name"])
         use_fsdp = is_moe and d["peft_config"] is None
@@ -168,39 +174,47 @@ class TestConfigPipelineIntegrity:
 
 class TestDeepSpeedConfigStructure:
     def test_sft_deepspeed_has_optimizer(self):
-        from leap_finetune.training_configs.sft_configs import DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.sft_configs import DEEPSPEED_CONFIG
 
         assert "optimizer" in DEEPSPEED_CONFIG
         assert DEEPSPEED_CONFIG["optimizer"]["type"] == "AdamW"
 
     def test_dpo_deepspeed_has_no_optimizer(self):
-        from leap_finetune.training_configs.dpo_configs import DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.dpo_configs import DEEPSPEED_CONFIG
 
         assert "optimizer" not in DEEPSPEED_CONFIG
 
     def test_vlm_deepspeed_has_no_optimizer(self):
-        from leap_finetune.training_configs.vlm_sft_config import DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.vlm_sft_configs import (
+            DEEPSPEED_CONFIG,
+        )
 
         assert "optimizer" not in DEEPSPEED_CONFIG
 
     def test_moe_sft_deepspeed_has_optimizer(self):
-        from leap_finetune.training_configs.sft_configs import MOE_DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.sft_configs import (
+            MOE_DEEPSPEED_CONFIG,
+        )
 
         assert "optimizer" in MOE_DEEPSPEED_CONFIG
         assert MOE_DEEPSPEED_CONFIG["optimizer"]["type"] == "AdamW"
 
     def test_moe_dpo_deepspeed_has_no_optimizer(self):
-        from leap_finetune.training_configs.dpo_configs import MOE_DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.dpo_configs import (
+            MOE_DEEPSPEED_CONFIG,
+        )
 
         assert "optimizer" not in MOE_DEEPSPEED_CONFIG
 
     def test_sft_deepspeed_zero_stage_2(self):
-        from leap_finetune.training_configs.sft_configs import DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.sft_configs import DEEPSPEED_CONFIG
 
         assert DEEPSPEED_CONFIG["zero_optimization"]["stage"] == 2
 
     def test_moe_deepspeed_zero_stage_0(self):
-        from leap_finetune.training_configs.sft_configs import MOE_DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.sft_configs import (
+            MOE_DEEPSPEED_CONFIG,
+        )
 
         assert MOE_DEEPSPEED_CONFIG["zero_optimization"]["stage"] == 0
 
@@ -210,22 +224,22 @@ class TestDeepSpeedConfigStructure:
 
 class TestMoEDetection:
     def test_dense_not_moe(self):
-        from leap_finetune.utils.model_utils import is_moe_model_from_name
+        from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 
         assert not is_moe_model_from_name("LFM2-1.2B")
 
     def test_8b_a1b_is_moe(self):
-        from leap_finetune.utils.model_utils import is_moe_model_from_name
+        from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 
         assert is_moe_model_from_name("LFM2-8B-A1B")
 
     def test_case_insensitive(self):
-        from leap_finetune.utils.model_utils import is_moe_model_from_name
+        from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 
         assert is_moe_model_from_name("lfm2-8b-a1b")
 
     def test_moe_string_in_name(self):
-        from leap_finetune.utils.model_utils import is_moe_model_from_name
+        from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 
         assert is_moe_model_from_name("some-moe-model")
 
@@ -235,7 +249,9 @@ class TestMoEDetection:
 
 class TestFSDPConfig:
     def test_moe_fsdp_wraps_correct_layer(self):
-        from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
+        from leap_finetune.distribution.distributed_configs import (
+            MOE_FSDP_CONFIG,
+        )
 
         assert (
             MOE_FSDP_CONFIG["fsdp_config"]["transformer_layer_cls_to_wrap"]
@@ -243,7 +259,9 @@ class TestFSDPConfig:
         )
 
     def test_moe_fsdp_shard_grad_op(self):
-        from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
+        from leap_finetune.distribution.distributed_configs import (
+            MOE_FSDP_CONFIG,
+        )
 
         assert "shard_grad_op" in MOE_FSDP_CONFIG["fsdp"]
         assert "auto_wrap" in MOE_FSDP_CONFIG["fsdp"]

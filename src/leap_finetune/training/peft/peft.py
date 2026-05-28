@@ -5,7 +5,7 @@ from datetime import datetime
 from peft import LoraConfig, get_peft_model
 from transformers import AutoTokenizer, PreTrainedModel, ProcessorMixin
 
-from leap_finetune.training_configs import PeftConfig
+from leap_finetune.training.default_configs import PeftConfig
 
 
 def apply_peft_to_model(

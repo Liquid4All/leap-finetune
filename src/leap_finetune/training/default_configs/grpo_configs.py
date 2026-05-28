@@ -1,8 +1,8 @@
-from leap_finetune.utils.constants import GRPO_OUTPUT_PATH
+from leap_finetune import GRPO_OUTPUT_PATH
 
 # === GRPO config hygiene ===
 #
-# This module is auto-discovered by training_configs/__init__.py. Any new
+# This module is auto-discovered by training/default_configs/__init__.py. Any new
 # DEFAULT_* / MOE_* dict becomes available via `extends:` in YAML.
 #
 # Field names match TRL v1.0 GRPOConfig. Keys not recognized by GRPOConfig must

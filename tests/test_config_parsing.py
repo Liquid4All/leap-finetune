@@ -714,7 +714,7 @@ class TestSlurmGeneration:
             assert "leap-finetune" in content
 
     def test_generate_multinode_slurm_script_starts_ray_cluster(self, tmp_path):
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config = {
             "project_name": "multi_node_grpo",
@@ -732,13 +732,13 @@ class TestSlurmGeneration:
         script_path = generate_slurm_script(config_path, config, tmp_path)
         content = script_path.read_text()
 
-        assert "source job_configs/slurms/utils/slurm_ray.sh" in content
-        assert "ray_slurm_init 2 1" in content
-        assert "ray_slurm_wait_ready 2 2" in content
+        assert "slurm_ray.sh" in content
+        assert 'ray_slurm_init "${SLURM_NNODES}" "1"' in content
+        assert 'ray_slurm_wait_ready "${SLURM_NNODES}" "${TOTAL_GPUS}"' in content
         assert "trap ray_slurm_stop_cluster EXIT" in content
 
     def test_generate_server_mode_slurm_defaults_to_two_gpus(self, tmp_path):
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config = {
             "project_name": "server_grpo",
@@ -758,7 +758,7 @@ class TestSlurmGeneration:
         assert "#SBATCH --gpus-per-task=2" in content
 
     def test_generate_grpo_judge_slurm_defaults_to_extra_gpu(self, tmp_path):
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config = {
             "project_name": "judge_grpo",
@@ -775,7 +775,7 @@ class TestSlurmGeneration:
         assert "#SBATCH --gpus-per-task=2" in content
 
     def test_generate_server_mode_judge_slurm_defaults_to_three_gpus(self, tmp_path):
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config = {
             "project_name": "judge_server_grpo",

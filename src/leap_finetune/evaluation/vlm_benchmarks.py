@@ -4,7 +4,7 @@ from collections.abc import Callable
 import numpy as np
 import torch
 
-from leap_finetune.data_loaders.image_loader import load_image
+from leap_finetune.data_loading.image_loader import load_image
 from leap_finetune.evaluation.base import Benchmark
 from leap_finetune.evaluation.data_loaders import load_benchmark_samples
 from leap_finetune.evaluation.metrics import compute_metric

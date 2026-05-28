@@ -1,4 +1,4 @@
-from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+from leap_finetune.data_loading.dataset_loader import DatasetLoader
 
 # Example of pre-defining a dataset loader
 custom_dataset = DatasetLoader(

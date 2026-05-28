@@ -1,6 +1,5 @@
 import json
 import logging
-from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
@@ -10,8 +9,11 @@ import pyarrow.parquet as pq
 from datasets import Dataset, load_dataset
 from rich.console import Console
 
-from leap_finetune.data_loaders.validate_tool_calls import (
+from leap_finetune.data_loading.validate_tool_format import (
+    detect_tool_format,
+    get_tool_normalizer,
     has_foreign_tool_markers,
+    validate_tool_format,
     validate_tool_calls_dpo,
     validate_tool_calls_in_messages,
 )
@@ -24,17 +26,31 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def _is_cloud_path(path: str) -> bool:
+def is_cloud_path(path: str) -> bool:
     """Check if path is a cloud storage path (S3, GCS, Azure)."""
     cloud_prefixes = ("s3://", "gs://", "az://", "abfs://", "abfss://")
     return path.startswith(cloud_prefixes)
 
 
-def _get_source_type(dataset_path: str) -> str:
-    """Determine the source type for display and loading logic."""
-    path_lower = dataset_path.lower()
+def find_local_files(dataset_path: str, *patterns: str) -> list[Path]:
+    """Return sorted local files matching any of the given glob patterns."""
+    path = Path(dataset_path).expanduser()
+    if not path.is_dir():
+        return []
 
-    if _is_cloud_path(dataset_path):
+    matches: list[Path] = []
+    for pattern in patterns:
+        matches.extend(path.glob(pattern))
+    return sorted(matches)
+
+
+def get_source_type(dataset_path: str) -> str:
+    """Determine the source type for display and loading logic."""
+    expanded_path = Path(dataset_path).expanduser()
+    path_str = str(expanded_path)
+    path_lower = path_str.lower()
+
+    if is_cloud_path(dataset_path):
         if path_lower.startswith("s3://"):
             return "s3"
         elif path_lower.startswith("gs://"):
@@ -42,14 +58,27 @@ def _get_source_type(dataset_path: str) -> str:
         elif path_lower.startswith(("az://", "abfs://", "abfss://")):
             return "azure"
         return "cloud"
-    elif Path(dataset_path).exists() or dataset_path.startswith(("./", "/", "~")):
-        p = Path(dataset_path)
-        if path_lower.endswith(".parquet"):
+    elif expanded_path.exists() or dataset_path.startswith(("./", "/", "~")):
+        if path_lower.endswith((".parquet", ".pq")):
             return "parquet"
-        elif p.is_dir() and (list(p.glob("*.parquet")) or list(p.glob("*.pq"))):
+        elif path_lower.endswith(".arrow"):
+            return "arrow"
+        elif path_lower.endswith(".csv"):
+            return "csv"
+        elif path_lower.endswith((".json", ".jsonl", ".json.zst")):
+            return "json"
+        elif expanded_path.is_dir() and find_local_files(path_str, "*.parquet", "*.pq"):
             return "parquet"
+        elif expanded_path.is_dir() and find_local_files(path_str, "*.arrow"):
+            return "arrow"
+        elif expanded_path.is_dir() and find_local_files(path_str, "*.csv"):
+            return "csv"
+        elif expanded_path.is_dir() and find_local_files(
+            path_str, "*.json", "*.jsonl", "*.json.zst"
+        ):
+            return "json"
         else:
-            return "jsonl"
+            return "directory"
     else:
         return "huggingface"
 
@@ -72,7 +101,7 @@ def quick_validate_schema(
     """
     console = Console()
 
-    source_type = _get_source_type(dataset_path)
+    source_type = get_source_type(dataset_path)
     console.print(
         f"[dim]Validating {source_type} schema ({num_samples} samples)...[/dim]"
     )
@@ -82,35 +111,37 @@ def quick_validate_schema(
     if len(sample_ds) == 0:
         raise ValueError(f"Dataset appears to be empty: {dataset_path}")
 
+    model_family = "lfm2"
+    if model_name and dataset_type in ("sft", "dpo"):
+        from leap_finetune.checkpointing.model_info import get_model_family
+
+        model_family = get_model_family(model_name)
+
     # Normalize before validation (handles JSON strings, column renames, image_root)
     normalizer = normalize_columns(dataset_type, image_root=image_root)
     sample_ds = sample_ds.map(normalizer)
 
-    # Use the same validation as full validation
-    validate_dataset_format(sample_ds, dataset_type)
-
-    # === Tool call format validation ===
+    # === Tool-Call Format ===
     if model_name and dataset_type in ("sft", "dpo"):
-        from .tool_call_utils import detect_tool_format, validate_tool_format
-        from leap_finetune.utils.model_utils import get_model_family
-
         samples = [sample_ds[i] for i in range(len(sample_ds))]
         format_info = detect_tool_format(samples)
-
         if format_info.has_tool_calls:
-            model_family = get_model_family(model_name)
             issues = validate_tool_format(format_info, model_family)
-
             for issue in issues:
                 if issue.severity == "error":
                     raise ValueError(
                         f"Tool call format error: {issue.message}\n"
                         f"Fix: {issue.fix_hint}"
                     )
-                elif issue.severity == "warning":
-                    console.print(f"[yellow]⚠ Tool format:[/yellow] {issue.message}")
+                if issue.severity == "warning":
+                    console.print(f"[yellow]Tool format:[/yellow] {issue.message}")
                 else:
-                    console.print(f"[dim]ℹ Tool format: {issue.message}[/dim]")
+                    console.print(f"[dim]Tool format: {issue.message}[/dim]")
+
+        sample_ds = sample_ds.map(get_tool_normalizer(model_family))
+
+    # Use the same validation as full validation
+    validate_dataset_format(sample_ds, dataset_type, model_family=model_family)
 
     console.print("[green]✓ Schema validated[/green]")
 
@@ -123,7 +154,7 @@ def _load_sample_dataset(
 ) -> Dataset:
     """Load a small sample as HF Dataset."""
     try:
-        source_type = _get_source_type(dataset_path)
+        source_type = get_source_type(dataset_path)
 
         if source_type in ("s3", "gcs", "azure", "cloud"):
             # Cloud storage - use fsspec + pyarrow (no Ray needed)
@@ -139,13 +170,13 @@ def _load_sample_dataset(
                     rows = [json.loads(line) for _, line in zip(range(num_samples), f)]
                 return Dataset.from_list(rows)
 
-        elif source_type in ("parquet", "jsonl"):
+        elif source_type in ("parquet", "json", "csv", "arrow"):
             # Local file or directory
-            p = Path(dataset_path)
+            p = Path(dataset_path).expanduser()
             if source_type == "parquet":
                 if p.is_dir():
                     # Directory of parquets: read first shard
-                    parquet_files = sorted(p.glob("*.parquet")) + sorted(p.glob("*.pq"))
+                    parquet_files = find_local_files(dataset_path, "*.parquet", "*.pq")
                     if not parquet_files:
                         raise ValueError(
                             f"No parquet files found in directory: {dataset_path}"
@@ -159,12 +190,27 @@ def _load_sample_dataset(
                         data_files=dataset_path,
                         split=f"{split}[:{num_samples}]",
                     )
+            elif source_type == "csv":
+                return load_dataset(
+                    "csv",
+                    data_files=dataset_path,
+                    split=f"{split}[:{num_samples}]",
+                )
+            elif source_type == "arrow":
+                return load_dataset(
+                    "arrow",
+                    data_files=dataset_path,
+                    split=f"{split}[:{num_samples}]",
+                )
             else:
                 return load_dataset(
                     "json",
                     data_files=dataset_path,
                     split=f"{split}[:{num_samples}]",
                 )
+
+        elif source_type == "directory":
+            return load_dataset(dataset_path, subset, split=f"{split}[:{num_samples}]")
 
         else:
             # HuggingFace Hub - use streaming then convert to Dataset
@@ -184,7 +230,10 @@ def _load_sample_dataset(
 # ============================================================================
 
 
-def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
+def get_row_filter(
+    dataset_type: str,
+    model_family: str = "lfm2",
+) -> Callable[[dict], bool]:
     """
     Get a row filter function for ray.data.filter().
     Uses pure Python - Ray handles Arrow/serialization internally.
@@ -206,17 +255,16 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
         if not (isinstance(first, dict) and "role" in first and "content" in first):
             return False
 
-        # Check for foreign tool call markers or unsupported tool_calls field
         for msg in messages:
-            if not isinstance(msg, dict):
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
-            if msg.get("role") == "assistant":
-                if "tool_calls" in msg:
+            if "tool_calls" in msg:
+                return False
+            content = msg.get("content", "")
+            if isinstance(content, str) and ("<" in content or "[" in content):
+                if has_foreign_tool_markers(content):
                     return False
-                content = msg.get("content", "")
-                if isinstance(content, str) and ("<" in content or "[" in content):
-                    if has_foreign_tool_markers(content):
-                        return False
+
         return True
 
     def is_valid_dpo(row: dict) -> bool:
@@ -230,24 +278,21 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
         if chosen == rejected:
             return False
 
-        # Check for foreign tool call markers
         for data in (chosen, rejected):
             if isinstance(data, str):
                 if ("<" in data or "[" in data) and has_foreign_tool_markers(data):
                     return False
             elif isinstance(data, list):
                 for msg in data:
-                    if not isinstance(msg, dict):
+                    if not isinstance(msg, dict) or msg.get("role") != "assistant":
                         continue
-                    if msg.get("role") == "assistant":
-                        if "tool_calls" in msg:
+                    if "tool_calls" in msg:
+                        return False
+                    content = msg.get("content", "")
+                    if isinstance(content, str) and ("<" in content or "[" in content):
+                        if has_foreign_tool_markers(content):
                             return False
-                        content = msg.get("content", "")
-                        if isinstance(content, str) and (
-                            "<" in content or "[" in content
-                        ):
-                            if has_foreign_tool_markers(content):
-                                return False
+
         return True
 
     def is_valid_vlm_sft(row: dict) -> bool:
@@ -261,7 +306,7 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
             return False
 
         # Import inside function body for Ray serialization compatibility
-        from leap_finetune.data_loaders.image_loader import is_image_loadable
+        from leap_finetune.data_loading.image_loader import is_image_loadable
 
         for message in messages:
             if not isinstance(message, dict):
@@ -318,7 +363,7 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
             return False
 
         # Import inside function body for Ray serialization compatibility
-        from leap_finetune.data_loaders.image_loader import is_image_loadable
+        from leap_finetune.data_loading.image_loader import is_image_loadable
 
         for message in prompt:
             if not isinstance(message, dict):
@@ -659,35 +704,17 @@ def _extract_prompt(chosen: Any) -> str:
 # ============================================================================
 
 
-def validate_data_loader(func):
-    """Decorator that validates function returns tuple[Dataset, Dataset] for custom data loaders"""
-
-    @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> tuple[Dataset, Dataset]:
-        result = func(*args, **kwargs)
-
-        # Validate structure
-        if not isinstance(result, tuple) or len(result) != 2:
-            raise TypeError(
-                f"{func.__name__} must return tuple[Dataset, Dataset], got {type(result)}"
-            )
-
-        train, test = result
-        if not isinstance(train, Dataset) or not isinstance(test, Dataset):
-            raise TypeError(f"{func.__name__} must return tuple of Dataset instances")
-
-        return result
-
-    return wrapper
-
-
-def validate_dataset_format(dataset: Dataset, dataset_type: str) -> Dataset:
+def validate_dataset_format(
+    dataset: Dataset,
+    dataset_type: str,
+    model_family: str = "lfm2",
+) -> Dataset:
     """Validate and convert dataset format based on dataset_type"""
 
     if dataset_type == "sft":
-        return validate_sft_format(dataset)
+        return validate_sft_format(dataset, model_family=model_family)
     elif dataset_type == "dpo":
-        return validate_dpo_format(dataset)
+        return validate_dpo_format(dataset, model_family=model_family)
     elif dataset_type == "vlm_sft":
         return validate_vlm_sft_format(dataset)
     elif dataset_type == "grpo":
@@ -804,7 +831,7 @@ def validate_vlm_grpo_format(dataset: Dataset) -> Dataset:
                             f"Sample {idx}, message {msg_idx}, content {ci}: 'image' must be a "
                             f"path string (got {type(image_data).__name__}). Use paths, not PIL objects."
                         )
-                    from leap_finetune.data_loaders.image_loader import (
+                    from leap_finetune.data_loading.image_loader import (
                         is_image_loadable,
                     )
 
@@ -820,8 +847,7 @@ def validate_vlm_grpo_format(dataset: Dataset) -> Dataset:
     logger.info(f"VLM GRPO dataset validation passed: {len(dataset)} samples")
     return dataset
 
-
-def validate_sft_format(dataset: Dataset) -> Dataset:
+def validate_sft_format(dataset: Dataset, model_family: str = "lfm2") -> Dataset:
     """Validate and convert SFT dataset to proper format."""
     columns = dataset.column_names
 
@@ -851,7 +877,7 @@ def validate_sft_format(dataset: Dataset) -> Dataset:
         msg += "). Each message must have 'role' and 'content' fields."
         raise ValueError(msg)
 
-    # === Validate tool call formatting ===
+    # === Tool-Call Format ===
     for i in range(len(dataset)):
         validate_tool_calls_in_messages(dataset[i][conv_col], i)
 
@@ -878,7 +904,7 @@ def _find_conversational_column(dataset: Dataset, columns: list) -> str | None:
     return None
 
 
-def validate_dpo_format(dataset: Dataset) -> Dataset:
+def validate_dpo_format(dataset: Dataset, model_family: str = "lfm2") -> Dataset:
     """Validate and convert DPO dataset to proper format."""
     columns = set(dataset.column_names)
 
@@ -919,7 +945,7 @@ def validate_dpo_format(dataset: Dataset) -> Dataset:
             f"(indices: {shown}{'...' if len(identical_indices) > 5 else ''})"
         )
 
-    # === Validate tool call formatting ===
+    # === Tool-Call Format ===
     for i in range(len(dataset)):
         validate_tool_calls_dpo(dataset[i]["chosen"], dataset[i]["rejected"], i)
 
@@ -1062,7 +1088,7 @@ def validate_vlm_sft_format(dataset: Dataset) -> Dataset:
                             )
 
                     # Actually try to load the image to verify it's valid
-                    from leap_finetune.data_loaders.image_loader import (
+                    from leap_finetune.data_loading.image_loader import (
                         is_image_loadable,
                     )
 

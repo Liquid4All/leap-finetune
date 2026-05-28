@@ -1,6 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -13,15 +14,37 @@ TOOL_LIST_END = "<|tool_list_end|>"
 TOOL_RESPONSE_START = "<|tool_response_start|>"
 TOOL_RESPONSE_END = "<|tool_response_end|>"
 
+_FOREIGN_TOOL_MARKERS = [
+    ("<tool_call>", "Qwen"),
+    ("</tool_call>", "Qwen"),
+    ("[TOOL_CALLS]", "Mistral"),
+    ("[/TOOL_CALLS]", "Mistral"),
+    ("<function_call>", "unknown"),
+    ("</function_call>", "unknown"),
+    ("<|plugin|>", "unknown"),
+    ("<start_function_call>", "unknown"),
+    ("<end_function_call>", "unknown"),
+]
+
 FOREIGN_MARKERS = [
     "<tool_call>",
     "</tool_call>",
+    "[TOOL_CALLS]",
+    "[/TOOL_CALLS]",
     "<function_call>",
     "</function_call>",
     "<|plugin|>",
     "<start_function_call>",
     "<end_function_call>",
 ]
+
+
+def has_foreign_tool_markers(text: str) -> str | None:
+    """Return the foreign tool-call format name if known markers are present."""
+    for marker, format_name in _FOREIGN_TOOL_MARKERS:
+        if marker in text:
+            return format_name
+    return None
 
 
 # === Detection ===
@@ -204,7 +227,7 @@ def _format_tool_call_value(v) -> str:
     return repr(v)
 
 
-def _tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
+def tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
     """Convert structured tool_calls list to LFM pythonic bracket notation."""
     calls = []
     for tc in tool_calls:
@@ -213,7 +236,7 @@ def _tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
         args = func.get("arguments", {})
         if isinstance(args, str):
             args = json.loads(args)
-        # skip malformed tool calls instead of failur error
+        # Skip malformed tool calls instead of failing the whole row.
         if not isinstance(args, dict):
             logger.warning(
                 "Skipping tool_call with non-dict arguments (got %s): name=%s",
@@ -261,7 +284,7 @@ def normalize_tool_format(row: dict, model_family: str) -> dict:
         if role == "assistant" and "tool_calls" in msg:
             tool_calls = msg["tool_calls"]
             if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
-                pythonic = _tool_calls_to_pythonic(tool_calls)
+                pythonic = tool_calls_to_pythonic(tool_calls)
                 existing_content = content.strip()
                 if existing_content:
                     new_msg["content"] = f"{pythonic}\n{existing_content}"
@@ -290,3 +313,106 @@ def get_tool_normalizer(model_family: str):
         return normalize_tool_format(row, model_family)
 
     return _normalize
+
+
+def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
+    """Validate LFM tool-call formatting in a message list."""
+    for msg_idx, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "")
+
+        # === Structured Tool Fields ===
+        if role == "assistant" and "tool_calls" in msg:
+            raise ValueError(
+                f"Sample {sample_idx}, message {msg_idx}: 'tool_calls' field is not "
+                f"supported by the LFM chat template. Tool calls must be pre-formatted "
+                f"in the 'content' field using {TOOL_CALL_START}/{TOOL_CALL_END} markers."
+            )
+
+        if role != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str):
+            continue
+
+        # === Foreign Markers ===
+        format_name = has_foreign_tool_markers(content)
+        if format_name:
+            raise ValueError(
+                f"Sample {sample_idx}, message {msg_idx}: Found {format_name} tool call markers "
+                f"in assistant content. LFM requires '{TOOL_CALL_START}'/'{TOOL_CALL_END}' "
+                f"markers in the content field."
+            )
+
+        # === Tool-First Ordering ===
+        tool_call_pos = content.find(TOOL_CALL_START)
+        if tool_call_pos == -1:
+            continue
+
+        text_before = content[:tool_call_pos].strip()
+        if text_before:
+            raise ValueError(
+                f"Sample {sample_idx}, message {msg_idx}: Text appears before tool call "
+                f"in assistant content. LFM expects tool call first, then text. "
+                f"Found: '{text_before[:50]}...' before {TOOL_CALL_START}"
+            )
+
+    # === Tool Response Pairing ===
+    for msg_idx, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+
+        has_tool_call = isinstance(content, str) and TOOL_CALL_START in content
+        if not has_tool_call or role != "assistant":
+            continue
+
+        found_tool_response = False
+        for next_msg in messages[msg_idx + 1 :]:
+            if not isinstance(next_msg, dict):
+                continue
+            next_role = next_msg.get("role", "")
+            if next_role == "tool":
+                found_tool_response = True
+                break
+            if next_role == "user":
+                break
+
+        if not found_tool_response:
+            raise ValueError(
+                f"Sample {sample_idx}, message {msg_idx}: Assistant has tool call but "
+                f"no tool response (role='tool') found before next user message."
+            )
+
+
+def validate_tool_calls_in_text(text: str, sample_idx: int, field: str) -> None:
+    """Validate LFM tool-call formatting in a pre-formatted DPO string."""
+    format_name = has_foreign_tool_markers(text)
+    if format_name:
+        raise ValueError(
+            f"Sample {sample_idx}, {field}: Found {format_name} tool call markers. "
+            f"LFM requires '{TOOL_CALL_START}'/'{TOOL_CALL_END}' markers."
+        )
+
+    tool_call_pos = text.find(TOOL_CALL_START)
+    if tool_call_pos == -1:
+        return
+
+    text_before = text[:tool_call_pos].strip()
+    if text_before:
+        raise ValueError(
+            f"Sample {sample_idx}, {field}: Text appears before tool call. "
+            f"LFM expects tool call first, then text. "
+            f"Found: '{text_before[:50]}...' before {TOOL_CALL_START}"
+        )
+
+
+def validate_tool_calls_dpo(chosen: Any, rejected: Any, sample_idx: int) -> None:
+    """Validate LFM tool-call formatting in DPO chosen/rejected data."""
+    for field_name, data in [("chosen", chosen), ("rejected", rejected)]:
+        if isinstance(data, str):
+            validate_tool_calls_in_text(data, sample_idx, field_name)
+        elif isinstance(data, list):
+            validate_tool_calls_in_messages(data, sample_idx)

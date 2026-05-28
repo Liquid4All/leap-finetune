@@ -1,28 +1,25 @@
-project_name: "moe_ep_sft"
+project_name: "my_moe_ep_sft_project"
 model_name: "LFM2-24B-A2B"
 training_type: "moe_sft"
 
 dataset:
   path: "HuggingFaceTB/smoltalk"
   type: "sft"
-  limit: 500
+  limit: 1000
   test_size: 0.2
   subset: "all"
 
 training_config:
   extends: "MOE_SFT"
-  per_device_train_batch_size: 1
-  gradient_accumulation_steps: 4
-  learning_rate: 5e-5
   num_train_epochs: 1
-  max_steps: 20
+  per_device_train_batch_size: 1
+  learning_rate: 5e-5
 
   # Expert Parallelism: 8 GPUs = 2 DP × 4 EP
   # Each rank holds 16 of 64 experts; dp_size is inferred.
   moe_training:
     aux_loss_coef: 0.01
     z_loss_coef: 0.001
-    router_lr_ratio: 0.1
     expert_parallel_size: 4
 
 peft_config:

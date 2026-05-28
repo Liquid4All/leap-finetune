@@ -348,6 +348,11 @@ class TestAllExampleConfigs:
             "model": "LFM2-8B-A1B",
             "has_peft": True,
         },
+        "moe_ep_sft_example.yaml": {
+            "type": "moe_sft",
+            "model": "LFM2-24B-A2B",
+            "has_peft": False,
+        },
         "moe_dpo_example.yaml": {
             "type": "moe_dpo",
             "model": "LFM2-8B-A1B",

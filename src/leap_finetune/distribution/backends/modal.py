@@ -13,7 +13,7 @@ def check_and_handle_modal(config_path_arg: str) -> bool:
         return False
 
     try:
-        from leap_finetune.utils.config_resolver import resolve_config_path
+        from leap_finetune.config.parser import resolve_config_path
 
         config_path = resolve_config_path(config_path_arg)
     except Exception:

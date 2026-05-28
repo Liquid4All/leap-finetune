@@ -13,14 +13,11 @@ dependencies = [
     "deepspeed>=0.17.1; sys_platform == 'linux'",
     "torch>=2.7.1",
     "transformers>=5.3.0,<5.4.0",
-    "flash-attn>=2.8.0; sys_platform == 'linux'",
-    "numpy",
+    "numpy>=2.4.1",
     "trl>=1.0,<2.0",
-    "vllm>=0.19.0",
     "rich>=14.1.0",
     "pillow>=11.3.0",
     "mpi4py>=4.1.0; sys_platform == 'linux'",
-    "liger-kernel>=0.6.2; sys_platform == 'linux'",
     "wandb>=0.22.3",
     "ray==2.48.0",
     "pyyaml>=6.0",
@@ -46,15 +43,57 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 no-build-isolation-package = ["flash-attn"]
+default-groups = ["dev", "cuda"]
 environments = [
-    "sys_platform == 'darwin'",
-    "sys_platform == 'linux'",
+    "python_version == '3.12' and sys_platform == 'darwin'",
+    "python_version == '3.12' and sys_platform == 'linux'",
 ]
-# vLLM 0.19.x still declares transformers<5, need to override it
+# CUDA is the default GPU stack. ROCm pulls vLLM and its torch stack from a different index,
+# so it must be selected explicitly instead of the default cuda group:
+#   uv sync --no-group cuda --group rocm
+conflicts = [
+    [{ group = "cuda" }, { group = "rocm" }],
+]
+
 override-dependencies = [
+    # vllm 0.19.x declares transformers<5; override so it resolves with 5.3+
     "transformers>=5.3.0,<5.4.0",
     "huggingface_hub>=1.0",
-    "numpy<2.3",
+    "numpy<2.5",
+]
+
+[[tool.uv.index]]
+name = "vllm-rocm"
+url = "https://wheels.vllm.ai/rocm/"
+explicit = true
+
+[tool.uv.sources]
+amd-aiter = [
+    { index = "vllm-rocm", group = "rocm" },
+]
+amdsmi = [
+    { index = "vllm-rocm", group = "rocm" },
+]
+"flash-attn" = [
+    { index = "vllm-rocm", group = "rocm" },
+]
+torch = [
+    { index = "vllm-rocm", group = "rocm" },
+]
+torchaudio = [
+    { index = "vllm-rocm", group = "rocm" },
+]
+torchvision = [
+    { index = "vllm-rocm", group = "rocm" },
+]
+triton = [
+    { index = "vllm-rocm", group = "rocm" },
+]
+"triton-kernels" = [
+    { index = "vllm-rocm", group = "rocm" },
+]
+vllm = [
+    { index = "vllm-rocm", group = "rocm" },
 ]
 
 [tool.pytest.ini_options]
@@ -69,8 +108,26 @@ markers = [
 addopts = "-v --tb=short"
 
 [dependency-groups]
+cuda = [
+    "flash-attn>=2.8.0; sys_platform == 'linux'",
+    "liger-kernel>=0.6.2; sys_platform == 'linux'",
+    "vllm>=0.19.0; sys_platform == 'linux'",
+]
 dev = [
     "pre-commit>=4.2.0",
     "pytest>=8.0",
     "ruff>=0.11.13",
+]
+rocm = [
+    # Keep these direct so uv 0.6.x can apply the group-scoped vLLM ROCm index.
+    "amd-aiter==0.1.13; sys_platform == 'linux'",
+    "amdsmi==26.2.2; sys_platform == 'linux'",
+    "flash-attn==2.8.3; sys_platform == 'linux'",
+    "torch>=2.7.1; sys_platform == 'linux'",
+    "torchaudio==2.9.0+eaa9e4e; sys_platform == 'linux'",
+    "torchvision>=0.24.1; sys_platform == 'linux'",
+    "triton==3.6.0; sys_platform == 'linux'",
+    "triton-kernels==1.0.0; sys_platform == 'linux'",
+    "liger-kernel>=0.6.2; sys_platform == 'linux'",
+    "vllm==0.21.0+rocm722; sys_platform == 'linux'",
 ]

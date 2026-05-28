@@ -40,27 +40,27 @@ rewards:
   recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
   funcs:
     - "./rewards/length.py::length_reward"
-  weights: [0.1, 1.0, 0.05]   # recipe weights + the stacked func weight
+  weights: [0.1, 1.0, 0.05] # recipe weights + the stacked func weight
 ```
 
 ## Shipped primitives
 
-| File | Function | What it does | Required columns |
-|------|----------|--------------|------------------|
+| File          | Function          | What it does                                                                  | Required columns |
+| ------------- | ----------------- | ----------------------------------------------------------------------------- | ---------------- |
 | `accuracy.py` | `accuracy_reward` | Math accuracy via `math_verify` (re-export of `trl.rewards.accuracy_reward`). | `solution` (str) |
-| `length.py` | `length_reward` | Length-based shaping reward, scaled to `[0, 1]`. | none |
+| `length.py`   | `length_reward`   | Length-based shaping reward, scaled to `[0, 1]`.                              | none             |
 
 ## Shipped task bundles
 
 Full list in [`tasks/README.md`](tasks/README.md).
 
-| Task | Recipe | Reward shape |
-|------|--------|--------------|
-| VLM visual grounding | `tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe` | strict JSON format (0.1) + F1 of matched IoUs (1.0) |
+| Task                        | Recipe                                                  | Reward shape                                         |
+| --------------------------- | ------------------------------------------------------- | ---------------------------------------------------- |
+| VLM visual grounding        | `tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe`  | strict JSON format (0.1) + F1 of matched IoUs (1.0)  |
 | VLM visual grounding (CIoU) | `tasks/vlm_grounding/recipe.py::VLMGroundingCIoURecipe` | strict JSON format (0.1) + F1 of matched CIoUs (1.0) |
-| GSM8K | `tasks/gsm8k/recipe.py::GSM8KRecipe` | numeric exact match via `#### N` (1.0) |
-| MCQA | `tasks/mcqa/recipe.py::MCQARecipe` | letter match A..J (1.0) |
-| IFEval | `tasks/ifeval/recipe.py::IFEvalRecipe` | fraction of constraints satisfied (1.0) |
+| GSM8K                       | `tasks/gsm8k/recipe.py::GSM8KRecipe`                    | numeric exact match via `#### N` (1.0)               |
+| MCQA                        | `tasks/mcqa/recipe.py::MCQARecipe`                      | letter match A..J (1.0)                              |
+| IFEval                      | `tasks/ifeval/recipe.py::IFEvalRecipe`                  | fraction of constraints satisfied (1.0)              |
 
 ## Reward function signature
 
@@ -73,10 +73,10 @@ def reward_fn(completions, **kwargs) -> list[float | None]:
   wrap each entry as `[{"role": "assistant", "content": "<text>"}]`;
   string prompts pass through the raw string. Extract defensively:
   `c[0]["content"] if isinstance(c, list) else c`.
-- **`**kwargs`** — every other column in the dataset row is forwarded
-  as a keyword with the same name. TRL also forwards `prompts`,
-  `completion_ids`, `trainer_state`, and (when `rl_env` is used)
-  `env_reward`. Use `**kwargs` so unused fields are ignored.
+- **Additional keyword arguments** — every other column in the dataset
+  row is forwarded as a keyword with the same name. TRL also forwards
+  `prompts`, `completion_ids`, `trainer_state`, and (when `rl_env` is
+  used) `env_reward`. Use `**kwargs` so unused fields are ignored.
 - **Return** — a list of floats, one per completion. Returning `None`
   for a sample marks it "not applicable" and drops it from advantage
   aggregation.

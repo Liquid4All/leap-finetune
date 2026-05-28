@@ -1,7 +1,11 @@
 import pytest
 from transformers import TrainingArguments
 
-from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
+from leap_finetune.checkpointing.paths import (
+    rename_standard_checkpoint,
+    rotate_named_checkpoints,
+)
+from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 
 pytestmark = pytest.mark.configs
 
@@ -40,20 +44,18 @@ class TestCheckpointCallback:
         assert cb.metrics == {}
 
     def test_rename_checkpoint(self, tmp_path):
-        cb = LeapCheckpointCallback(
-            run_name_template="LFM2-sft-smoltalk-20250101_120000"
-        )
         # Create a fake checkpoint dir
         checkpoint_dir = tmp_path / "checkpoint-100"
         checkpoint_dir.mkdir()
         (checkpoint_dir / "model.safetensors").touch()
 
-        args = TrainingArguments(
-            output_dir=str(tmp_path), report_to="none", save_strategy="no"
+        rename_standard_checkpoint(
+            output_dir=str(tmp_path),
+            run_name_template="LFM2-sft-smoltalk-20250101_120000",
+            epoch=1.0,
+            step=100,
+            save_total_limit=None,
         )
-        state = type("State", (), {"epoch": 1.0, "global_step": 100})()
-
-        cb._rename_checkpoint(args, state)
 
         # Original should be gone
         assert not checkpoint_dir.exists()
@@ -67,14 +69,13 @@ class TestCheckpointCallback:
         assert latest.resolve() == renamed[0].resolve()
 
     def test_rotate_checkpoints(self, tmp_path):
-        cb = LeapCheckpointCallback()
         # Create 4 checkpoint dirs
         for step in [10, 20, 30, 40]:
             d = tmp_path / f"model-e1s{step}-20250101"
             d.mkdir()
             (d / "model.safetensors").touch()
 
-        cb._rotate_checkpoints(tmp_path, limit=2)
+        rotate_named_checkpoints(tmp_path, limit=2)
 
         remaining = sorted(d.name for d in tmp_path.iterdir() if d.is_dir())
         # Should keep the 2 newest (highest step): s30 and s40

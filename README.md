@@ -549,7 +549,7 @@ uv sync --extra lmms-eval
 
 ## 🧪 Advanced Configuration
 
-Default base configs live in [`src/leap_finetune/training_configs/`](./src/leap_finetune/training_configs/) and are auto-discovered — new configs added to these files are immediately available via `extends` in YAML.
+Default base configs live in [`src/leap_finetune/training/default_configs/`](./src/leap_finetune/training/default_configs/) and are auto-discovered — new configs added to these files are immediately available via `extends` in YAML.
 
 [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is pre-installed. Enable it with `use_liger_kernel: true` in your `training_config`.
 

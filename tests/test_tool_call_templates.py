@@ -48,7 +48,7 @@ class TestLFMToolCallTemplate:
 
     @pytest.fixture(scope="class")
     def tokenizer(self):
-        from leap_finetune.utils.load_models import load_tokenizer
+        from leap_finetune.checkpointing.model_loading import load_tokenizer
 
         return load_tokenizer("LFM2-1.2B")
 

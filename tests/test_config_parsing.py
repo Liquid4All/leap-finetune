@@ -4,12 +4,12 @@ import pytest
 import yaml
 from peft import LoraConfig
 
-from leap_finetune.utils.config_parser import (
+from leap_finetune.config.parser import (
     generate_run_name,
     parse_job_config,
     resolve_config_path,
 )
-from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
+from leap_finetune import LEAP_FINETUNE_DIR
 
 from conftest import BASE_DPO_DATASET, BASE_SFT_DATASET, BASE_VLM_DATASET, write_config
 
@@ -115,7 +115,7 @@ class TestParseJobConfig:
 
     def test_parse_moe_sft_example(self, moe_sft_config_path):
         job = parse_job_config(moe_sft_config_path)
-        assert job.training_type == "sft"
+        assert job.training_type == "moe_sft"
         assert job.model_name == "LFM2-8B-A1B"
         assert job.dataset.dataset_type == "sft"
         ds_config = job.training_config.value.get("deepspeed", {})
@@ -123,7 +123,7 @@ class TestParseJobConfig:
 
     def test_parse_moe_dpo_example(self, moe_dpo_config_path):
         job = parse_job_config(moe_dpo_config_path)
-        assert job.training_type == "dpo"
+        assert job.training_type == "moe_dpo"
         assert job.model_name == "LFM2-8B-A1B"
         assert job.dataset.dataset_type == "dpo"
 
@@ -219,7 +219,7 @@ class TestPeftOverrides:
             "peft_config": {"use_peft": True},
         }
         job = parse_job_config(write_config(config, tmp_path))
-        from leap_finetune.training_configs import PeftConfig
+        from leap_finetune.training.default_configs import PeftConfig
 
         assert job.peft_config is PeftConfig.DEFAULT_LORA
 
@@ -344,12 +344,17 @@ class TestAllExampleConfigs:
             "has_peft": True,
         },
         "moe_sft_example.yaml": {
-            "type": "sft",
+            "type": "moe_sft",
             "model": "LFM2-8B-A1B",
             "has_peft": True,
         },
+        "moe_ep_sft_example.yaml": {
+            "type": "moe_sft",
+            "model": "LFM2-24B-A2B",
+            "has_peft": False,
+        },
         "moe_dpo_example.yaml": {
-            "type": "dpo",
+            "type": "moe_dpo",
             "model": "LFM2-8B-A1B",
             "has_peft": True,
         },
@@ -376,7 +381,7 @@ class TestAllExampleConfigs:
         assert d["training_type"] == expected["type"]
         assert d["model_name"] == expected["model"]
 
-        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+        from leap_finetune.data_loading.dataset_loader import DatasetLoader
 
         assert isinstance(d["dataset"], DatasetLoader)
         assert d["dataset"].dataset_path, "dataset_path is empty"
@@ -694,7 +699,7 @@ class TestSlurmGeneration:
     def test_generate_slurm_script(self, slurm_config_path):
         import tempfile
 
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config_path = pathlib.Path(slurm_config_path)
         with open(config_path) as f:
@@ -714,7 +719,7 @@ class TestSlurmGeneration:
             assert "leap-finetune" in content
 
     def test_generate_multinode_slurm_script_starts_ray_cluster(self, tmp_path):
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config = {
             "project_name": "multi_node_grpo",
@@ -732,13 +737,13 @@ class TestSlurmGeneration:
         script_path = generate_slurm_script(config_path, config, tmp_path)
         content = script_path.read_text()
 
-        assert "source job_configs/slurms/utils/slurm_ray.sh" in content
-        assert "ray_slurm_init 2 1" in content
-        assert "ray_slurm_wait_ready 2 2" in content
+        assert "slurm_ray.sh" in content
+        assert 'ray_slurm_init "${SLURM_NNODES}" "1"' in content
+        assert 'ray_slurm_wait_ready "${SLURM_NNODES}" "${TOTAL_GPUS}"' in content
         assert "trap ray_slurm_stop_cluster EXIT" in content
 
     def test_generate_server_mode_slurm_defaults_to_two_gpus(self, tmp_path):
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config = {
             "project_name": "server_grpo",
@@ -758,7 +763,7 @@ class TestSlurmGeneration:
         assert "#SBATCH --gpus-per-task=2" in content
 
     def test_generate_grpo_judge_slurm_defaults_to_extra_gpu(self, tmp_path):
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config = {
             "project_name": "judge_grpo",
@@ -775,7 +780,7 @@ class TestSlurmGeneration:
         assert "#SBATCH --gpus-per-task=2" in content
 
     def test_generate_server_mode_judge_slurm_defaults_to_three_gpus(self, tmp_path):
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config = {
             "project_name": "judge_server_grpo",

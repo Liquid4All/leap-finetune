@@ -2,7 +2,7 @@ import json
 import logging
 from pathlib import Path, PurePosixPath
 
-from leap_finetune.data_loaders.validate_loader import normalize_columns
+from leap_finetune.data_loading.validate_dataset_format import normalize_columns
 
 logger = logging.getLogger(__name__)
 

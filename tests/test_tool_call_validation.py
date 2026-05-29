@@ -1,11 +1,11 @@
-from leap_finetune.data_loaders.tool_call_utils import (
+from leap_finetune.data_loading.validate_tool_format import (
     ToolFormatInfo,
     detect_tool_format,
     normalize_tool_format,
     validate_tool_format,
-    _tool_calls_to_pythonic,
+    tool_calls_to_pythonic,
 )
-from leap_finetune.utils.model_utils import get_model_family
+from leap_finetune.checkpointing.model_info import get_model_family
 
 
 # === Model family detection ===
@@ -244,7 +244,7 @@ class TestToolCallsToPythonic:
                 },
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert (
             result
             == '<|tool_call_start|>[get_weather(location="Boston")]<|tool_call_end|>'
@@ -257,7 +257,7 @@ class TestToolCallsToPythonic:
                 "function": {"name": "f", "arguments": {"a": "x", "b": 42}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == '<|tool_call_start|>[f(a="x", b=42)]<|tool_call_end|>'
 
     def test_multiple_calls(self):
@@ -265,12 +265,12 @@ class TestToolCallsToPythonic:
             {"type": "function", "function": {"name": "f1", "arguments": {"a": 1}}},
             {"type": "function", "function": {"name": "f2", "arguments": {"b": "y"}}},
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == '<|tool_call_start|>[f1(a=1), f2(b="y")]<|tool_call_end|>'
 
     def test_no_args(self):
         tc = [{"type": "function", "function": {"name": "get_time", "arguments": {}}}]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == "<|tool_call_start|>[get_time()]<|tool_call_end|>"
 
     def test_string_arguments(self):
@@ -280,14 +280,14 @@ class TestToolCallsToPythonic:
                 "function": {"name": "f", "arguments": '{"x": "hello"}'},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == '<|tool_call_start|>[f(x="hello")]<|tool_call_end|>'
 
     def test_bool_arg(self):
         tc = [
             {"type": "function", "function": {"name": "f", "arguments": {"flag": True}}}
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == "<|tool_call_start|>[f(flag=True)]<|tool_call_end|>"
 
 
@@ -314,7 +314,7 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"msg": 'he said "hi"'}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
     def test_string_with_newline(self):
@@ -326,7 +326,7 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"body": "line1\nline2"}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
     def test_string_with_backslash(self):
@@ -338,14 +338,14 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"path": r"C:\Users\x"}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
     def test_non_dict_arguments_does_not_crash(self):
         # Malformed `arguments` (list instead of dict) should be skipped
         # with a warning, not crash the Ray worker with AttributeError.
         tc = [{"type": "function", "function": {"name": "f", "arguments": [1, 2, 3]}}]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert isinstance(result, str)
         assert result.startswith("<|tool_call_start|>")
         assert result.endswith("<|tool_call_end|>")
@@ -359,7 +359,7 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"tags": ["a", "b"]}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
     def test_nested_dict_string_values_is_parseable(self):
@@ -370,7 +370,7 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"opts": {"name": "foo"}}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
 

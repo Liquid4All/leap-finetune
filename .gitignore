@@ -8,14 +8,24 @@ wheels/
 
 # Virtual environments
 .venv
+.venv*/
+.uv-cache/
+
+# Local agent/editor state
+.codex
+.codex/
+.claude/
 
 # Local HF models (ignores everything in src except leap_finetune)
 src/*
 !src/leap_finetune/
+.hf/
+.hf-cache/
 
 # Outputs and logs
 outputs/
 logs/
+job_configs/slurms/
 
 # Scripts
 scripts/
@@ -26,3 +36,8 @@ scratch/
 
 # Tokenization cache
 .cache/
+
+# Test/tool caches
+.pytest_cache/
+.ruff_cache/
+tests/slurm/generated/

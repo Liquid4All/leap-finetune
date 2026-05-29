@@ -8,7 +8,7 @@ import pytest
 import torch
 import yaml
 
-from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
+from leap_finetune import LEAP_FINETUNE_DIR
 
 # === Ray temp dir ===
 _RAY_TMPDIR = pathlib.Path(f"/tmp/{os.environ.get('USER', 'default')}/ray")
@@ -164,8 +164,8 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
     """Parse config, override output_dir, run training, return Result."""
     os.environ["OUTPUT_DIR"] = str(output_dir)
     try:
-        from leap_finetune.utils.config_parser import parse_job_config
-        from leap_finetune.trainer import ray_trainer
+        from leap_finetune.config.parser import parse_job_config
+        from leap_finetune.distribution.ray_trainer import ray_trainer
 
         job_config = parse_job_config(config_path)
         job_config_dict = job_config.to_dict()

@@ -1,8 +1,8 @@
 import pytest
 
 from leap_finetune.rl.rewards import resolve_reward_specs
-from leap_finetune.training_configs import TrainingConfig
-from leap_finetune.utils.config_parser import parse_job_config
+from leap_finetune.config import parse_job_config
+from leap_finetune.training.default_configs import TrainingConfig
 
 from conftest import write_config
 

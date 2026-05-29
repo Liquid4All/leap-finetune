@@ -12,7 +12,9 @@ class TestToolCallValidation:
     # --- SFT ---
 
     def test_sft_foreign_markers_rejected(self):
-        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+        from leap_finetune.data_loading.validate_dataset_format import (
+            validate_sft_format,
+        )
 
         for marker, fmt in [("<tool_call>", "Qwen"), ("[TOOL_CALLS]", "Mistral")]:
             ds = Dataset.from_list(
@@ -32,7 +34,9 @@ class TestToolCallValidation:
                 validate_sft_format(ds)
 
     def test_sft_correct_lfm_format_passes(self):
-        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+        from leap_finetune.data_loading.validate_dataset_format import (
+            validate_sft_format,
+        )
 
         ds = Dataset.from_list(
             [
@@ -52,7 +56,9 @@ class TestToolCallValidation:
         assert len(validate_sft_format(ds)) == 1
 
     def test_sft_text_before_tool_call_rejected(self):
-        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+        from leap_finetune.data_loading.validate_dataset_format import (
+            validate_sft_format,
+        )
 
         ds = Dataset.from_list(
             [
@@ -72,7 +78,9 @@ class TestToolCallValidation:
             validate_sft_format(ds)
 
     def test_sft_structured_tool_calls_field_rejected(self):
-        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+        from leap_finetune.data_loading.validate_dataset_format import (
+            validate_sft_format,
+        )
 
         ds = Dataset.from_list(
             [
@@ -92,7 +100,9 @@ class TestToolCallValidation:
             validate_sft_format(ds)
 
     def test_sft_missing_tool_response_rejected(self):
-        from leap_finetune.data_loaders.validate_loader import validate_sft_format
+        from leap_finetune.data_loading.validate_dataset_format import (
+            validate_sft_format,
+        )
 
         ds = Dataset.from_list(
             [
@@ -114,7 +124,9 @@ class TestToolCallValidation:
     # --- DPO ---
 
     def test_dpo_foreign_markers_rejected(self):
-        from leap_finetune.data_loaders.validate_loader import validate_dpo_format
+        from leap_finetune.data_loading.validate_dataset_format import (
+            validate_dpo_format,
+        )
 
         # String format
         ds = Dataset.from_list(
@@ -142,7 +154,9 @@ class TestToolCallValidation:
             validate_dpo_format(ds)
 
     def test_dpo_text_before_tool_call_rejected(self):
-        from leap_finetune.data_loaders.validate_loader import validate_dpo_format
+        from leap_finetune.data_loading.validate_dataset_format import (
+            validate_dpo_format,
+        )
 
         ds = Dataset.from_list(
             [
@@ -158,7 +172,7 @@ class TestToolCallValidation:
     # --- Row filters ---
 
     def test_sft_row_filter_rejects_bad_tool_calls(self):
-        from leap_finetune.data_loaders.validate_loader import get_row_filter
+        from leap_finetune.data_loading.validate_dataset_format import get_row_filter
 
         f = get_row_filter("sft")
         assert (
@@ -185,7 +199,7 @@ class TestToolCallValidation:
         )
 
     def test_dpo_row_filter_rejects_foreign_markers(self):
-        from leap_finetune.data_loaders.validate_loader import get_row_filter
+        from leap_finetune.data_loading.validate_dataset_format import get_row_filter
 
         f = get_row_filter("dpo")
         assert f({"chosen": "<tool_call>x</tool_call>", "rejected": "no"}) is False
@@ -193,7 +207,7 @@ class TestToolCallValidation:
     # --- Regression ---
 
     def test_non_tool_call_data_unaffected(self):
-        from leap_finetune.data_loaders.validate_loader import (
+        from leap_finetune.data_loading.validate_dataset_format import (
             validate_dpo_format,
             validate_sft_format,
         )
@@ -232,19 +246,19 @@ class TestToolCallValidation:
 
 class TestDatasetLoader:
     def test_invalid_test_size_zero_raises(self):
-        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+        from leap_finetune.data_loading.dataset_loader import DatasetLoader
 
         with pytest.raises(ValueError, match="test_size must be between"):
             DatasetLoader(dataset_path="x", dataset_type="sft", test_size=0)
 
     def test_invalid_test_size_above_one_raises(self):
-        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+        from leap_finetune.data_loading.dataset_loader import DatasetLoader
 
         with pytest.raises(ValueError, match="test_size must be between"):
             DatasetLoader(dataset_path="x", dataset_type="sft", test_size=1.5)
 
     def test_valid_construction(self):
-        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+        from leap_finetune.data_loading.dataset_loader import DatasetLoader
 
         loader = DatasetLoader(
             dataset_path="HuggingFaceTB/smoltalk",
@@ -272,14 +286,14 @@ class TestTokenizationSFT:
 
     @pytest.fixture(scope="class")
     def tokenizer(self):
-        from leap_finetune.utils.load_models import load_tokenizer
+        from leap_finetune.checkpointing.model_loading import load_tokenizer
 
         return load_tokenizer("LFM2-1.2B")
 
     @pytest.fixture(scope="class")
     def sft_datasets(self, ray_session, tokenizer):
-        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
-        from leap_finetune.data_loaders.ray_data_utils import create_ray_datasets
+        from leap_finetune.data_loading.dataset_loader import DatasetLoader
+        from leap_finetune.data_loading.ray_data_utils import create_ray_datasets
 
         loader = DatasetLoader(
             dataset_path="HuggingFaceTB/smoltalk",
@@ -328,8 +342,8 @@ class TestTokenizationSFT:
         )
 
     def test_sft_packing_changes_row_count(self, ray_session, tokenizer):
-        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
-        from leap_finetune.data_loaders.ray_data_utils import create_ray_datasets
+        from leap_finetune.data_loading.dataset_loader import DatasetLoader
+        from leap_finetune.data_loading.ray_data_utils import create_ray_datasets
 
         loader = DatasetLoader(
             dataset_path="HuggingFaceTB/smoltalk",
@@ -370,14 +384,14 @@ class TestTokenizationDPO:
 
     @pytest.fixture(scope="class")
     def tokenizer(self):
-        from leap_finetune.utils.load_models import load_tokenizer
+        from leap_finetune.checkpointing.model_loading import load_tokenizer
 
         return load_tokenizer("LFM2-1.2B")
 
     @pytest.fixture(scope="class")
     def dpo_datasets(self, ray_session, tokenizer):
-        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
-        from leap_finetune.data_loaders.ray_data_utils import create_ray_datasets
+        from leap_finetune.data_loading.dataset_loader import DatasetLoader
+        from leap_finetune.data_loading.ray_data_utils import create_ray_datasets
 
         loader = DatasetLoader(
             dataset_path="mlabonne/orpo-dpo-mix-40k",
@@ -445,14 +459,14 @@ class TestShardingCorrectness:
 
     @pytest.fixture(scope="class")
     def tokenizer(self):
-        from leap_finetune.utils.load_models import load_tokenizer
+        from leap_finetune.checkpointing.model_loading import load_tokenizer
 
         return load_tokenizer("LFM2-1.2B")
 
     @pytest.fixture(scope="class")
     def tokenized_train_ds(self, ray_session, tokenizer):
-        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
-        from leap_finetune.data_loaders.ray_data_utils import create_ray_datasets
+        from leap_finetune.data_loading.dataset_loader import DatasetLoader
+        from leap_finetune.data_loading.ray_data_utils import create_ray_datasets
 
         loader = DatasetLoader(
             dataset_path="HuggingFaceTB/smoltalk",
@@ -489,7 +503,7 @@ class TestCustomTrainerDataLoaders:
         from torch.utils.data import DistributedSampler
         from transformers import AutoConfig, AutoModelForCausalLM, TrainingArguments
 
-        from leap_finetune.training_loops.sft_run import LFMSFTTrainer
+        from leap_finetune.training.sft import LFMSFTTrainer
 
         dummy_dataset = Dataset.from_dict(
             {"input_ids": [[1, 2, 3]], "attention_mask": [[1, 1, 1]]}
@@ -514,7 +528,7 @@ class TestCustomTrainerDataLoaders:
     def test_lfm_dpo_trainer_skips_prepare_dataset(self):
         from datasets import Dataset
 
-        from leap_finetune.training_loops.dpo_run import LFMDPOTrainer
+        from leap_finetune.training.dpo import LFMDPOTrainer
 
         dummy = Dataset.from_dict({"a": [1, 2, 3]})
         result = LFMDPOTrainer._prepare_dataset(None, dummy)

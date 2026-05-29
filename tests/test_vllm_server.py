@@ -1,6 +1,6 @@
 import pytest
 
-from leap_finetune.utils.vllm_server import (
+from leap_finetune.rl.vllm_server import (
     plan_gpu_split,
     resolve_vllm_rollout_plan,
 )

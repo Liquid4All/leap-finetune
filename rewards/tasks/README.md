@@ -50,7 +50,7 @@ penalized). Plain IoU-F1 is typically enough for multi-object scenes.
 
 ---
 
-### GSM8K — math word problems
+### GSM8K - math word problems
 
 Exact-match reward on the final numeric answer, extracted via the
 `#### N` marker.
@@ -82,7 +82,7 @@ training_config:
 
 ---
 
-### MCQA — multiple-choice question answering
+### MCQA - multiple-choice question answering
 
 Letter-match reward on the extracted answer choice. Supports
 `Answer: X` / `\boxed{X}` / trailing-letter patterns; the last match
@@ -115,7 +115,7 @@ training_config:
 
 ---
 
-### IFEval — instruction-following constraints
+### IFEval - instruction-following constraints
 
 Dense reward in `[0, 1]`: the fraction of supported constraints the
 completion satisfies.
@@ -132,7 +132,7 @@ IDs are silently skipped; samples with zero supported constraints
 return `None` so GRPO drops them from advantage computation.
 
 **Required columns:** `prompt` (instruction), `solution` (JSON
-constraint spec — see the recipe docstring for the schema).
+constraint spec; see the recipe file for the schema).
 
 **Example:**
 

@@ -16,6 +16,10 @@
 
 A minimal fine-tuning repo for LFM2, fully built on Open Source.
 
+<p align="center">
+<a href="#-setup">Setup</a> · <a href="#-quickstart">Quickstart</a> · <a href="#-expected-dataset-formats">Dataset Formats</a> · <a href="#grpo-group-relative-policy-optimization">GRPO</a> · <a href="#-tool-calling-datasets">Tool Calling</a> · <a href="#-resuming-training">Resuming Training</a> · <a href="#-evaluation-benchmarks">Benchmarks</a> · <a href="#-advanced-configuration">Advanced Config</a>
+</p>
+
 We support different acceleration backends, including GPU nodes of 8xH100 80GB (both single node and multi node) as well as Modal (H100, H200, B200, ..) in case you don't have your own GPUs.
 
 For feature requests or if you have a different setup, reach out to [support@liquid.ai](mailto:support@liquid.ai) and tell us about your specific configuration.
@@ -53,6 +57,21 @@ The ROCm group is lockfile-managed and uses vLLM's ROCm wheel index for vLLM plu
 its matching `torch`, `torchvision`, `torchaudio`, `flash-attn`, and `triton`
 stack. The currently pinned vLLM ROCm wheels are Python 3.12 Linux wheels, so use
 the repo's `.python-version` when creating AMD environments.
+
+`flash-attn` is built against the selected Torch/CUDA ABI. If you previously
+synced with a different Torch, CUDA, or vLLM version and see an error like
+`flash_attn_2_cuda... undefined symbol`, clear the cached build and recreate
+the environment:
+
+```bash
+uv cache clean flash-attn
+rm -rf .venv
+MAX_JOBS=1 uv sync
+```
+
+Run this on a machine with a CUDA toolkit and enough build memory available if
+uv needs to rebuild `flash-attn` from source. `MAX_JOBS=1` keeps the fallback
+source build from spawning too many CUDA compiler jobs at once.
 
 ## 🚀 Quickstart
 
@@ -207,6 +226,15 @@ modal:
 
 When training is done, you can bundle your output checkpoint with `leap-bundle` to use it directly within LEAP. Checkout our [Quick Start guide](https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github&utm_medium=link&utm_campaign=LEAP&utm_content=general).
 
+## Contents
+
+- [Expected Dataset Formats](#-expected-dataset-formats)
+- [GRPO](#grpo-group-relative-policy-optimization)
+- [Tool Calling Datasets](#-tool-calling-datasets)
+- [Resuming Training](#-resuming-training)
+- [Evaluation Benchmarks](#-evaluation-benchmarks)
+- [Advanced Configuration](#-advanced-configuration)
+
 ## 📊 Expected Dataset Formats
 
 ### SFT (Supervised Fine-Tuning)
@@ -261,59 +289,44 @@ When training is done, you can bundle your output checkpoint with `leap-bundle` 
 
 > **Note**: VLM datasets commonly have images in a separate row and are referenced in the messages column. If your image URLs or Paths are in a separate column from your messages, you'll need to merge the images into the 'messages' section like above.
 
-### GRPO (Group Relative Policy Optimization)
+### GRPO and VLM GRPO
 
-GRPO trains with RL rewards on top of TRL v1's `GRPOTrainer`, wrapped
-with vLLM rollouts and a plain-Python rewards directory. Same single
-YAML workflow as SFT/DPO. Supports both text (`training_type: "grpo"`)
-and VLM (`training_type: "vlm_grpo"`); the VLM trainer applies the same
-per-component learning rates as VLM SFT so RL updates don't corrupt
-pretrained vision features.
+GRPO can reuse the SFT/VLM SFT `messages` format. The loader turns each
+row into `prompt` and `solution` for online reward computation, and any
+extra columns are forwarded to reward functions. See the
+[GRPO section](#grpo-group-relative-policy-optimization) for the full
+dataset, reward, and vLLM rollout contract.
 
-GRPO datasets reuse the SFT `messages` format — the loader auto-splits
-each row into `prompt` (non-assistant turns) and `solution` (last
-assistant text), so one parquet drives both SFT warm-up and GRPO with
-no reshaping. Any extra columns are forwarded to rewards as kwargs.
+### 🔧 Tool Calling Datasets
 
-**Rewards.** Composed from a single YAML block pointing at Python files
-in [`rewards/`](./rewards/README.md) — either individual primitives
-(`accuracy.py`, `length.py`, ...) or a whole task recipe
-(`rewards/tasks/<task>/recipe.py::<Recipe>`). Shipped recipes cover VLM
-grounding (IoU-F1 and CIoU-F1), GSM8K, MCQA, and IFEval. Adding a reward
-is a plain Python function; extending a shipped recipe is regular
-subclassing. See [`rewards/README.md`](./rewards/README.md) for the API
-contract and the extension pattern.
+Tool calls use LFM bracket notation pre-baked in the assistant `content` field. Tool definitions go in the system prompt, and tool responses use `role: "tool"`.
 
-**vLLM rollouts.** Two modes, both driven from YAML:
-
-- **Colocate** (default) — vLLM runs inside each training worker and
-  shares GPU memory. Works on single node and **scales to multi-node**
-  out of the box.
-- **Server** — `trl vllm-serve` runs on a dedicated GPU and training
-  workers reach it over HTTP. Currently **single-node only**; multi-node
-  support is tracked and will land in a follow-up.
-
-**Example configs** — copy and edit instead of writing YAML from scratch:
-
-- [`job_configs/grpo_example.yaml`](./job_configs/grpo_example.yaml) —
-  text GRPO quickstart, single node, GSM8K recipe.
-- [`job_configs/vlm_grpo_grounding_example.yaml`](./job_configs/vlm_grpo_grounding_example.yaml)
-  — VLM GRPO with the visual-grounding recipe, 2-node colocate demo.
-
-Launch the same way as SFT/DPO:
-
-```bash
-uv run leap-finetune job_configs/grpo_example.yaml
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "List of tools: [{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get weather for a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\"}},\"required\":[\"location\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"search_web\",\"description\":\"Search the web\",\"parameters\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"send_email\",\"description\":\"Send an email\",\"parameters\":{\"type\":\"object\",\"properties\":{\"to\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"}},\"required\":[\"to\",\"body\"]}}}]"
+    },
+    { "role": "user", "content": "What's the weather in Boston?" },
+    {
+      "role": "assistant",
+      "content": "<|tool_call_start|>[get_weather(location=\"Boston\")]<|tool_call_end|>"
+    },
+    {
+      "role": "tool",
+      "content": "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    },
+    { "role": "assistant", "content": "It's 72°F and sunny in Boston." }
+  ]
+}
 ```
 
-**Agentic environments (advanced).** For tasks where the environment
-state evolves from agent actions (browsing, tool use, game simulators,
-stateful multi-turn), `leap-finetune` also supports
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) via an optional
-`rl_env:` block. Install with `uv sync --extra rl-env` and see
-[`src/leap_finetune/rl_envs/README.md`](./src/leap_finetune/rl_envs/README.md).
-For anything scorable by a pure Python function, prefer the `rewards:`
-path above — it is simpler and faster.
+- Tool calls must be pre-baked in `content` using `<|tool_call_start|>[func(args)]<|tool_call_end|>` bracket notation
+- Structured `tool_calls` fields (OpenAI format) are auto-converted if present
+- Foreign formats (e.g. `<tool_call>` XML) are rejected with an actionable error
+- Do not include `<|tool_response_start|>` / `<|tool_response_end|>` markers in `role: "tool"` messages — the LFM2 chat template adds these automatically during tokenization
+- **LFM2 models** additionally expect `<|tool_list_start|>` / `<|tool_list_end|>` around tool definitions in the system prompt. Include these in your data if training an LFM2 model; omit them for LFM2.5. The pipeline warns on mismatches and auto-strips `<|tool_list_start|>` when training LFM2.5.
 
 ## 🔄 Resuming Training
 
@@ -336,6 +349,128 @@ training_config:
 **What gets restored:** model weights, optimizer states, LR scheduler position, training step counter, and RNG states.
 
 **Wandb continuity:** The wandb run ID is saved to `<run_dir>/.wandb_run_id` automatically. On resume, it restores the same wandb run. Fresh runs always get a new wandb run.
+
+## GRPO (Group Relative Policy Optimization)
+
+GRPO runs online RL with TRL v1's `GRPOTrainer`. Use
+`training_type: "grpo"` for text models and `training_type: "vlm_grpo"`
+for vision-language models. Both modes use the same YAML entrypoint as
+SFT/DPO, the same Ray Train launcher, and vLLM rollouts by default.
+
+**Dataset contract.** Text GRPO can reuse the SFT `messages` format: the
+loader splits each row into `prompt` (non-assistant turns) and `solution`
+(the last assistant message). Native `prompt` / `solution` columns also
+work. VLM GRPO uses the same multimodal `messages` shape as VLM SFT;
+`dataset.image_root` is prepended to relative image paths. Any extra
+dataset columns are forwarded to reward functions as keyword arguments.
+
+**Rewards.** The `rewards:` block resolves plain Python callables and
+task recipes from [`rewards/`](./rewards/README.md). Shipped primitive
+functions can be referenced by function name:
+
+```yaml
+rewards:
+  funcs:
+    - "accuracy_reward"
+    - "length_reward"
+  weights: [1.0, 0.1]
+```
+
+Task recipes bundle multiple reward functions and their default weights:
+
+```yaml
+rewards:
+  recipe: "tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+```
+
+If you combine `recipe:` and `funcs:`, the final reward order is recipe
+rewards first, then individual funcs. A `weights:` override must match
+that expanded order. Absolute paths and explicit
+`./rewards/file.py::function_name` specs still work for custom rewards.
+
+**Judge LLM reward.** Add `rewards.judge` when the reward signal should
+come from an LLM grader. Without `base_url`, the driver starts a local
+`trl vllm-serve` judge server before Ray initializes and exports the
+endpoint to workers:
+
+```yaml
+rewards:
+  judge:
+    model: "LFM2-1.2B"
+    weight: 1.0
+    prompt_template: |
+      Prompt:
+      {prompt}
+
+      Assistant response:
+      {completion}
+
+      Reference answer or rubric:
+      {solution}
+
+      Return only JSON: {"score": 0.0}
+
+grpo_rollout:
+  judge_gpus: 1
+```
+
+For an external judge, set `rewards.judge.base_url` and omit
+`judge_gpus`. Judge scores are parsed from JSON or the first number in
+the response and normalized from `min_score`/`max_score` to `[0, 1]`.
+
+**vLLM rollout modes.** `DEFAULT_GRPO` and `DEFAULT_VLM_GRPO` set
+`use_vllm: true` and `vllm_mode: "colocate"`.
+
+- **Colocate** — vLLM runs inside each training worker and shares GPU
+  memory. This is the default and works on single-node and multi-node
+  jobs.
+- **Server** — the driver starts `trl vllm-serve` before Ray initializes,
+  then narrows `CUDA_VISIBLE_DEVICES` so Ray only sees training GPUs.
+  Configure counts, not device ids:
+
+```yaml
+grpo_rollout:
+  server_gpus: 1 # reserve 1 local GPU for vLLM; training gets the rest
+  judge_gpus: 1 # optional: reserve 1 local GPU for rewards.judge
+  # training_gpus: 3    # or set only this and vLLM gets the remaining GPUs
+  tensor_parallel_size: 1
+  dtype: "bfloat16"
+  gpu_memory_utilization: 0.9
+
+training_config:
+  extends: "DEFAULT_GRPO"
+  vllm_mode: "server"
+  vllm_server_host: "auto"
+  vllm_server_port: 8000
+```
+
+Local server partitioning is single-node only. For multi-node GRPO, use
+colocate mode or point `vllm_server_base_url` at an externally managed
+vLLM server without setting `server_gpus` / `training_gpus`.
+
+**Example configs** — copy and edit instead of writing YAML from scratch:
+
+- [`job_configs/grpo_example.yaml`](./job_configs/grpo_example.yaml) —
+  text GRPO quickstart with the GSM8K recipe.
+- [`job_configs/grpo_server_mode_example.yaml`](./job_configs/grpo_server_mode_example.yaml)
+  — text GRPO with a local `trl vllm-serve` rollout server.
+- [`job_configs/vlm_grpo_grounding_example.yaml`](./job_configs/vlm_grpo_grounding_example.yaml)
+  — VLM GRPO with the visual-grounding recipe.
+
+Launch the same way as SFT/DPO:
+
+```bash
+uv run leap-finetune job_configs/grpo_example.yaml
+```
+
+**Agentic environments (advanced).** For tasks where the environment
+state evolves from agent actions (browsing, tool use, game simulators,
+stateful multi-turn), `leap-finetune` also supports
+[OpenEnv](https://github.com/meta-pytorch/OpenEnv) via an optional
+`rl_env:` block. Install with `uv sync --extra rl-env` and see
+[`src/leap_finetune/rl/environments/README.md`](./src/leap_finetune/rl/environments/README.md).
+For anything scorable by a pure Python function, prefer the `rewards:`
+path above — it is simpler and faster.
 
 ## 📈 Evaluation Benchmarks
 

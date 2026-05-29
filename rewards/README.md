@@ -2,9 +2,9 @@
 
 Two layers:
 
-1. **Primitives** at the root — small, single-file reward functions you
+1. **Primitives** at the root: small, single-file reward functions you
    compose from YAML (`accuracy.py`, `length.py`).
-2. **Task bundles** under [`tasks/`](tasks/README.md) — complete
+2. **Task bundles** under [`tasks/`](tasks/README.md): complete
    recipes for concrete datasets (VLM grounding, GSM8K, IFEval, MCQA).
    Each task lives in its own folder with a single `recipe.py`.
 
@@ -25,13 +25,42 @@ rewards:
 ```yaml
 rewards:
   funcs:
-    - "./rewards/accuracy.py::accuracy_reward"
-    - "./rewards/length.py::length_reward"
+    - "accuracy_reward" # discovered under rewards/
+    - "length_reward"
   weights: [1.0, 0.2]
 ```
 
-Paths are resolved relative to the current working directory first,
-then to the directory containing the YAML. Absolute paths work too.
+### As a judge LLM reward
+
+```yaml
+rewards:
+  judge:
+    model: "LFM2-1.2B" # judge model, defaults to the training model
+    weight: 1.0
+    max_tokens: 32
+    min_score: 0.0
+    max_score: 1.0
+```
+
+Without `base_url`, the driver starts a local `trl vllm-serve` judge
+server and exports its endpoint to Ray workers. Reserve its GPU with
+`grpo_rollout.judge_gpus`:
+
+```yaml
+grpo_rollout:
+  judge_gpus: 1
+  training_gpus: 3
+```
+
+For an externally managed judge server, set `rewards.judge.base_url` and
+do not reserve `judge_gpus`.
+
+Paths are resolved relative to the directory containing the YAML first,
+then the current working directory, then this `rewards/` directory.
+Absolute paths work too. For shipped rewards, use the function
+name by itself when it is unique; use `length::length_reward` or
+`tasks/gsm8k/recipe.py::GSM8KRecipe` when you want to be explicit without
+typing `./rewards/`.
 
 ### Stacking a recipe with extra primitives
 
@@ -39,16 +68,17 @@ then to the directory containing the YAML. Absolute paths work too.
 rewards:
   recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
   funcs:
-    - "./rewards/length.py::length_reward"
+    - "length_reward"
   weights: [0.1, 1.0, 0.05] # recipe weights + the stacked func weight
 ```
 
 ## Shipped primitives
 
-| File          | Function          | What it does                                                                  | Required columns |
-| ------------- | ----------------- | ----------------------------------------------------------------------------- | ---------------- |
-| `accuracy.py` | `accuracy_reward` | Math accuracy via `math_verify` (re-export of `trl.rewards.accuracy_reward`). | `solution` (str) |
-| `length.py`   | `length_reward`   | Length-based shaping reward, scaled to `[0, 1]`.                              | none             |
+| File           | Function           | What it does                                                                  | Required columns             |
+| -------------- | ------------------ | ----------------------------------------------------------------------------- | ---------------------------- |
+| `accuracy.py`  | `accuracy_reward`  | Math accuracy via `math_verify` (re-export of `trl.rewards.accuracy_reward`). | `solution` (str)             |
+| `judge_llm.py` | `judge_llm_reward` | LLM-as-judge score from the configured `rewards.judge` block.                 | optional `solution` / rubric |
+| `length.py`    | `length_reward`    | Length-based shaping reward, scaled to `[0, 1]`.                              | none                         |
 
 ## Shipped task bundles
 
@@ -69,15 +99,14 @@ def reward_fn(completions, **kwargs) -> list[float | None]:
     ...
 ```
 
-- **`completions`** — one entry per generation. Conversational prompts
+- **`completions`**: one entry per generation. Conversational prompts
   wrap each entry as `[{"role": "assistant", "content": "<text>"}]`;
   string prompts pass through the raw string. Extract defensively:
   `c[0]["content"] if isinstance(c, list) else c`.
-- **Additional keyword arguments** — every other column in the dataset
-  row is forwarded as a keyword with the same name. TRL also forwards
-  `prompts`, `completion_ids`, `trainer_state`, and (when `rl_env` is
-  used) `env_reward`. Use `**kwargs` so unused fields are ignored.
-- **Return** — a list of floats, one per completion. Returning `None`
+- **`**kwargs`**: every other column in the dataset row is forwarded
+as a keyword with the same name. TRL also forwards `prompts`,
+`completion_ids`, `trainer_state`, and (when `rl_env`is used)`env_reward`. Use `\*\*kwargs` so unused fields are ignored.
+- **Return**: a list of floats, one per completion. Returning `None`
   for a sample marks it "not applicable" and drops it from advantage
   aggregation.
 
@@ -98,7 +127,7 @@ def my_primitive_reward(completions, **kwargs):
 ```yaml
 rewards:
   funcs:
-    - "./rewards/my_primitive.py::my_primitive_reward"
+    - "my_primitive_reward"
 ```
 
 ### As a task bundle
@@ -107,7 +136,7 @@ Create a folder under `tasks/` with `__init__.py` and `recipe.py`:
 
 ```python
 # rewards/tasks/my_task/recipe.py
-from leap_finetune.rewards import Recipe
+from leap_finetune.rl.rewards import Recipe
 
 
 def my_correctness_reward(completions, solution, **kwargs):
@@ -115,7 +144,7 @@ def my_correctness_reward(completions, solution, **kwargs):
 
 
 class MyTaskRecipe(Recipe):
-    description = "My task — what the reward measures"
+    description = "My task - what the reward measures"
     required_columns = ("prompt", "solution")
     system_prompt = "..."
 
@@ -143,7 +172,7 @@ Load a sibling recipe as a parent and subclass it:
 
 ```python
 # rewards/tasks/my_grounding_plus_captions/recipe.py
-from leap_finetune.rewards import load_recipe
+from leap_finetune.rl.rewards import load_recipe
 
 VLMGroundingIoURecipe = load_recipe(
     "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
@@ -174,7 +203,9 @@ return a filtered version of `super().rewards()`.
   is parsed, then shipped to each worker as part of the trainer state.
 - Dependencies outside `pyproject.toml` (like `math_verify` for
   `accuracy.py`) need to be installed separately.
-- Reward functions can be `async def` — TRL runs async rewards
+- Reward functions can be `async def`; TRL runs async rewards
   concurrently via `asyncio.gather`.
+- `judge_llm_reward` uses the TRL vLLM server protocol (`/generate/`) and
+  parses a JSON or numeric `score`, normalized to `[0, 1]`.
 - Keep reward functions deterministic and side-effect-free; they run
   multiple times per training step.

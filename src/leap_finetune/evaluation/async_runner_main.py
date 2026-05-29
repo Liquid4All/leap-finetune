@@ -82,10 +82,17 @@ def _run_one_benchmark(bench, backend) -> dict[str, float]:
 
 
 def _log_to_wandb(args: argparse.Namespace, results: dict[str, float]) -> None:
-    """Attach to the training run and log at ``step=trigger_step`` so the
-    benchmark point lands on the same global-step axis as training. Wandb
-    may emit a backwards-step warning if training has advanced past
-    trigger_step; the value still lands at the correct step in history.
+    """Attach to the training run and append the benchmark point.
+
+    We do NOT pass ``step=trigger_step``. The sidecar resumes the run from a
+    separate process minutes after the trigger fired, by which point the live
+    run's internal ``_step`` has advanced well past trigger_step — often far
+    past it, since GRPO commits many times per training step. A ``step=`` in
+    the past is a backwards write and wandb silently drops it. Logging without
+    ``step=`` appends at the current (forward) ``_step``, so the point always
+    lands. The originating training step rides along as plain data fields —
+    ``train/global_step`` (what training dashboards use) and ``benchmark/step``
+    (a clean alias) — so benchmark panels align on the trainer's step axis.
     """
     if not args.wandb_run_id:
         logger.info("--wandb-run-id not set; skipping wandb log")
@@ -104,16 +111,15 @@ def _log_to_wandb(args: argparse.Namespace, results: dict[str, float]) -> None:
             init_kwargs["project"] = args.wandb_project
 
         wandb.init(**init_kwargs)
-        # Log at the originating training step. The explicit ``step=``
-        # makes wandb's internal _step jump to trigger_step for this
-        # write, so the benchmark point lands on the same axis as
-        # training metrics that follow.
         if not results:
             logger.info("no benchmark results to log")
         else:
-            wandb.log(results, step=args.trigger_step)
+            payload = dict(results)
+            payload["train/global_step"] = args.trigger_step
+            payload["benchmark/step"] = args.trigger_step
+            wandb.log(payload)
             logger.info(
-                "logged %d metrics to wandb at step %d",
+                "logged %d metrics to wandb (benchmark/step=%d)",
                 len(results),
                 args.trigger_step,
             )

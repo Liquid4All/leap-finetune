@@ -111,6 +111,15 @@ def _log_to_wandb(args: argparse.Namespace, results: dict[str, float]) -> None:
             init_kwargs["project"] = args.wandb_project
 
         wandb.init(**init_kwargs)
+        # Auto-pin benchmark/* panels to the benchmark/step axis so the wandb
+        # UI renders benchmark curves at the originating training step out of
+        # the box — no user config needed. Scoped to benchmark/* only so it
+        # doesn't touch training-loss panels. Idempotent on resume.
+        try:
+            wandb.define_metric("benchmark/step")
+            wandb.define_metric("benchmark/*", step_metric="benchmark/step")
+        except Exception:
+            logger.debug("wandb.define_metric not available; skipping axis pin")
         if not results:
             logger.info("no benchmark results to log")
         else:

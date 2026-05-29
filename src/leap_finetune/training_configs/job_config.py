@@ -24,7 +24,7 @@ class JobConfig:
     rewards: list | dict | None = None
     # GRPO-specific: OpenEnv rl_env block. None when no env is used.
     rl_env: dict | None = None
-    # GRPO-specific: server-mode vLLM rollout block with dedicated_gpus etc.
+    # GRPO-specific: server-mode vLLM rollout block with server_gpus etc.
     grpo_rollout: dict | None = None
     # Absolute path to the directory containing the YAML config file — used as
     # the base for resolving relative reward file paths on the driver.

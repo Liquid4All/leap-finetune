@@ -24,7 +24,8 @@ training_config:
   save_strategy: "no"
   eval_strategy: "no"
   logging_steps: 1
-  use_vllm: false
+  # Inherit DEFAULT_VLM_GRPO use_vllm: true so this fixture matches shipped
+  # VLM GRPO rollout defaults.
 
 peft_config:
   use_peft: false

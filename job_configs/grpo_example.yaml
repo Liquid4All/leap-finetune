@@ -3,7 +3,7 @@
 # Same `messages` parquet drives sft / dpo / grpo. In grpo mode the
 # loader splits each row's messages into `prompt` (non-assistant turns)
 # and `solution` (last assistant text); the GSM8K reward extracts the
-# `#### N` answer from the assistant turn. No preprocessing needed.
+# `#### N` answer from the assistant turn.
 #
 # Launch:
 #   uv run leap-finetune job_configs/grpo_example.yaml
@@ -19,7 +19,7 @@ dataset:
   limit: 2000                           # remove for full-dataset training
 
 rewards:
-  recipe: "./rewards/tasks/gsm8k/recipe.py::GSM8KRecipe"
+  recipe: "tasks/gsm8k/recipe.py::GSM8KRecipe"
 
 training_config:
   extends: "DEFAULT_GRPO"

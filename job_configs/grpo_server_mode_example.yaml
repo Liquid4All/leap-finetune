@@ -27,15 +27,26 @@ dataset:
 
 rewards:
   funcs:
-    - "./rewards/accuracy.py::accuracy_reward"
-    - "./rewards/think_format.py::think_format_reward"
-  weights: [1.0, 0.2]
+    - "accuracy_reward"
+    - "length_reward"
+  weights: [1.0, 0.1]
+  # Optional LLM-as-judge reward. If base_url is omitted, the driver starts
+  # a local judge vLLM server and grpo_rollout.judge_gpus reserves its GPU.
+  # judge:
+  #   model: "LFM2-1.2B"
+  #   weight: 0.5
+  #   max_tokens: 32
 
 # New top-level block for server-mode vLLM.
 # The driver consumes this and the rest of the config just sets
 # vllm_mode: server + vllm_server_host / port inside training_config.
 grpo_rollout:
-  dedicated_gpus: 1
+  # Reserve 1 local GPU for vLLM. Ray training gets the remaining GPUs.
+  server_gpus: 1
+  # Optional: reserve 1 local GPU for rewards.judge.
+  # judge_gpus: 1
+  # Or set only training_gpus and the remaining GPUs go to the local vLLM server.
+  # training_gpus: 3
   tensor_parallel_size: 1
   dtype: "bfloat16"
   gpu_memory_utilization: 0.9   # vLLM gets its GPU(s) to itself here

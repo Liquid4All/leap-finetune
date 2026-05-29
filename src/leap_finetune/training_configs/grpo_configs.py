@@ -1,15 +1,13 @@
-"""GRPO base training configs.
-
-Auto-discovered by training_configs/__init__.py:_discover_configs() — any new
-DEFAULT_* / MOE_* dict here is immediately available via `extends:` in YAML.
-
-All field names match TRL v1.0 GRPOConfig (verified against
-trl/trainer/grpo_config.py at v1.0.0). Keys not recognized by GRPOConfig must
-be added to GRPO_EXCLUDED_KEYS / VLM_GRPO_EXCLUDED_KEYS so they're stripped
-before construction.
-"""
-
 from leap_finetune.utils.constants import GRPO_OUTPUT_PATH
+
+# === GRPO config hygiene ===
+#
+# This module is auto-discovered by training_configs/__init__.py. Any new
+# DEFAULT_* / MOE_* dict becomes available via `extends:` in YAML.
+#
+# Field names match TRL v1.0 GRPOConfig. Keys not recognized by GRPOConfig must
+# be added to GRPO_EXCLUDED_KEYS / VLM_GRPO_EXCLUDED_KEYS so training loops
+# strip them before construction.
 
 # Keys that exist in our YAML but are NOT GRPOConfig fields. Stripped in
 # grpo_run.py / vlm_grpo_run.py before building GRPOConfig(**filtered).
@@ -32,12 +30,10 @@ VLM_GRPO_EXCLUDED_KEYS = GRPO_EXCLUDED_KEYS | {
 }
 
 
-########################
-#   DEEPSPEED CONFIGS   #
-########################
+# === DeepSpeed configs ===
 
 
-# ZeRO-2 — sufficient for the policy model since GRPO with beta=0 doesn't
+# ZeRO-2 is sufficient for the policy model since GRPO with beta=0 doesn't
 # load a separate reference model. Matches DPO/SFT.
 DEEPSPEED_CONFIG = {
     "zero_optimization": {
@@ -60,7 +56,7 @@ DEEPSPEED_CONFIG = {
 }
 
 
-# ZeRO-0 for MoE — same rationale as MOE_DPO/MOE_SFT (FSDP handles sharding
+# ZeRO-0 for MoE: same rationale as MOE_DPO/MOE_SFT (FSDP handles sharding
 # in the full fine-tune case; DeepSpeed is just used as the backend).
 MOE_DEEPSPEED_CONFIG = {
     "zero_optimization": {
@@ -113,14 +109,14 @@ DEFAULT_GRPO = {
     "temperature": 1.0,
     "top_p": 1.0,
     "top_k": 0,
-    "beta": 0.0,  # KL off — TRL v1 default; ref model not loaded
+    "beta": 0.0,  # KL off; TRL v1 default, ref model not loaded
     "epsilon": 0.2,
     "loss_type": "dapo",  # TRL v1 default
     "scale_rewards": "group",
     "mask_truncated_completions": True,  # DAPO recommendation
     "log_completions": True,
     "num_completions_to_print": 4,
-    # --- vLLM rollouts (colocate by default — single-node friendly) ---
+    # --- vLLM rollouts (colocate by default; single-node friendly) ---
     "use_vllm": True,
     "vllm_mode": "colocate",
     "vllm_gpu_memory_utilization": 0.3,
@@ -136,7 +132,7 @@ DEFAULT_VLM_GRPO = {
     # Override training_type so JobConfig._validate_training_config passes
     # when the YAML sets training_type: vlm_grpo.
     "training_type": "vlm_grpo",
-    # VLM-specific — consumed by LFMVLMGRPOTrainer, NOT passed to GRPOConfig
+    # VLM-specific: consumed by LFMVLMGRPOTrainer, NOT passed to GRPOConfig
     "max_image_tokens": None,
     "do_image_splitting": True,
     "lr_multipliers": {

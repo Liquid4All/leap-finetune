@@ -24,9 +24,8 @@ training_config:
   save_strategy: "no"
   eval_strategy: "no"
   logging_steps: 1
-  # vLLM disabled in CI: public vllm 0.19 is ABI-incompatible with torch 2.11.
-  # Enable once the Liquid4All fork or upstream PR #30566 lands a compatible build.
-  use_vllm: false
+  # Inherit DEFAULT_GRPO use_vllm: true so the smoke test covers the shipped
+  # rollout path with vLLM 0.19 + the Transformers override in pyproject.toml.
 
 peft_config:
   use_peft: false

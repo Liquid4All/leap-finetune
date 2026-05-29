@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+
 import psutil
 
 import ray
@@ -11,6 +13,12 @@ from ray.train.torch import TorchTrainer, TorchConfig
 
 from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 from leap_finetune.data_loaders.ray_data_utils import create_ray_datasets
+from leap_finetune.rl.judge import (
+    build_judge_runtime_config,
+    export_judge_runtime_config,
+    get_judge_config,
+    judge_needs_local_server,
+)
 from leap_finetune.training_loops import TRAINING_LOOPS
 from leap_finetune.utils.constants import RUNTIME_DIR
 from leap_finetune.utils.load_models import _resolve_model_id, load_tokenizer
@@ -23,8 +31,8 @@ from leap_finetune.utils.logging_utils import (
 )
 from leap_finetune.utils.vllm_server import (
     launch_vllm_server,
-    plan_gpu_split,
     resolve_server_host,
+    resolve_vllm_rollout_plan,
 )
 
 
@@ -47,6 +55,92 @@ def ray_trainer(job_config: dict) -> None:
 
     ray_address = os.environ.get("RAY_ADDRESS", "").strip()
     is_multi_node = bool(ray_address)
+    training_config = job_config["training_config"]
+    is_grpo = training_type in ("grpo", "vlm_grpo")
+    grpo_rollout_cfg = job_config.get("grpo_rollout") or {}
+    vllm_mode = training_config.get("vllm_mode", "colocate")
+    rewards_cfg = job_config.get("rewards")
+    judge_cfg = get_judge_config(rewards_cfg)
+    reserve_judge = judge_needs_local_server(rewards_cfg)
+    rollout_plan = resolve_vllm_rollout_plan(
+        num_gpus,
+        grpo_rollout_cfg,
+        vllm_mode=vllm_mode,
+        is_multi_node=is_multi_node,
+        reserve_judge=reserve_judge,
+    )
+
+    if is_grpo and rollout_plan.uses_custom_training_visibility:
+        if ray.is_initialized():
+            raise RuntimeError(
+                "GRPO vLLM GPU splitting must be resolved before Ray starts. "
+                "Run this job in a fresh process or use an externally managed "
+                "vLLM server."
+            )
+        os.environ["CUDA_VISIBLE_DEVICES"] = rollout_plan.training_cuda_visible_devices
+
+    server_handles = []
+    if is_grpo and rollout_plan.launches_local_server:
+        host = resolve_server_host(training_config.get("vllm_server_host"))
+        port = int(training_config.get("vllm_server_port", 8000))
+        model_id = _resolve_model_id(job_config["model_name"])
+
+        server_handle = launch_vllm_server(
+            model_id=model_id,
+            vllm_gpu_ids=rollout_plan.server_gpu_ids,
+            grpo_rollout_cfg=grpo_rollout_cfg,
+            host="0.0.0.0",
+            port=port,
+            vllm_cuda_visible_devices=rollout_plan.server_cuda_visible_devices,
+            log_path=Path(output_dir) / "vllm_server.log",
+        )
+        server_handles.append(server_handle)
+        training_config["vllm_server_base_url"] = f"http://{host}:{port}"
+        training_config["vllm_server_host"] = host
+        training_config["vllm_server_port"] = port
+        print(
+            "[GRPO] vLLM server using "
+            f"{len(rollout_plan.server_gpu_ids)} GPU(s) at "
+            f"{training_config['vllm_server_base_url']}; "
+            f"Ray training using {rollout_plan.num_training_workers} GPU(s)"
+        )
+
+    if is_grpo and judge_cfg is not None:
+        model_id = _resolve_model_id(judge_cfg.get("model") or job_config["model_name"])
+        judge_base_url = judge_cfg.get("base_url")
+
+        if rollout_plan.launches_local_judge:
+            host = resolve_server_host(judge_cfg.get("host"))
+            port = int(judge_cfg.get("port", 8001))
+            judge_server_cfg = _judge_server_config(
+                grpo_rollout_cfg,
+                judge_cfg,
+                len(rollout_plan.judge_gpu_ids),
+            )
+            judge_handle = launch_vllm_server(
+                model_id=model_id,
+                vllm_gpu_ids=rollout_plan.judge_gpu_ids,
+                grpo_rollout_cfg=judge_server_cfg,
+                host="0.0.0.0",
+                port=port,
+                vllm_cuda_visible_devices=rollout_plan.judge_cuda_visible_devices,
+                log_path=Path(output_dir) / "judge_vllm_server.log",
+            )
+            server_handles.append(judge_handle)
+            judge_base_url = f"http://{host}:{port}"
+            print(
+                "[GRPO] Judge LLM server using "
+                f"{len(rollout_plan.judge_gpu_ids)} GPU(s) at {judge_base_url}"
+            )
+
+        judge_runtime_config = build_judge_runtime_config(
+            rewards_cfg,
+            default_model=model_id,
+            base_url=judge_base_url,
+        )
+        export_judge_runtime_config(judge_runtime_config)
+    else:
+        export_judge_runtime_config(None)
 
     if not ray.is_initialized():
         if is_multi_node:
@@ -79,8 +173,7 @@ def ray_trainer(job_config: dict) -> None:
                 worker_process_setup_hook=worker_process_setup_hook,
             )
 
-            # 40% of available RAM, not total, to avoid OOM on shared nodes.
-            object_store_mem = int(psutil.virtual_memory().available * 0.4)
+            object_store_mem = _ray_object_store_memory()
 
             ray.init(
                 address="local",
@@ -101,7 +194,6 @@ def ray_trainer(job_config: dict) -> None:
         )
 
     dataset_config = job_config["dataset"]
-    training_config = job_config["training_config"]
 
     tokenizer = load_tokenizer(job_config["model_name"])
 
@@ -129,50 +221,22 @@ def ray_trainer(job_config: dict) -> None:
         "train_config": training_config,
         "peft_config": job_config["peft_config"],
         "benchmark_configs": job_config.get("benchmark_configs"),
-        "rewards": job_config.get("rewards"),
+        "rewards": rewards_cfg,
         "rl_env": job_config.get("rl_env"),
         "grpo_rollout": job_config.get("grpo_rollout"),
         "config_dir": job_config.get("config_dir"),
     }
 
-    is_grpo = training_type in ("grpo", "vlm_grpo")
     training_num_gpus = int(ray.cluster_resources().get("GPU", num_gpus))
-    grpo_rollout_cfg = job_config.get("grpo_rollout") or {}
-    vllm_mode = training_config.get("vllm_mode", "colocate")
-
-    if is_grpo and vllm_mode == "server" and grpo_rollout_cfg.get("dedicated_gpus"):
-        if is_multi_node:
-            raise NotImplementedError(
-                "vLLM server mode + dedicated_gpus is single-node only. "
-                "Use vllm_mode: colocate for multi-node GRPO."
-            )
-        vllm_gpus, train_gpus = plan_gpu_split(num_gpus, grpo_rollout_cfg)
-
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in train_gpus)
-        training_num_gpus = len(train_gpus)
-
-        host = resolve_server_host(training_config.get("vllm_server_host"))
-        port = int(training_config.get("vllm_server_port", 8000))
-        model_id = _resolve_model_id(job_config["model_name"])
-
-        server_handle = launch_vllm_server(
-            model_id=model_id,
-            vllm_gpu_ids=vllm_gpus,
-            grpo_rollout_cfg=grpo_rollout_cfg,
-            host="0.0.0.0",
-            port=port,
-        )
-        training_config["vllm_server_base_url"] = f"http://{host}:{port}"
-        training_config["vllm_server_host"] = host
-        training_config["vllm_server_port"] = port
-        print(
-            f"[GRPO] vLLM server on GPU(s) {vllm_gpus} at "
-            f"{training_config['vllm_server_base_url']}; training on {train_gpus}"
-        )
-        del server_handle
+    resources_per_worker = {"GPU": 1.0}
+    if is_grpo and not is_multi_node:
+        training_num_gpus = rollout_plan.num_training_workers
+        resources_per_worker = rollout_plan.resources_per_worker
 
     scale_config = ScalingConfig(
-        num_workers=training_num_gpus, use_gpu=True, resources_per_worker={"GPU": 1.0}
+        num_workers=training_num_gpus,
+        use_gpu=True,
+        resources_per_worker=resources_per_worker,
     )
 
     # GRPO: each worker needs the full dataset — TRL's RepeatSampler
@@ -207,7 +271,11 @@ def ray_trainer(job_config: dict) -> None:
         **dataset_config_kwargs,
     )
 
-    result = trainer.fit()
+    try:
+        result = trainer.fit()
+    finally:
+        for handle in reversed(server_handles):
+            handle.stop()
 
     print_next_steps_panel(output_dir)
     try:
@@ -216,3 +284,54 @@ def ray_trainer(job_config: dict) -> None:
         pass
 
     return result
+
+
+def _judge_server_config(
+    grpo_rollout_cfg: dict,
+    judge_cfg: dict,
+    default_tensor_parallel_size: int,
+) -> dict:
+    return {
+        "tensor_parallel_size": int(
+            judge_cfg.get(
+                "tensor_parallel_size",
+                grpo_rollout_cfg.get(
+                    "judge_tensor_parallel_size",
+                    default_tensor_parallel_size,
+                ),
+            )
+        ),
+        "dtype": judge_cfg.get(
+            "dtype", grpo_rollout_cfg.get("judge_dtype", "bfloat16")
+        ),
+        "gpu_memory_utilization": float(
+            judge_cfg.get(
+                "gpu_memory_utilization",
+                grpo_rollout_cfg.get("judge_gpu_memory_utilization", 0.9),
+            )
+        ),
+        "max_model_len": judge_cfg.get(
+            "max_model_len",
+            grpo_rollout_cfg.get("judge_max_model_len"),
+        ),
+    }
+
+
+def _ray_object_store_memory() -> int:
+    # 40% of available RAM, capped by /dev/shm when present. Some SLURM nodes
+    # expose large host RAM but a small tmpfs-backed /dev/shm; Ray rejects an
+    # object store larger than that shared-memory mount.
+    memory_from_ram = int(psutil.virtual_memory().available * 0.4)
+    min_ray_object_store = 80 * 1024 * 1024
+
+    try:
+        shm = psutil.disk_usage("/dev/shm")
+    except OSError:
+        return memory_from_ram
+
+    memory_from_shm = int(shm.free * 0.8)
+    if memory_from_shm >= min_ray_object_store:
+        return min(memory_from_ram, memory_from_shm)
+
+    os.environ.setdefault("RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE", "1")
+    return memory_from_ram

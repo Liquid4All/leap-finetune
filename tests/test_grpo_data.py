@@ -1,8 +1,3 @@
-"""Schema validation and normalization tests for grpo / vlm_grpo datasets.
-
-Run with: ``uv run pytest --data tests/test_grpo_data.py -v``
-"""
-
 import importlib.util
 import pathlib
 
@@ -17,6 +12,9 @@ from leap_finetune.data_loaders.validate_loader import (
 )
 
 pytestmark = pytest.mark.data
+
+
+# === GRPO dataset validation ===
 
 
 # === Row filter: grpo (text) ===
@@ -290,7 +288,7 @@ class TestValidateGRPODatasetFormat:
             validate_dataset_format(ds, "vlm_grpo")
 
 
-# === SFT→GRPO normalization: messages split into prompt + solution ===
+# === SFT to GRPO normalization: messages split into prompt + solution ===
 
 
 class TestVLMGRPOSFTNormalization:
@@ -482,7 +480,7 @@ class TestVLMGroundingJSONExtract:
     # --- collapse modes ---
 
     def test_reject_repetition_collapse(self):
-        """The model emitting the same answer twice → invalid JSON."""
+        """The model emitting the same answer twice is invalid JSON."""
         text = (
             '[{"label": "a", "bbox": [0.1, 0.2, 0.5, 0.6]}]'
             '[{"label": "a", "bbox": [0.1, 0.2, 0.5, 0.6]}]'
@@ -720,7 +718,7 @@ class TestIFEvalReward:
         assert IFEVAL_MOD.ifeval_reward([c], solution=sol) == [1.0]
 
     def test_combined_constraints_partial(self):
-        """One constraint passes, one fails → 0.5."""
+        """One constraint passes and one fails, so the score is 0.5."""
         c = _assistant("Lots of words " * 30)
         sol = [
             '[{"instruction_id": ["punctuation:no_comma", '
@@ -777,7 +775,7 @@ class TestStrictFormatReward:
         assert VGJ._parse_gt_bboxes('{"not": "list"}') == []
 
     def test_iou_recipe_loads(self):
-        from leap_finetune.rewards import resolve_reward_specs
+        from leap_finetune.rl.rewards import resolve_reward_specs
 
         funcs, _ = resolve_reward_specs(
             {
@@ -804,7 +802,7 @@ class TestVLMGroundingIoUF1:
     def test_single_pred_partial_iou(self):
         # pred [0, 0, 0.5, 0.5] ∩ gt [0.25, 0, 0.75, 0.5]
         # intersection = 0.25 * 0.5 = 0.125; union = 0.25 + 0.25 - 0.125 = 0.375
-        # IoU = 1/3; single pred single GT ⇒ F1 = IoU
+        # IoU = 1/3; single pred single GT means F1 = IoU.
         c = self._c('[{"label": "cat", "bbox": [0.0, 0.0, 0.5, 0.5]}]')
         s = '[{"label": "cat", "bbox": [0.25, 0.0, 0.75, 0.5]}]'
         [r] = VGJ.iou_f1_reward([c], solution=[s])
@@ -835,7 +833,7 @@ class TestVLMGroundingIoUF1:
         assert r == pytest.approx(1.0, abs=1e-6)
 
     def test_hungarian_resolves_swapped_order(self):
-        # Pred in reversed order — Hungarian should still match both perfectly.
+        # Pred in reversed order; Hungarian should still match both perfectly.
         c = self._c(
             '[{"label": "dog", "bbox": [0.5, 0.5, 0.7, 0.7]},'
             ' {"label": "cat", "bbox": [0.1, 0.1, 0.3, 0.3]}]'
@@ -870,8 +868,8 @@ class TestVLMGroundingIoUF1:
         assert r == 0.0
 
     def test_correct_abstention(self):
-        # Empty list pred → _extract_bboxes returns None → num_pred = 0.
-        # Empty list GT → num_gt = 0. Both empty ⇒ abstention correct.
+        # Empty list pred means _extract_bboxes returns None, so num_pred = 0.
+        # Empty list GT means num_gt = 0. Both empty means abstention correct.
         c = self._c("[]")
         s = "[]"
         [r] = VGJ.iou_f1_reward([c], solution=[s])
@@ -907,7 +905,7 @@ class TestVLMGroundingIoUF1:
         assert VGJ._hungarian_match([[0, 0, 1, 1]], []) == []
 
     def test_recipe_uses_iou_f1(self):
-        from leap_finetune.rewards import resolve_reward_specs
+        from leap_finetune.rl.rewards import resolve_reward_specs
 
         funcs, weights = resolve_reward_specs(
             {
@@ -939,7 +937,7 @@ class TestVLMGroundingCIoUF1:
         return [{"role": "assistant", "content": text}]
 
     def test_single_pred_exact_match(self):
-        # Identical boxes ⇒ IoU = 1, center_dist = 0, aspect_ratio_match ⇒ CIoU = 1.
+        # Identical boxes mean IoU = 1, center_dist = 0, and CIoU = 1.
         c = self._c('[{"label": "cat", "bbox": [0.1, 0.1, 0.5, 0.5]}]')
         s = '[{"label": "cat", "bbox": [0.1, 0.1, 0.5, 0.5]}]'
         [r] = VGJ.ciou_f1_reward([c], solution=[s])
@@ -961,7 +959,7 @@ class TestVLMGroundingCIoUF1:
         )
 
     def test_multiple_gts_all_perfect(self):
-        # Two perfect matches on two GTs ⇒ CIoU = 1 for both ⇒ F1 = 1.
+        # Two perfect matches on two GTs means CIoU = 1 for both and F1 = 1.
         c = self._c(
             '[{"label": "cat", "bbox": [0.1, 0.1, 0.3, 0.3]},'
             ' {"label": "dog", "bbox": [0.5, 0.5, 0.7, 0.7]}]'
@@ -974,7 +972,7 @@ class TestVLMGroundingCIoUF1:
         assert r == pytest.approx(1.0, abs=1e-6)
 
     def test_hungarian_resolves_swapped_order(self):
-        # Reverse order ⇒ Hungarian (on CIoU=1 diagonal) still matches both.
+        # Reverse order still matches both through Hungarian assignment.
         c = self._c(
             '[{"label": "dog", "bbox": [0.5, 0.5, 0.7, 0.7]},'
             ' {"label": "cat", "bbox": [0.1, 0.1, 0.3, 0.3]}]'
@@ -1010,7 +1008,7 @@ class TestVLMGroundingCIoUF1:
         assert rewards == [0.0, 0.0]
 
     def test_disjoint_pair_clamped_not_negative(self):
-        """Disjoint boxes with different aspect ratio ⇒ raw CIoU < 0.
+        """Disjoint boxes with different aspect ratio produce raw CIoU < 0.
 
         The aggregator must clamp to 0 so precision/recall stay in
         [0, 1] and the final F1 is 0, not a negative number.
@@ -1045,7 +1043,7 @@ class TestVLMGroundingCIoUF1:
         assert matches[0][2] == pytest.approx(1 / 3, rel=1e-3)
 
     def test_recipe_uses_ciou_f1(self):
-        from leap_finetune.rewards import resolve_reward_specs
+        from leap_finetune.rl.rewards import resolve_reward_specs
 
         funcs, weights = resolve_reward_specs(
             {
@@ -1237,13 +1235,13 @@ class TestVLMGRPOImageLift:
 
 
 class TestVLMGRPOSpatialShapesAlias:
-    """Regression test for the spatial_shapes → image_sizes alias.
+    """Regression test for the spatial_shapes to image_sizes alias.
 
     LFM2-VL's processor returns ``spatial_shapes``, which TRL's GRPO
     trainer does NOT recognize in its multimodal whitelist. We
     piggyback on TRL's whitelisted ``image_sizes`` field instead:
     rename at the processor output so TRL propagates it through
-    _generate_and_score_completions → _compute_loss →
+    _generate_and_score_completions -> _compute_loss ->
     _get_per_token_logps_and_entropies, then rename back before
     calling the model forward (inside our
     _get_per_token_logps_and_entropies override).
@@ -1279,7 +1277,7 @@ class TestVLMGRPOSpatialShapesAlias:
         processor = self._make_stub_processor(stub_output)
         instance = self._build_instance(processor)
 
-        # Before the context manager: raw call → spatial_shapes present.
+        # Before the context manager: raw call returns spatial_shapes.
         assert "spatial_shapes" in processor()
         assert "image_sizes" not in processor()
 
@@ -1339,7 +1337,7 @@ class TestVLMGRPOSpatialShapesAlias:
             input_ids,
             attention_mask,
             logits_to_keep=5,
-            # The fields TRL's _compute_loss explicitly passes — image_sizes
+            # The fields TRL's _compute_loss explicitly passes; image_sizes
             # is the aliased spatial_shapes.
             pixel_values=torch.zeros(1, 3, 4, 4),
             image_sizes=torch.tensor([[2, 2]]),
@@ -1347,11 +1345,11 @@ class TestVLMGRPOSpatialShapesAlias:
         )
 
         assert "spatial_shapes" in captured_model_inputs, (
-            "The override must rename image_sizes → spatial_shapes at "
+            "The override must rename image_sizes to spatial_shapes at "
             "the model-forward boundary so LFM2-VL's forward can use it"
         )
         assert "image_sizes" not in captured_model_inputs, (
-            "image_sizes must be consumed, not passed through — LFM2-VL "
+            "image_sizes must be consumed, not passed through; LFM2-VL "
             "does not accept it"
         )
         assert torch.equal(

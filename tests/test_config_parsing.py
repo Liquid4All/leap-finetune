@@ -490,6 +490,29 @@ class TestRunNameInConfig:
 # === Invalid configs ===
 
 
+class TestModelName:
+    def test_model_name_passed_to_loader(self, tmp_path):
+        config = {
+            "project_name": "test",
+            "model_name": "LFM2.5-1.2B-Instruct",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.dataset.model_name == "LFM2.5-1.2B-Instruct"
+
+    def test_default_model_name(self, tmp_path):
+        config = {
+            "project_name": "test",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+        }
+        job = parse_job_config(write_config(config, tmp_path))
+        assert job.dataset.model_name == "LFM2-1.2B"
+
+
 class TestInvalidConfigs:
     def test_unknown_extends_raises(self, tmp_path):
         config = {
@@ -689,3 +712,85 @@ class TestSlurmGeneration:
             assert "#SBATCH --gpus-per-task=4" in content
             assert "LEAP_FINETUNE_FROM_SLURM=1" in content
             assert "leap-finetune" in content
+
+    def test_generate_multinode_slurm_script_starts_ray_cluster(self, tmp_path):
+        from leap_finetune.utils.slurm_generator import generate_slurm_script
+
+        config = {
+            "project_name": "multi_node_grpo",
+            "model_name": "LFM2-1.2B",
+            "training_type": "grpo",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_GRPO"},
+            "slurm": {
+                "nodes": 2,
+                "ntasks_per_node": 1,
+                "gpus_per_task": 1,
+            },
+        }
+        config_path = pathlib.Path(write_config(config, tmp_path))
+        script_path = generate_slurm_script(config_path, config, tmp_path)
+        content = script_path.read_text()
+
+        assert "source job_configs/slurms/utils/slurm_ray.sh" in content
+        assert "ray_slurm_init 2 1" in content
+        assert "ray_slurm_wait_ready 2 2" in content
+        assert "trap ray_slurm_stop_cluster EXIT" in content
+
+    def test_generate_server_mode_slurm_defaults_to_two_gpus(self, tmp_path):
+        from leap_finetune.utils.slurm_generator import generate_slurm_script
+
+        config = {
+            "project_name": "server_grpo",
+            "model_name": "LFM2-1.2B",
+            "training_type": "grpo",
+            "dataset": BASE_SFT_DATASET,
+            "grpo_rollout": {"server_gpus": 1},
+            "training_config": {
+                "extends": "DEFAULT_GRPO",
+                "vllm_mode": "server",
+            },
+        }
+        config_path = pathlib.Path(write_config(config, tmp_path))
+        script_path = generate_slurm_script(config_path, config, tmp_path)
+        content = script_path.read_text()
+
+        assert "#SBATCH --gpus-per-task=2" in content
+
+    def test_generate_grpo_judge_slurm_defaults_to_extra_gpu(self, tmp_path):
+        from leap_finetune.utils.slurm_generator import generate_slurm_script
+
+        config = {
+            "project_name": "judge_grpo",
+            "model_name": "LFM2-1.2B",
+            "training_type": "grpo",
+            "dataset": BASE_SFT_DATASET,
+            "rewards": {"judge": {"model": "LFM2-1.2B"}},
+            "training_config": {"extends": "DEFAULT_GRPO"},
+        }
+        config_path = pathlib.Path(write_config(config, tmp_path))
+        script_path = generate_slurm_script(config_path, config, tmp_path)
+        content = script_path.read_text()
+
+        assert "#SBATCH --gpus-per-task=2" in content
+
+    def test_generate_server_mode_judge_slurm_defaults_to_three_gpus(self, tmp_path):
+        from leap_finetune.utils.slurm_generator import generate_slurm_script
+
+        config = {
+            "project_name": "judge_server_grpo",
+            "model_name": "LFM2-1.2B",
+            "training_type": "grpo",
+            "dataset": BASE_SFT_DATASET,
+            "grpo_rollout": {"server_gpus": 1},
+            "rewards": {"judge": {"model": "LFM2-1.2B"}},
+            "training_config": {
+                "extends": "DEFAULT_GRPO",
+                "vllm_mode": "server",
+            },
+        }
+        config_path = pathlib.Path(write_config(config, tmp_path))
+        script_path = generate_slurm_script(config_path, config, tmp_path)
+        content = script_path.read_text()
+
+        assert "#SBATCH --gpus-per-task=3" in content

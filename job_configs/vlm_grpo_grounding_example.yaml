@@ -32,7 +32,7 @@ dataset:
 rewards:
   # Ships: VLMGroundingIoURecipe (strict format 0.1 + Hungarian IoU F1 1.0)
   #        VLMGroundingCIoURecipe (same + Complete-IoU aspect/center penalty)
-  recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+  recipe: "tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
 
 training_config:
   extends: "DEFAULT_VLM_GRPO"

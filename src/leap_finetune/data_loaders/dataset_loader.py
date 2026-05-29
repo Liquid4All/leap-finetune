@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -17,6 +17,7 @@ class DatasetLoader:
 
     dataset_path: str
     dataset_type: Literal["sft", "dpo", "vlm_sft", "grpo", "vlm_grpo"]
+    model_name: str | None = None
     limit: int | None = None
     split: str = "train"
     test_size: float = 0.2
@@ -24,6 +25,7 @@ class DatasetLoader:
     # Prepended to relative image paths in VLM datasets (e.g. "/data/images")
     image_root: str | None = None
     cache_dataset: bool = False
+    _validated: bool = field(default=False, repr=False)
 
     def __post_init__(self):
         if not (0 < self.test_size < 1):
@@ -33,6 +35,8 @@ class DatasetLoader:
 
     def quick_validate(self) -> None:
         """Fast validation on ~10 samples. Raises ValueError on issues."""
+        if self._validated:
+            return
         quick_validate_schema(
             dataset_path=self.dataset_path,
             dataset_type=self.dataset_type,
@@ -40,7 +44,9 @@ class DatasetLoader:
             split=self.split,
             num_samples=10,
             image_root=self.image_root,
+            model_name=self.model_name,
         )
+        self._validated = True
 
     def to_ray_dataset(self):
         """Create a lazy Ray Dataset from the source."""

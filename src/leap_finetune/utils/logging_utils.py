@@ -246,6 +246,10 @@ def get_ray_env_vars(
     else:
         env_vars["WANDB_MODE"] = wandb_mode if wandb_mode else "offline"
 
+    judge_config = os.environ.get("LEAP_JUDGE_LLM_CONFIG")
+    if judge_config:
+        env_vars["LEAP_JUDGE_LLM_CONFIG"] = judge_config
+
     return env_vars
 
 

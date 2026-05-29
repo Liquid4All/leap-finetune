@@ -8,29 +8,47 @@ import yaml
 from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 from leap_finetune.training_configs import PeftConfig, TrainingConfig
 from leap_finetune.training_configs.job_config import JobConfig
+from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
 from leap_finetune.utils.config_resolver import resolve_config_path
 
 logger = logging.getLogger(__name__)
 
 _REWARD_SEP = "::"
+_REWARDS_DIR = LEAP_FINETUNE_DIR / "rewards"
 
 
-def _resolve_reward_paths_to_absolute(rewards_cfg):
+def _resolve_reward_paths_to_absolute(rewards_cfg, config_dir: pathlib.Path):
     """Turn relative reward file paths into absolute paths.
 
-    Called on the driver (where CWD is the repo root) so that Ray Train
-    workers — whose CWD is a sandbox dir — can still find the files.
+    Called on the driver before Ray Train workers enter sandbox dirs.
+    Custom rewards may live next to the YAML, under the launch CWD, or in
+    the repo-level rewards directory.
     """
+    config_dir = pathlib.Path(config_dir).resolve()
+    cwd = pathlib.Path.cwd().resolve()
+    rewards_dir = _REWARDS_DIR.resolve()
 
     def _abs(spec: str) -> str:
         if _REWARD_SEP not in spec:
             return spec
         path_str, sep, name = spec.partition(_REWARD_SEP)
-        p = pathlib.Path(path_str.strip())
-        if not p.is_absolute():
-            p = pathlib.Path.cwd() / p
-            if p.exists():
-                return f"{p.resolve()}{sep}{name}"
+        raw = pathlib.Path(path_str.strip())
+        variants = [raw]
+        if raw.suffix == "":
+            variants.append(raw.with_suffix(".py"))
+
+        if raw.is_absolute():
+            candidates = [variant.resolve() for variant in variants]
+        else:
+            candidates = [
+                (base / variant).resolve()
+                for base in (config_dir, cwd, rewards_dir)
+                for variant in variants
+            ]
+
+        for candidate in dict.fromkeys(candidates):
+            if candidate.exists() and candidate.is_file():
+                return f"{candidate}{sep}{name}"
         return spec
 
     if isinstance(rewards_cfg, list):
@@ -39,6 +57,10 @@ def _resolve_reward_paths_to_absolute(rewards_cfg):
         out = dict(rewards_cfg)
         if "funcs" in out:
             out["funcs"] = [_abs(s) if isinstance(s, str) else s for s in out["funcs"]]
+        if "rewards" in out:
+            out["rewards"] = [
+                _abs(s) if isinstance(s, str) else s for s in out["rewards"]
+            ]
         if "recipe" in out and isinstance(out["recipe"], str):
             out["recipe"] = _abs(out["recipe"])
         return out
@@ -110,6 +132,8 @@ def parse_job_config(config_input: str) -> JobConfig:
             f"Invalid dataset type: '{ds_type}'. Must be one of: {sorted(valid_types)}"
         )
 
+    model_name = config_dict.get("model_name", "LFM2-1.2B")
+
     # GRPO is online — it doesn't need offline eval. Default test_size to a
     # tiny value so the pipeline still produces a non-empty eval shard, but
     # eval_strategy="no" in DEFAULT_GRPO means it's never iterated.
@@ -118,6 +142,7 @@ def parse_job_config(config_input: str) -> JobConfig:
     dataset = DatasetLoader(
         dataset_path=final_dataset_path,
         dataset_type=ds_type,
+        model_name=model_name,
         limit=ds_config.get("limit"),
         test_size=ds_config.get("test_size", default_test_size),
         subset=ds_config.get("subset"),
@@ -297,10 +322,10 @@ def parse_job_config(config_input: str) -> JobConfig:
     # we parse them unconditionally so customers get a clear error if they
     # accidentally set one on a non-GRPO run.
     rewards_cfg = config_dict.get("rewards")
-    # Pre-resolve relative reward paths to absolute while CWD is still the
-    # repo root (before Ray workers change it to a sandbox dir).
+    # Pre-resolve relative reward paths to absolute before Ray workers change
+    # into sandbox dirs.
     if rewards_cfg is not None:
-        rewards_cfg = _resolve_reward_paths_to_absolute(rewards_cfg)
+        rewards_cfg = _resolve_reward_paths_to_absolute(rewards_cfg, path_obj.parent)
     rl_env_cfg = config_dict.get("rl_env")
     grpo_rollout_cfg = config_dict.get("grpo_rollout")
 

@@ -2445,7 +2445,7 @@ provides-extras = ["rl-env"]
 cuda = [
     { name = "flash-attn", marker = "sys_platform == 'linux'", specifier = ">=2.8.0" },
     { name = "liger-kernel", marker = "sys_platform == 'linux'", specifier = ">=0.6.2" },
-    { name = "vllm", marker = "sys_platform == 'linux'", specifier = ">=0.19.0" },
+    { name = "vllm", marker = "sys_platform == 'linux'", specifier = "==0.19.0" },
 ]
 dev = [
     { name = "pre-commit", specifier = ">=4.2.0" },

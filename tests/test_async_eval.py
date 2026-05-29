@@ -33,7 +33,7 @@ class TestAsyncEvalConfig:
         assert cfg.mode == "sidecar"
         assert cfg.vllm_gpus == 1
         assert cfg.tensor_parallel_size == 1
-        assert cfg.sbatch.time == "00:30:00"
+        assert cfg.sbatch.time is None  # no default cap; inherits partition default
         assert cfg.on_overlap == "skip"
 
     def test_reserved_defaults(self):
@@ -282,7 +282,8 @@ class TestSidecarCallbackMarker:
             wandb_run_id=None,
         )
 
-        # Call on_evaluate; should skip without invoking sbatch
+        # Call on_step_end with should_evaluate=True; should skip submission
+        # because the .in_flight marker is present (on_overlap=skip).
         with patch.object(cb, "_submit") as submit_mock:
             with patch(
                 "leap_finetune.evaluation.sidecar_callback.is_rank_zero",
@@ -290,7 +291,8 @@ class TestSidecarCallbackMarker:
             ):
                 state = MagicMock()
                 state.global_step = 100
-                cb.on_evaluate(MagicMock(), state, MagicMock(), model=MagicMock())
+                control = MagicMock(should_evaluate=True)
+                cb.on_step_end(MagicMock(), state, control, model=MagicMock())
             assert not submit_mock.called
 
     def test_failure_disables_after_max_consecutive(self, tmp_path):
@@ -312,11 +314,12 @@ class TestSidecarCallbackMarker:
             return_value=True,
         ):
             with patch.object(cb, "_submit", side_effect=RuntimeError("boom")):
+                control = MagicMock(should_evaluate=True)
                 state = MagicMock()
                 state.global_step = 1
-                cb.on_evaluate(MagicMock(), state, MagicMock(), model=MagicMock())
+                cb.on_step_end(MagicMock(), state, control, model=MagicMock())
                 state.global_step = 2
-                cb.on_evaluate(MagicMock(), state, MagicMock(), model=MagicMock())
+                cb.on_step_end(MagicMock(), state, control, model=MagicMock())
 
         assert cb._disabled
 

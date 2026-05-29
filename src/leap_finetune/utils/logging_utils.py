@@ -209,38 +209,46 @@ def setup_training_environment() -> None:
     _ENV_DONE = True
 
 
-def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
-    """Environment variables passed to ray.init runtime_env.env_vars"""
+def get_ray_env_vars(
+    ray_temp_dir: str | None, multi_node: bool = False
+) -> dict[str, str]:
+    """Env vars for ray.init runtime_env. Multi-node skips the loopback NCCL pin."""
     env_vars = {
-        "TMPDIR": ray_temp_dir,
-        "TEMP": ray_temp_dir,
-        "TMP": ray_temp_dir,
-        "NCCL_IB_DISABLE": "1",
         "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
-        "NCCL_SOCKET_IFNAME": "lo",
         "TORCH_NCCL_BLOCKING_WAIT": "1",
-        "NCCL_TIMEOUT": "300",  # 5 minute safe timeout
+        "NCCL_TIMEOUT": "300",
         "RAY_DISABLE_IMPORT_WARNING": "1",
         "RAY_memory_monitor_refresh_ms": "0",
         "RAY_DATA_DISABLE_PROGRESS_BARS": "1",
         "RAY_IGNORE_UNHANDLED_ERRORS": "1",
-        # Reduce Ray logging verbosity
-        "RAY_LOG_TO_DRIVER": "0",  # Don't send worker logs to driver
-        "RAY_DEDUP_LOGS": "1",  # Keep deduplication enabled (shows ... for repeated messages)
+        "RAY_LOG_TO_DRIVER": "0",
+        "RAY_DEDUP_LOGS": "1",
         "RAY_DEDUP_LOGS_SKIP_REGEX": r"SplitCoordinator|ProcessGroupNCCL|object.store",
     }
 
+    if ray_temp_dir is not None:
+        env_vars["TMPDIR"] = ray_temp_dir
+        env_vars["TEMP"] = ray_temp_dir
+        env_vars["TMP"] = ray_temp_dir
+
+    if not multi_node:
+        # NCCL loopback pin is safe on a single node and avoids IB issues;
+        # on multi-node it would break cross-node collectives.
+        env_vars["NCCL_IB_DISABLE"] = "1"
+        env_vars["NCCL_SOCKET_IFNAME"] = "lo"
+
     wandb_api_key = os.environ.get("WANDB_API_KEY")
     wandb_mode = os.environ.get("WANDB_MODE")
-
     if wandb_api_key:
         env_vars["WANDB_API_KEY"] = wandb_api_key
         if wandb_mode:
             env_vars["WANDB_MODE"] = wandb_mode
-        # If mode not set but API key is, defaults to online (wandb default)
     else:
-        # No API key - default to offline mode to avoid login prompts
         env_vars["WANDB_MODE"] = wandb_mode if wandb_mode else "offline"
+
+    judge_config = os.environ.get("LEAP_JUDGE_LLM_CONFIG")
+    if judge_config:
+        env_vars["LEAP_JUDGE_LLM_CONFIG"] = judge_config
 
     return env_vars
 

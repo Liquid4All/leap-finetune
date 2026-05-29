@@ -17,10 +17,26 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def _get_attn_implementation() -> str:
-    if is_flash_attn_2_available():
+    if _is_flash_attn_2_usable():
         return "flash_attention_2"
     logger.warning("flash-attn not available, falling back to sdpa")
     return "sdpa"
+
+
+def _is_flash_attn_2_usable() -> bool:
+    if not is_flash_attn_2_available():
+        return False
+
+    try:
+        from flash_attn import flash_attn_func, flash_attn_varlen_func  # noqa: F401
+    except Exception as exc:
+        logger.warning(
+            "flash-attn is installed but failed to import (%s); falling back to sdpa",
+            exc,
+        )
+        return False
+
+    return True
 
 
 def _resolve_model_id(model_name: str) -> str:

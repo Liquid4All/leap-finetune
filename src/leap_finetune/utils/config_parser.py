@@ -1,4 +1,3 @@
-import importlib
 import logging
 import os
 import pathlib
@@ -9,9 +8,63 @@ import yaml
 from leap_finetune.data_loaders.dataset_loader import DatasetLoader
 from leap_finetune.training_configs import PeftConfig, TrainingConfig
 from leap_finetune.training_configs.job_config import JobConfig
+from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
 from leap_finetune.utils.config_resolver import resolve_config_path
 
 logger = logging.getLogger(__name__)
+
+_REWARD_SEP = "::"
+_REWARDS_DIR = LEAP_FINETUNE_DIR / "rewards"
+
+
+def _resolve_reward_paths_to_absolute(rewards_cfg, config_dir: pathlib.Path):
+    """Turn relative reward file paths into absolute paths.
+
+    Called on the driver before Ray Train workers enter sandbox dirs.
+    Custom rewards may live next to the YAML, under the launch CWD, or in
+    the repo-level rewards directory.
+    """
+    config_dir = pathlib.Path(config_dir).resolve()
+    cwd = pathlib.Path.cwd().resolve()
+    rewards_dir = _REWARDS_DIR.resolve()
+
+    def _abs(spec: str) -> str:
+        if _REWARD_SEP not in spec:
+            return spec
+        path_str, sep, name = spec.partition(_REWARD_SEP)
+        raw = pathlib.Path(path_str.strip())
+        variants = [raw]
+        if raw.suffix == "":
+            variants.append(raw.with_suffix(".py"))
+
+        if raw.is_absolute():
+            candidates = [variant.resolve() for variant in variants]
+        else:
+            candidates = [
+                (base / variant).resolve()
+                for base in (config_dir, cwd, rewards_dir)
+                for variant in variants
+            ]
+
+        for candidate in dict.fromkeys(candidates):
+            if candidate.exists() and candidate.is_file():
+                return f"{candidate}{sep}{name}"
+        return spec
+
+    if isinstance(rewards_cfg, list):
+        return [_abs(s) if isinstance(s, str) else s for s in rewards_cfg]
+    if isinstance(rewards_cfg, dict):
+        out = dict(rewards_cfg)
+        if "funcs" in out:
+            out["funcs"] = [_abs(s) if isinstance(s, str) else s for s in out["funcs"]]
+        if "rewards" in out:
+            out["rewards"] = [
+                _abs(s) if isinstance(s, str) else s for s in out["rewards"]
+            ]
+        if "recipe" in out and isinstance(out["recipe"], str):
+            out["recipe"] = _abs(out["recipe"])
+        return out
+    return rewards_cfg
 
 
 def generate_run_name(
@@ -61,23 +114,6 @@ def generate_run_name(
     return name
 
 
-def _import_callable(dotted_path: str):
-    """Import a callable from a dotted module path like 'my_module.preprocess_fn'."""
-    try:
-        module_path, func_name = dotted_path.rsplit(".", 1)
-    except ValueError:
-        raise ValueError(
-            f"preprocess_fn must be a dotted path like 'my_module.func', got: {dotted_path}"
-        )
-    module = importlib.import_module(module_path)
-    fn = getattr(module, func_name, None)
-    if fn is None:
-        raise ValueError(f"Function '{func_name}' not found in module '{module_path}'")
-    if not callable(fn):
-        raise ValueError(f"'{dotted_path}' is not callable")
-    return fn
-
-
 def parse_job_config(config_input: str) -> JobConfig:
     path_obj = resolve_config_path(config_input)
 
@@ -89,31 +125,29 @@ def parse_job_config(config_input: str) -> JobConfig:
     dataset_path_env = os.getenv("DATASET_PATH")
     final_dataset_path = dataset_path_env if dataset_path_env else ds_config.get("path")
 
-    valid_types = {"sft", "dpo", "vlm_sft"}
+    valid_types = {"sft", "dpo", "vlm_sft", "grpo", "vlm_grpo"}
     ds_type = ds_config.get("type")
     if ds_type not in valid_types:
         raise ValueError(
             f"Invalid dataset type: '{ds_type}'. Must be one of: {sorted(valid_types)}"
         )
 
-    # Resolve preprocess_fn from dotted import path
-    preprocess_fn = None
-    preprocess_fn_path = ds_config.get("preprocess_fn")
-    if preprocess_fn_path:
-        preprocess_fn = _import_callable(preprocess_fn_path)
-
     model_name = config_dict.get("model_name", "LFM2-1.2B")
+
+    # GRPO is online — it doesn't need offline eval. Default test_size to a
+    # tiny value so the pipeline still produces a non-empty eval shard, but
+    # eval_strategy="no" in DEFAULT_GRPO means it's never iterated.
+    default_test_size = 0.01 if ds_type in ("grpo", "vlm_grpo") else 0.2
 
     dataset = DatasetLoader(
         dataset_path=final_dataset_path,
         dataset_type=ds_type,
         model_name=model_name,
         limit=ds_config.get("limit"),
-        test_size=ds_config.get("test_size", 0.2),
+        test_size=ds_config.get("test_size", default_test_size),
         subset=ds_config.get("subset"),
         image_root=ds_config.get("image_root"),
         cache_dataset=ds_config.get("cache_dataset", False),
-        preprocess_fn=preprocess_fn,
     )
 
     # === Training config with extends support ===
@@ -137,6 +171,8 @@ def parse_job_config(config_input: str) -> JobConfig:
             "sft": "DEFAULT_SFT",
             "dpo": "DEFAULT_DPO",
             "vlm_sft": "DEFAULT_VLM_SFT",
+            "grpo": "DEFAULT_GRPO",
+            "vlm_grpo": "DEFAULT_VLM_GRPO",
         }
         if training_type not in training_type_to_config:
             raise ValueError(f"Unknown training type: {training_type}")
@@ -281,6 +317,30 @@ def parse_job_config(config_input: str) -> JobConfig:
     # === Benchmark evaluation config ===
     benchmark_configs = config_dict.get("benchmarks")
 
+    # === GRPO-specific top-level blocks ===
+    # These are only meaningful for training_type in ("grpo", "vlm_grpo") but
+    # we parse them unconditionally so customers get a clear error if they
+    # accidentally set one on a non-GRPO run.
+    rewards_cfg = config_dict.get("rewards")
+    # Pre-resolve relative reward paths to absolute before Ray workers change
+    # into sandbox dirs.
+    if rewards_cfg is not None:
+        rewards_cfg = _resolve_reward_paths_to_absolute(rewards_cfg, path_obj.parent)
+    rl_env_cfg = config_dict.get("rl_env")
+    grpo_rollout_cfg = config_dict.get("grpo_rollout")
+
+    if training_type not in ("grpo", "vlm_grpo"):
+        for key, val in (
+            ("rewards", rewards_cfg),
+            ("rl_env", rl_env_cfg),
+            ("grpo_rollout", grpo_rollout_cfg),
+        ):
+            if val is not None:
+                raise ValueError(
+                    f"Config key `{key}` is only valid for training_type in "
+                    f"('grpo', 'vlm_grpo'); got training_type={training_type!r}."
+                )
+
     return JobConfig(
         job_name=project_name,
         model_name=config_dict.get("model_name", "LFM2-1.2B"),
@@ -289,4 +349,8 @@ def parse_job_config(config_input: str) -> JobConfig:
         training_config=final_training_config,
         peft_config=peft_config,
         benchmark_configs=benchmark_configs,
+        rewards=rewards_cfg,
+        rl_env=rl_env_cfg,
+        grpo_rollout=grpo_rollout_cfg,
+        config_dir=str(path_obj.parent.resolve()),
     )

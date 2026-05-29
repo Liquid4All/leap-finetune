@@ -1,0 +1,108 @@
+# VLM GRPO — visual grounding with strict-format + IoU-F1 reward.
+#
+# Same `messages` parquet drives vlm_sft / vlm_dpo / vlm_grpo. The loader
+# splits each row's messages into `prompt` (user/system turns with the
+# image) and `solution` (last assistant text — a JSON array of labelled
+# bounding boxes in normalized [0, 1] coordinates). Example row:
+#
+#   {"messages": [
+#     {"role": "user", "content": [
+#       {"type": "image", "image": "rel/path.jpg"},
+#       {"type": "text",  "text": "Find the red car."}]},
+#     {"role": "assistant", "content": [{"type": "text", "text":
+#       '[{"label": "red car", "bbox": [0.12, 0.34, 0.58, 0.71]}]'}]}
+#   ]}
+#
+# `dataset.image_root` is prepended to relative image paths.
+#
+# Launch:
+#   uv run leap-finetune job_configs/vlm_grpo_grounding_example.yaml
+#   sbatch job_configs/slurms/vlm_grpo_grounding_example.sh
+
+project_name: "vlm_grpo_grounding"
+model_name: "LFM2.5-VL-450M"
+training_type: "vlm_grpo"
+
+dataset:
+  path: "your-org/your-grounding-parquet"   # replace with your parquet / HF id
+  type: "vlm_grpo"
+  image_root: "/path/to/your/images"        # prepended to relative image paths
+  test_size: 0.01                           # held-out split for eval_strategy
+
+rewards:
+  # Ships: VLMGroundingIoURecipe (strict format 0.1 + Hungarian IoU F1 1.0)
+  #        VLMGroundingCIoURecipe (same + Complete-IoU aspect/center penalty)
+  recipe: "tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+
+training_config:
+  extends: "DEFAULT_VLM_GRPO"
+
+  # --- core optimization ---
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  num_generations: 4
+  learning_rate: 1e-6
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+
+  # --- generation / completion budget ---
+  max_completion_length: 128
+  temperature: 1.0
+  top_p: 1.0
+  top_k: 0
+
+  # --- GRPO / TRL v1 loss knobs ---
+  beta: 0.01                              # KL-to-ref brake; avoids format collapse
+  epsilon: 0.2                            # PPO-style ratio clip
+  loss_type: "dapo"
+  scale_rewards: "group"
+  mask_truncated_completions: true
+
+  # --- vLLM rollout + IS correction ---
+  # token_truncate (not TRL's default sequence_mask): per-token IS clipping,
+  # so outlier tokens get clipped instead of zeroing whole sequences. Critical
+  # for stable GRPO on long-ish CoTs.
+  use_vllm: true
+  vllm_mode: "colocate"
+  vllm_gpu_memory_utilization: 0.25
+  vllm_enable_sleep_mode: false
+  vllm_importance_sampling_correction: true
+  vllm_importance_sampling_mode: "token_truncate"
+
+  # --- image handling ---
+  do_image_splitting: true
+
+  # --- eval + checkpoint schedule ---
+  eval_strategy: "steps"
+  eval_steps: 2000
+  eval_on_start: true
+  save_strategy: "steps"
+  save_steps: 2000
+  logging_steps: 10
+  logging_first_step: true
+  log_completions: false
+  num_completions_to_print: 4
+
+  # --- tracking ---
+  wandb_logging: true
+
+  # --- memory ---
+  bf16: true
+  gradient_checkpointing: true
+
+# BenchmarkEvalCallback: runs on every eval step (eval_strategy above) and
+# logs `benchmark/<name>/<metric>` to stdout + wandb. Each entry points at a
+# jsonl/parquet of `{messages: [user, assistant]}` samples; the last message
+# is treated as ground truth.
+benchmarks:
+  max_new_tokens: 256
+  benchmarks:
+    - name: "refcoco_m"
+      path: "/path/to/refcoco_m_val.jsonl"
+      metric: "grounding_iou"
+      max_new_tokens: 256
+
+peft_config:
+  use_peft: false

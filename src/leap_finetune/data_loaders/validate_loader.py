@@ -291,12 +291,71 @@ def get_row_filter(dataset_type: str) -> Callable[[dict], bool]:
 
         return True
 
+    def is_valid_grpo(row: dict) -> bool:
+        """Check if row has a valid GRPO format: non-empty `prompt` (str or messages list)."""
+        prompt = row.get("prompt")
+        if not prompt:
+            return False
+        # Accept string prompts (standard format) or messages-list prompts
+        # (conversational format).
+        if isinstance(prompt, str):
+            return bool(prompt.strip())
+        if isinstance(prompt, list):
+            if len(prompt) == 0:
+                return False
+            first = prompt[0]
+            return isinstance(first, dict) and "role" in first and "content" in first
+        return False
+
+    def is_valid_vlm_grpo(row: dict) -> bool:
+        """VLM GRPO: `prompt` must be a messages list with loadable image items.
+
+        Mirrors `is_valid_vlm_sft` but reads from `prompt` instead of `messages`
+        because GRPO's dataset contract uses the `prompt` column name.
+        """
+        prompt = row.get("prompt")
+        if not prompt or not isinstance(prompt, list) or len(prompt) == 0:
+            return False
+
+        # Import inside function body for Ray serialization compatibility
+        from leap_finetune.data_loaders.image_loader import is_image_loadable
+
+        for message in prompt:
+            if not isinstance(message, dict):
+                return False
+            if "role" not in message or "content" not in message:
+                return False
+
+            content = message["content"]
+            if not isinstance(content, list) or len(content) == 0:
+                return False
+
+            for item in content:
+                if not isinstance(item, dict) or "type" not in item:
+                    return False
+                item_type = item["type"]
+                if item_type == "image":
+                    if not isinstance(item.get("image"), str):
+                        return False
+                    if not is_image_loadable(item["image"]):
+                        return False
+                elif item_type == "text":
+                    if not isinstance(item.get("text"), str):
+                        return False
+                else:
+                    return False
+        return True
+
     if dataset_type == "sft":
         return is_valid_sft
     elif dataset_type == "dpo":
         return is_valid_dpo
     elif dataset_type == "vlm_sft":
         return is_valid_vlm_sft
+    elif dataset_type == "grpo":
+        return is_valid_grpo
+    elif dataset_type == "vlm_grpo":
+        return is_valid_vlm_grpo
     else:
         return lambda row: True
 
@@ -321,6 +380,14 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
     def normalize_vlm_sft(row: dict) -> dict:
         import json
         import pathlib
+
+        import numpy as np
+
+        # Parquet deserialization returns list columns as ndarrays.
+        for key in ("messages", *_CONVERSATION_ALIASES):
+            val = row.get(key)
+            if isinstance(val, np.ndarray):
+                row[key] = val.tolist()
 
         # === 1. Find and rename conversation column ===
         for col in _CONVERSATION_ALIASES:
@@ -373,12 +440,172 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
                 row["prompt"] = ""
         return row
 
+    def _split_messages(messages: list) -> tuple[list, str | None]:
+        """Split an SFT messages list into GRPO (prompt, solution)."""
+        prompt_turns: list = []
+        assistant_text: str | None = None
+        for msg in messages:
+            if not isinstance(msg, dict):
+                prompt_turns.append(msg)
+                continue
+            if msg.get("role") != "assistant":
+                prompt_turns.append(msg)
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                assistant_text = content
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        assistant_text = item.get("text", "")
+                        break
+        return prompt_turns, assistant_text
+
+    def normalize_grpo(row: dict) -> dict:
+        """Normalize a text GRPO row.
+
+        Same SFT schema works for ``sft`` → ``dpo`` → ``grpo``: the standard
+        ``messages`` column is split into ``prompt`` (non-assistant turns)
+        and ``solution`` (last assistant text). A pre-existing ``solution``
+        column is preserved. Native ``prompt`` and legacy ``question`` /
+        ``query`` / ``input`` aliases remain supported.
+        """
+        import json
+
+        import numpy as np
+
+        for key in ("prompt", "messages", "conversation", "conversations"):
+            val = row.get(key)
+            if isinstance(val, np.ndarray):
+                row[key] = val.tolist()
+
+        source_alias = None
+        if row.get("prompt") is None:
+            for alias in (
+                "messages",
+                "conversation",
+                "conversations",
+                "chat",
+                "dialogue",
+            ):
+                if row.get(alias) is not None:
+                    source_alias = alias
+                    break
+
+        if source_alias is not None:
+            messages = row.pop(source_alias)
+            if isinstance(messages, str):
+                try:
+                    messages = json.loads(messages)
+                except (json.JSONDecodeError, TypeError):
+                    row["prompt"] = messages
+                    return row
+            if not isinstance(messages, list) or not messages:
+                row["prompt"] = messages
+                return row
+            prompt_turns, assistant_text = _split_messages(messages)
+            row["prompt"] = prompt_turns or messages
+            if assistant_text is not None and not row.get("solution"):
+                row["solution"] = assistant_text
+
+        if row.get("prompt") is None:
+            for alias in ("query", "question", "input"):
+                if row.get(alias):
+                    row["prompt"] = row[alias]
+                    break
+
+        return row
+
+    def normalize_vlm_grpo(row: dict) -> dict:
+        """Normalize a VLM GRPO row.
+
+        Same as ``normalize_grpo`` — the VLM SFT ``messages`` format is
+        split into ``prompt`` (user/system turns) and ``solution`` (last
+        assistant text) so the same dataset file drives ``vlm_sft``,
+        ``vlm_dpo``, and ``vlm_grpo``.
+        """
+        import json
+        import pathlib
+
+        import numpy as np
+
+        for key in ("prompt", "messages", "conversation", "conversations"):
+            val = row.get(key)
+            if isinstance(val, np.ndarray):
+                row[key] = val.tolist()
+
+        source_alias = None
+        if "prompt" not in row:
+            for alias in (
+                "messages",
+                "conversation",
+                "conversations",
+                "chat",
+                "dialogue",
+            ):
+                if alias in row:
+                    source_alias = alias
+                    break
+
+        if source_alias is not None:
+            messages = row.pop(source_alias)
+            if isinstance(messages, str):
+                try:
+                    messages = json.loads(messages)
+                except (json.JSONDecodeError, TypeError):
+                    row["prompt"] = messages
+                    return row
+            if not isinstance(messages, list) or not messages:
+                row["prompt"] = messages
+                return row
+            prompt_turns, assistant_text = _split_messages(messages)
+            row["prompt"] = prompt_turns or messages
+            if assistant_text is not None and not row.get("solution"):
+                row["solution"] = assistant_text
+
+        if "prompt" not in row:
+            return row
+
+        prompt = row["prompt"]
+        if isinstance(prompt, str):
+            try:
+                prompt = json.loads(prompt)
+                row["prompt"] = prompt
+            except (json.JSONDecodeError, TypeError):
+                return row
+
+        if not isinstance(prompt, list):
+            return row
+
+        if image_root:
+            root = pathlib.PurePosixPath(image_root)
+            for message in prompt:
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if not isinstance(content, list):
+                    continue
+                for item in content:
+                    if (
+                        isinstance(item, dict)
+                        and item.get("type") == "image"
+                        and isinstance(item.get("image"), str)
+                        and not pathlib.PurePosixPath(item["image"]).is_absolute()
+                    ):
+                        item["image"] = str(root / item["image"])
+
+        return row
+
     if dataset_type == "vlm_sft":
         return normalize_vlm_sft
     elif dataset_type == "sft":
         return normalize_sft
     elif dataset_type == "dpo":
         return add_dpo_prompt
+    elif dataset_type == "grpo":
+        return normalize_grpo
+    elif dataset_type == "vlm_grpo":
+        return normalize_vlm_grpo
     else:
         return lambda row: row
 
@@ -463,8 +690,135 @@ def validate_dataset_format(dataset: Dataset, dataset_type: str) -> Dataset:
         return validate_dpo_format(dataset)
     elif dataset_type == "vlm_sft":
         return validate_vlm_sft_format(dataset)
+    elif dataset_type == "grpo":
+        return validate_grpo_format(dataset)
+    elif dataset_type == "vlm_grpo":
+        return validate_vlm_grpo_format(dataset)
     else:
         raise ValueError(f"Unsupported dataset_type: {dataset_type}")
+
+
+def validate_grpo_format(dataset: Dataset) -> Dataset:
+    """Validate GRPO dataset: must have a `prompt` column (str or messages list).
+
+    GRPO datasets only require `prompt`. Any additional columns are forwarded
+    to reward functions as kwargs by TRL.
+    """
+    columns = dataset.column_names
+    if "prompt" not in columns:
+        raise ValueError(
+            f"GRPO dataset is missing the `prompt` column. Found columns: {columns}. "
+            f"Each row must have a 'prompt' field containing either a plain string or a "
+            f"list of messages like [{{'role': 'user', 'content': '...'}}]."
+        )
+
+    invalid: list[int] = []
+    for i in range(len(dataset)):
+        prompt = dataset[i]["prompt"]
+        if not prompt:
+            invalid.append(i)
+            continue
+        if isinstance(prompt, str):
+            if not prompt.strip():
+                invalid.append(i)
+            continue
+        if isinstance(prompt, list):
+            if len(prompt) == 0:
+                invalid.append(i)
+                continue
+            first = prompt[0]
+            if not (isinstance(first, dict) and "role" in first and "content" in first):
+                invalid.append(i)
+            continue
+        # Neither str nor list
+        invalid.append(i)
+
+    if invalid:
+        shown = invalid[:5]
+        msg = f"Found {len(invalid)} GRPO samples with invalid `prompt` field (indices: {shown}"
+        if len(invalid) > 5:
+            msg += f"... and {len(invalid) - 5} more"
+        msg += "). Each prompt must be a non-empty string or a messages list."
+        raise ValueError(msg)
+
+    return dataset
+
+
+def validate_vlm_grpo_format(dataset: Dataset) -> Dataset:
+    """Validate VLM GRPO dataset: `prompt` is a messages list with loadable images.
+
+    Mirrors `validate_vlm_sft_format` structure but reads from the `prompt` column.
+    """
+    columns = dataset.column_names
+    if "prompt" not in columns:
+        raise ValueError(f"VLM GRPO dataset missing `prompt` column. Found: {columns}")
+
+    sample_indices = [0, min(5, len(dataset) - 1), min(50, len(dataset) - 1)]
+
+    for idx in sample_indices:
+        if idx >= len(dataset):
+            continue
+
+        sample = dataset[idx]
+        prompt = sample["prompt"]
+
+        if not isinstance(prompt, list):
+            raise ValueError(
+                f"Sample {idx}: VLM GRPO `prompt` must be a list of messages, got {type(prompt)}"
+            )
+        if len(prompt) == 0:
+            raise ValueError(f"Sample {idx}: `prompt` cannot be empty")
+
+        for msg_idx, message in enumerate(prompt):
+            if not isinstance(message, dict):
+                raise ValueError(
+                    f"Sample {idx}, message {msg_idx}: must be dict, got {type(message)}"
+                )
+            if "role" not in message or "content" not in message:
+                raise ValueError(
+                    f"Sample {idx}, message {msg_idx}: missing 'role' or 'content'"
+                )
+
+            content = message["content"]
+            if not isinstance(content, list) or len(content) == 0:
+                raise ValueError(
+                    f"Sample {idx}, message {msg_idx}: `content` must be a non-empty list"
+                )
+
+            for ci, item in enumerate(content):
+                if not isinstance(item, dict) or "type" not in item:
+                    raise ValueError(
+                        f"Sample {idx}, message {msg_idx}, content {ci}: must be dict with 'type'"
+                    )
+                item_type = item["type"]
+
+                if item_type == "text":
+                    if not isinstance(item.get("text"), str):
+                        raise ValueError(
+                            f"Sample {idx}, message {msg_idx}, content {ci}: 'text' must be str"
+                        )
+                elif item_type == "image":
+                    image_data = item.get("image")
+                    if not isinstance(image_data, str):
+                        raise ValueError(
+                            f"Sample {idx}, message {msg_idx}, content {ci}: 'image' must be a "
+                            f"path string (got {type(image_data).__name__}). Use paths, not PIL objects."
+                        )
+                    from leap_finetune.data_loaders.image_loader import (
+                        is_image_loadable,
+                    )
+
+                    if not is_image_loadable(image_data):
+                        raise ValueError(
+                            f"Sample {idx}, message {msg_idx}, content {ci}: image not loadable: {image_data}"
+                        )
+                else:
+                    raise ValueError(
+                        f"Sample {idx}, message {msg_idx}, content {ci}: unsupported type {item_type!r}"
+                    )
+
+    logger.info(f"VLM GRPO dataset validation passed: {len(dataset)} samples")
+    return dataset
 
 
 def validate_sft_format(dataset: Dataset) -> Dataset:

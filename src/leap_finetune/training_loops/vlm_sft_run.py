@@ -26,6 +26,7 @@ from leap_finetune.utils.logging_utils import (
 )
 from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_model
 from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
+from leap_finetune.utils.vlm_optimizer import build_vlm_param_groups, log_per_group_lrs
 
 logger = logging.getLogger(__name__)
 
@@ -49,52 +50,12 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
         if self.optimizer is not None:
             return self.optimizer
 
-        base_lr = self.args.learning_rate
-        weight_decay = float(self.args.weight_decay)
-
-        # Group trainable params by matching prefix
-        grouped: dict[str, list] = {prefix: [] for prefix in self.lr_multipliers}
-        ungrouped: list = []
-
-        for name, param in self.model.named_parameters():
-            if not param.requires_grad:
-                continue
-            matched = False
-            for prefix in self.lr_multipliers:
-                if name.startswith(prefix):
-                    grouped[prefix].append(param)
-                    matched = True
-                    break
-            if not matched:
-                ungrouped.append(param)
-
-        # Build optimizer param groups (order matches _optimizer_group_names)
-        optimizer_groups = []
-        self._optimizer_group_names = []
-        for prefix, params in grouped.items():
-            if not params:
-                continue
-            mult = self.lr_multipliers[prefix]
-            optimizer_groups.append(
-                {"params": params, "lr": base_lr * mult, "weight_decay": weight_decay}
-            )
-            short_name = prefix.removeprefix("model.")
-            self._optimizer_group_names.append(short_name)
-            logger.info(
-                "Param group '%s': %d params, lr=%.2e",
-                prefix,
-                len(params),
-                base_lr * mult,
-            )
-
-        if ungrouped:
-            optimizer_groups.append(
-                {"params": ungrouped, "lr": base_lr, "weight_decay": weight_decay}
-            )
-            self._optimizer_group_names.append("ungrouped")
-            logger.info(
-                "Param group 'ungrouped': %d params, lr=%.2e", len(ungrouped), base_lr
-            )
+        optimizer_groups, self._optimizer_group_names = build_vlm_param_groups(
+            self.model,
+            self.lr_multipliers,
+            base_lr=self.args.learning_rate,
+            weight_decay=float(self.args.weight_decay),
+        )
 
         betas = (self.args.adam_beta1, self.args.adam_beta2)
         self.optimizer = torch.optim.AdamW(
@@ -103,12 +64,7 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
         return self.optimizer
 
     def log(self, logs: dict[str, float], *args, **kwargs) -> None:
-        # Inject per-component LRs so wandb tracks each group separately
-        if self.optimizer is not None and "learning_rate" in logs:
-            for name, group in zip(
-                self._optimizer_group_names, self.optimizer.param_groups
-            ):
-                logs[f"lr/{name}"] = group["lr"]
+        log_per_group_lrs(self.optimizer, self._optimizer_group_names, logs)
         super().log(logs, *args, **kwargs)
 
 

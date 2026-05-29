@@ -1,7 +1,7 @@
 import inspect
 from enum import Enum
 
-from . import dpo_configs, peft_configs, sft_configs, vlm_sft_config
+from . import dpo_configs, grpo_configs, peft_configs, sft_configs, vlm_sft_config
 
 
 def _discover_configs(
@@ -35,6 +35,7 @@ _training_config_dict = {}
 _training_config_dict.update(_discover_configs(sft_configs))
 _training_config_dict.update(_discover_configs(dpo_configs))
 _training_config_dict.update(_discover_configs(vlm_sft_config))
+_training_config_dict.update(_discover_configs(grpo_configs))
 
 TrainingConfig = Enum("TrainingConfig", _training_config_dict)
 

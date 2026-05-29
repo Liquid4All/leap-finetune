@@ -294,18 +294,21 @@ def ray_trainer(job_config: dict) -> None:
         dataset_config=ray_dataset_config,
     )
 
+    result = None
     try:
         result = trainer.fit()
     finally:
         for handle in reversed(server_handles):
             handle.stop()
 
+        # Ensure failed pytest cases and repeated in-process launches do not
+        # inherit a stale local Ray runtime from the previous training attempt.
+        try:
+            ray.shutdown()
+        except Exception:
+            pass
+
     print_next_steps_panel(output_dir)
-    # Ensure Ray cleans up resources promptly to avoid post-training hangs
-    try:
-        ray.shutdown()
-    except Exception:
-        pass
 
     return result
 

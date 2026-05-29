@@ -73,7 +73,8 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
     candidates: list[str] = []
     env_tmp = os.environ.get("RAY_TMPDIR")
     if env_tmp:
-        candidates.append(env_tmp)
+        Path(env_tmp).mkdir(parents=True, exist_ok=True)
+        return env_tmp
     if preferred:
         candidates.append(preferred)
     home_default = str(Path.home() / "tmp-ray")

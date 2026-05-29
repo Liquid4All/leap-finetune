@@ -10,6 +10,7 @@ from trl import GRPOConfig, GRPOTrainer
 
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_loading import load_vlm_model
+from leap_finetune.data_loading.image_loader import load_image
 from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
     create_vlm_benchmarks_from_config,
@@ -109,8 +110,6 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         Images are loaded once as PIL here so downstream paths don't
         each re-open the file.
         """
-        from PIL import Image
-
         for example in inputs:
             if example.get("images") is not None:
                 continue
@@ -129,9 +128,12 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
                         continue
                     img = part.get("image")
                     if isinstance(img, str):
-                        img = Image.open(img).convert("RGB")
+                        img = load_image(img)
                     if img is not None:
                         collected.append(img)
+                        # TRL expects lifted images to correspond to placeholder
+                        # image parts, not parts that still carry the image value.
+                        part.pop("image", None)
             if collected:
                 example["images"] = collected
 
@@ -279,8 +281,6 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         multimodal preprocessor iterates string inputs
         character-by-character, so we must hand it real PIL objects.
         """
-        from PIL import Image
-
         patched_prompts = []
         for prompt in prompts:
             new_prompt = []
@@ -294,7 +294,7 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
                             and part.get("type") == "image"
                             and isinstance(part.get("image"), str)
                         ):
-                            img = Image.open(part["image"]).convert("RGB")
+                            img = load_image(part["image"])
                             new_content.append({"type": "image", "image": img})
                         else:
                             new_content.append(part)

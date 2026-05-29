@@ -18,6 +18,7 @@ GRPO_EXCLUDED_KEYS = {
     "trackio_space_id",
     "resume_from_checkpoint",
     "leap_run_name_template",
+    "chat_template_path",
 }
 
 # VLM GRPO adds the per-component LR knobs that are consumed by

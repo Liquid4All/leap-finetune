@@ -16,7 +16,7 @@ Environment overrides:
   CPUS_PER_GPU             CPUs per GPU (default: 14)
   TIME_LIMIT               SLURM time limit (default: 06:00:00)
   OUTPUT_DIR               Test result directory (default: /lambdafs/alay/test-results)
-  TMP_ROOT                 Node temp root (default: /lambdafs/alay/tmp)
+  TMP_ROOT                 Node temp root (default: /tmp/$USER)
   PYTEST_ARGS              pytest args to run inside SLURM
   EXTRA_SBATCH_DIRECTIVES  Newline-separated extra #SBATCH directives
 EOF
@@ -51,8 +51,8 @@ GPUS_PER_TASK="${GPUS_PER_TASK:-4}"
 CPUS_PER_GPU="${CPUS_PER_GPU:-14}"
 TIME_LIMIT="${TIME_LIMIT:-06:00:00}"
 OUTPUT_DIR="${OUTPUT_DIR:-/lambdafs/alay/test-results}"
-TMP_ROOT="${TMP_ROOT:-/lambdafs/alay/tmp}"
-PYTEST_ARGS="${PYTEST_ARGS:-tests/test_dense_e2e.py tests/test_moe_e2e.py tests/test_vlm_e2e.py --dense --moe --vlm}"
+TMP_ROOT="${TMP_ROOT:-/tmp/${USER}}"
+PYTEST_ARGS="${PYTEST_ARGS:-tests/test_dense_e2e.py tests/test_moe_e2e.py tests/test_vlm_e2e.py tests/test_grpo_e2e.py tests/test_vlm_grpo_e2e.py --dense --moe --vlm}"
 EXTRA_SBATCH_DIRECTIVES="${EXTRA_SBATCH_DIRECTIVES:-}"
 
 mkdir -p "${SLURM_DIR}" "${ROOT_DIR}/logs" "${OUTPUT_DIR}" "${TMP_ROOT}"
@@ -90,6 +90,8 @@ source .venv/bin/activate
 export TMPDIR=${TMP_ROOT}/leap-e2e-\${SLURM_JOB_ID:-manual}
 mkdir -p "\${TMPDIR}"
 export RAY_TMPDIR=\${TMPDIR}/ray
+export TORCH_EXTENSIONS_DIR=\${TMPDIR}/torch_extensions
+export TRITON_CACHE_DIR=\${TMPDIR}/triton_cache
 export OUTPUT_DIR=${OUTPUT_DIR}
 export PYTHONUNBUFFERED=1
 

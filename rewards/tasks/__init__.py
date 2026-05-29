@@ -1,12 +1,4 @@
-"""Shipped GRPO task bundles.
-
-Each subdirectory defines one task: reward functions and a ``Recipe``
-class that wires them up with default weights. Reference a recipe from
-YAML::
-
-    rewards:
-      recipe: "./rewards/tasks/<task>/recipe.py::<RecipeName>"
-"""
+# === Shipped GRPO task bundles ===
 
 from .gsm8k import GSM8KRecipe, gsm8k_reward
 from .ifeval import IFEvalRecipe, ifeval_reward

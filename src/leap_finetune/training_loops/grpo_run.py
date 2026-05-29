@@ -1,21 +1,3 @@
-"""Text GRPO training loop.
-
-Mirrors ``dpo_run.py`` / ``sft_run.py`` but uses TRL v1's ``GRPOTrainer``
-and does NOT pre-tokenize — GRPO generates completions online each step.
-
-Unlike SFT/DPO we do NOT subclass ``RayDataLoaderMixin``: GRPO's
-``RepeatSampler`` + ``accelerator.prepare`` handles per-rank prompt
-distribution natively, and bypassing it would break group-relative
-reward normalization. The Ray Train driver instead passes the full
-(unsplit) dataset to every worker via
-``DataConfig(datasets_to_split=[])``.
-
-Reward functions come from the YAML ``rewards:`` block. If ``rl_env:``
-is set, an OpenEnv rollout drives ``env.reset/step`` around TRL's
-generation helper and forwards the env's per-step reward as an extra
-``env_reward`` kwarg picked up by an auto-prepended reward function.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -31,7 +13,7 @@ from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
     create_llm_benchmarks_from_config,
 )
-from leap_finetune.rewards import resolve_reward_specs
+from leap_finetune.rl.rewards import resolve_reward_specs
 from leap_finetune.training_configs.grpo_configs import GRPO_EXCLUDED_KEYS
 from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
@@ -49,23 +31,16 @@ from leap_finetune.utils.trainer_mixins import run_training_safely
 logger = logging.getLogger(__name__)
 
 
-class LFMGRPOTrainer(GRPOTrainer):
-    """Text GRPO trainer.
-
-    Intentionally a passthrough subclass — GRPOTrainer's native
-    ``get_train_dataloader`` / ``_get_train_sampler`` handle prompt-group
-    distribution across ranks via ``RepeatSampler``. Unlike SFT/DPO, we must
-    NOT override the dataloader or we would break group-relative rewards.
-    """
+# === Text GRPO loop ===
+#
+# GRPO generates completions online, so it must use TRL's native
+# RepeatSampler/accelerate path. The Ray driver gives every worker the full
+# dataset; TRL then distributes repeated prompt groups across ranks.
 
 
 def grpo_run(training_config: dict) -> None:
-    """GRPO training loop (Ray Train worker entrypoint)."""
     setup_worker_logging()
 
-    # Each worker sees the full dataset because the driver set
-    # DataConfig(datasets_to_split=[]) for GRPO. TRL + accelerate then
-    # distribute repeated prompt indices across ranks.
     train_ds_ray = ray.train.get_dataset_shard("train")
     eval_ds_ray = ray.train.get_dataset_shard("eval")
     train_dataset = ray_dataset_to_hf(train_ds_ray)
@@ -75,7 +50,7 @@ def grpo_run(training_config: dict) -> None:
     model_name = training_config.get("model_name", "")
     job_name = training_config.get("job_name", "leap-ft-run")
 
-    # MoE variants auto-switch to FSDP for full fine-tuning, DeepSpeed with PEFT
+    # MoE variants auto-switch to FSDP for full fine-tuning.
     is_moe = is_moe_model_from_name(model_name)
     use_fsdp = is_moe and peft_config is None
 
@@ -86,7 +61,6 @@ def grpo_run(training_config: dict) -> None:
     if resume_from:
         logger.info("Resuming from checkpoint: %s", resume_from)
 
-    # Filter out non-GRPOConfig keys (everything in GRPO_EXCLUDED_KEYS)
     excluded_keys = GRPO_EXCLUDED_KEYS | {"leap_run_name_template"}
     if use_fsdp:
         excluded_keys = excluded_keys | {"deepspeed"}
@@ -106,7 +80,6 @@ def grpo_run(training_config: dict) -> None:
         resume_from_checkpoint=resume_from,
     )
 
-    # Build GRPOConfig
     config_kwargs = {
         "report_to": tracker,
         "run_name": job_name,
@@ -118,7 +91,6 @@ def grpo_run(training_config: dict) -> None:
 
     training_args = GRPOConfig(**config_kwargs)
 
-    # Load model + tokenizer
     model, tokenizer = load_model(model_name)
     # GRPO requires left-padded prompts so generated completions append cleanly.
     tokenizer.padding_side = "left"
@@ -136,12 +108,12 @@ def grpo_run(training_config: dict) -> None:
         training_config.get("config_dir") or ".",
     )
 
-    # Optional OpenEnv rollout. Deferred import so the rl-env extra stays optional.
+    # Deferred import keeps OpenEnv optional for plain reward-function GRPO.
     rl_env_cfg = training_config.get("rl_env")
     rollout_func = None
     if rl_env_cfg is not None:
         try:
-            from leap_finetune.rl_envs import (  # noqa: PLC0415
+            from leap_finetune.rl.environments import (  # noqa: PLC0415
                 build_openenv_rollout_func,
                 connect_openenv,
                 env_reward,
@@ -170,11 +142,10 @@ def grpo_run(training_config: dict) -> None:
             "to use an OpenEnv environment's reward."
         )
 
-    # Apply reward_weights if resolved from YAML
     if reward_weights is not None:
         training_args.reward_weights = reward_weights
 
-    trainer = LFMGRPOTrainer(
+    trainer = GRPOTrainer(
         model=model,
         reward_funcs=reward_funcs,
         args=training_args,

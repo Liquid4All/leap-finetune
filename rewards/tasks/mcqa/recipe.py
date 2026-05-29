@@ -1,26 +1,20 @@
-"""MCQA — letter-match reward for multiple-choice QA.
-
-Usage::
-
-    rewards:
-      recipe: "./rewards/tasks/mcqa/recipe.py::MCQARecipe"
-
-Required columns: ``prompt`` (question with labeled options),
-``solution`` (bare letter ``A``..``J`` or a sentence from which the
-letter can be parsed, e.g. ``"Answer: B"``).
-"""
-
 from __future__ import annotations
 
 import re
 
-from leap_finetune.rewards import Recipe
+from leap_finetune.rl.rewards import Recipe
 
 _ANSWER_COLON = re.compile(
     r"[Aa]nswer(?:\s+is)?\**\s*[:\-]?\s*\**\s*\(?([A-J])\)?",
 )
 _BOXED = re.compile(r"\\boxed\{\s*([A-J])\s*\}")
 _TRAILING_LETTER = re.compile(r"(?:^|[^A-Za-z])([A-J])[\.\)\*]?\s*$")
+
+
+# === MCQA letter match ===
+#
+# Required columns: prompt, solution. The solution may be a bare letter A-J or
+# a sentence that contains the answer letter.
 
 
 def _extract_letter(text: str) -> str | None:
@@ -74,7 +68,7 @@ def mcqa_reward(completions, solution=None, **kwargs) -> list[float | None]:
 
 
 class MCQARecipe(Recipe):
-    description = "MCQA — letter match on A..J; last match in the completion wins."
+    description = "MCQA - letter match on A..J; last match in the completion wins."
 
     required_columns = ("prompt", "solution")
 

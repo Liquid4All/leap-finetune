@@ -1,26 +1,16 @@
-"""VLM visual grounding — strict-format + F1 of matched box overlaps.
-
-Usage::
-
-    rewards:
-      recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
-      # or swap to:
-      recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingCIoURecipe"
-
-The completion — and the ``solution`` column — is a bare JSON array of
-``{"label", "bbox"}`` objects with bounding boxes in normalized
-``[0, 1]`` ``(x1, y1, x2, y2)`` coordinates::
-
-    [{"label": "cat", "bbox": [x1, y1, x2, y2]}, ...]
-"""
-
 from __future__ import annotations
 
 import json
 import math
 from typing import Sequence
 
-from leap_finetune.rewards import Recipe
+from leap_finetune.rl.rewards import Recipe
+
+
+# === VLM grounding box rewards ===
+#
+# Completions and solutions are JSON arrays of {"label", "bbox"} objects with
+# normalized [0, 1] bounding boxes in [x1, y1, x2, y2] format.
 
 
 def _iou(pred: Sequence[float], gt: Sequence[float]) -> float:
@@ -251,7 +241,7 @@ def ciou_f1_reward(completions, solution=None, **kwargs) -> list[float]:
 
 class VLMGroundingIoURecipe(Recipe):
     description = (
-        "VLM grounding — JSON bbox array with strict format check and "
+        "VLM grounding - JSON bbox array with strict format check and "
         "soft F1 of Hungarian-matched IoUs."
     )
 
@@ -275,7 +265,7 @@ class VLMGroundingIoURecipe(Recipe):
 
 class VLMGroundingCIoURecipe(VLMGroundingIoURecipe):
     description = (
-        "VLM grounding — JSON bbox array with strict format check and "
+        "VLM grounding - JSON bbox array with strict format check and "
         "soft F1 of Hungarian-matched CIoUs."
     )
 

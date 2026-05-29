@@ -1,22 +1,30 @@
-"""Tests for the GRPO reward-spec loader.
-
-Run with: `uv run pytest tests/test_rewards_loader.py -v`
-Or with CLI flag: `uv run pytest --configs tests/test_rewards_loader.py`
-"""
-
 import pathlib
 import textwrap
 
 import pytest
 
-from leap_finetune.rewards import resolve_reward_specs
+from leap_finetune.rl.rewards import resolve_reward_specs
 from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
 
 pytestmark = pytest.mark.configs
 
 
+# === Reward loader fixtures ===
+
+
 REPO_ROOT = LEAP_FINETUNE_DIR
 SHIPPED_REWARDS = REPO_ROOT / "rewards"
+
+
+def test_legacy_reward_import_path_remains_available():
+    from leap_finetune.rewards import (  # noqa: PLC0415
+        Recipe as LegacyRecipe,
+        resolve_reward_specs as legacy_resolve_reward_specs,
+    )
+    from leap_finetune.rl.rewards import Recipe  # noqa: PLC0415
+
+    assert LegacyRecipe is Recipe
+    assert legacy_resolve_reward_specs is resolve_reward_specs
 
 
 class TestResolveRewardSpecs:
@@ -40,11 +48,64 @@ class TestResolveRewardSpecs:
                 "./rewards/length.py::length_reward",
                 "./rewards/accuracy.py::accuracy_reward",
             ],
-            tmp_path,  # any dir — paths resolve against CWD first
+            tmp_path,
         )
         assert len(funcs) == 2
         assert [f.__name__ for f in funcs] == ["length_reward", "accuracy_reward"]
         assert weights is None
+
+    def test_shipped_reward_can_be_referenced_by_function_name(self, tmp_path):
+        funcs, weights = resolve_reward_specs(["length_reward"], tmp_path)
+        assert len(funcs) == 1
+        assert funcs[0].__name__ == "length_reward"
+        assert weights is None
+
+    def test_judge_preset_adds_configured_reward(self, tmp_path):
+        funcs, weights = resolve_reward_specs(
+            {
+                "judge": {
+                    "model": "LFM2-1.2B",
+                    "base_url": "http://localhost:8001",
+                    "weight": 0.7,
+                }
+            },
+            tmp_path,
+        )
+        assert [f.__name__ for f in funcs] == ["judge_llm_reward"]
+        assert weights == [0.7]
+
+    def test_judge_preset_stacks_after_regular_funcs(self, tmp_path):
+        funcs, weights = resolve_reward_specs(
+            {
+                "funcs": ["length_reward"],
+                "judge": {
+                    "model": "LFM2-1.2B",
+                    "base_url": "http://localhost:8001",
+                },
+                "weights": [0.2, 1.0],
+            },
+            tmp_path,
+        )
+        assert [f.__name__ for f in funcs] == ["length_reward", "judge_llm_reward"]
+        assert weights == [0.2, 1.0]
+
+    def test_judge_weight_must_be_numeric(self, tmp_path):
+        with pytest.raises(ValueError, match="judge.weight"):
+            resolve_reward_specs(
+                {
+                    "judge": {
+                        "model": "LFM2-1.2B",
+                        "base_url": "http://localhost:8001",
+                        "weight": "high",
+                    }
+                },
+                tmp_path,
+            )
+
+    def test_shipped_reward_can_use_path_relative_to_rewards_dir(self, tmp_path):
+        funcs, _ = resolve_reward_specs(["length::length_reward"], tmp_path)
+        assert len(funcs) == 1
+        assert funcs[0].__name__ == "length_reward"
 
     def test_shipped_reward_is_callable_with_completions(self, tmp_path):
         funcs, _ = resolve_reward_specs(
@@ -84,7 +145,7 @@ class TestResolveRewardSpecs:
         assert len(funcs) == 1
 
     def test_customer_file_in_tmp_dir(self, tmp_path):
-        """Customer drops a Python file next to their YAML — config_dir fallback finds it."""
+        """A Python reward next to the YAML resolves before worker sandboxing."""
         custom = tmp_path / "my_reward.py"
         custom.write_text(
             textwrap.dedent(
@@ -166,6 +227,15 @@ class TestRecipes:
             "iou_f1_reward",
         ]
 
+    def test_recipe_can_use_path_relative_to_rewards_dir(self, tmp_path):
+        funcs, weights = resolve_reward_specs(
+            {"recipe": "tasks/gsm8k/recipe.py::GSM8KRecipe"},
+            tmp_path,
+        )
+        assert len(funcs) == 1
+        assert weights == [1.0]
+        assert funcs[0].__name__ == "gsm8k_reward"
+
     def test_recipe_plus_individual_funcs_stacks(self, tmp_path):
         funcs, weights = resolve_reward_specs(
             {
@@ -230,13 +300,15 @@ class TestRecipes:
     def test_non_recipe_class_rejected(self, tmp_path):
         not_a_recipe = tmp_path / "not_a_recipe.py"
         not_a_recipe.write_text("class NotARecipe:\n    pass\n")
-        with pytest.raises(ValueError, match="subclass leap_finetune.rewards.Recipe"):
+        with pytest.raises(
+            ValueError, match="subclass leap_finetune.rl.rewards.Recipe"
+        ):
             resolve_reward_specs({"recipe": f"{not_a_recipe}::NotARecipe"}, tmp_path)
 
     def test_empty_rewards_list_rejected(self, tmp_path):
         empty = tmp_path / "empty_recipe.py"
         empty.write_text(
-            "from leap_finetune.rewards import Recipe\n"
+            "from leap_finetune.rl.rewards import Recipe\n"
             "class EmptyRecipe(Recipe):\n"
             "    def rewards(self):\n"
             "        return []\n"
@@ -248,7 +320,7 @@ class TestRecipes:
         """rewards() must return list of (callable, float) tuples."""
         wrong = tmp_path / "wrong_shape.py"
         wrong.write_text(
-            "from leap_finetune.rewards import Recipe\n"
+            "from leap_finetune.rl.rewards import Recipe\n"
             "def f(completions, **kw):\n"
             "    return [1.0] * len(completions)\n"
             "class WrongRecipe(Recipe):\n"
@@ -265,7 +337,7 @@ class TestRecipes:
         shipped = pathlib.Path("rewards/tasks/vlm_grounding/recipe.py").resolve()
         custom = tmp_path / "my_recipe.py"
         custom.write_text(
-            "from leap_finetune.rewards import load_recipe\n"
+            "from leap_finetune.rl.rewards import load_recipe\n"
             f"BaseRecipe = load_recipe(r'{shipped}::VLMGroundingIoURecipe')\n"
             "\n"
             "def my_extra_reward(completions, **kwargs):\n"
@@ -289,7 +361,7 @@ class TestRecipes:
         shipped = pathlib.Path("rewards/tasks/vlm_grounding/recipe.py").resolve()
         custom = tmp_path / "my_recipe.py"
         custom.write_text(
-            "from leap_finetune.rewards import load_recipe\n"
+            "from leap_finetune.rl.rewards import load_recipe\n"
             f"BaseRecipe = load_recipe(r'{shipped}::VLMGroundingIoURecipe')\n"
             "\n"
             "class ExtendedRecipe(BaseRecipe):\n"

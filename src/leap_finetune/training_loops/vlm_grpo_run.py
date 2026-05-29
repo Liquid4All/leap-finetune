@@ -1,10 +1,3 @@
-"""VLM GRPO training loop.
-
-Mirrors ``grpo_run.py`` plus two VLM-specific additions: per-component
-LR multipliers and patches to TRL's multimodal data path so VLM images
-actually reach the training forward pass (see ``LFMVLMGRPOTrainer``).
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -21,7 +14,7 @@ from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
     create_vlm_benchmarks_from_config,
 )
-from leap_finetune.rewards import resolve_reward_specs
+from leap_finetune.rl.rewards import resolve_reward_specs
 from leap_finetune.training_configs.grpo_configs import VLM_GRPO_EXCLUDED_KEYS
 from leap_finetune.training_configs.vlm_sft_config import DEFAULT_LR_MULTIPLIERS
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
@@ -39,17 +32,20 @@ from leap_finetune.utils.vlm_optimizer import build_vlm_param_groups, log_per_gr
 logger = logging.getLogger(__name__)
 
 
+# === VLM GRPO loop ===
+
+
 class LFMVLMGRPOTrainer(GRPOTrainer):
     """VLM GRPO trainer with three additions on top of ``trl.GRPOTrainer``:
 
-    * **Per-component LR multipliers** — vision encoder trains at
-      0.1× base LR by default so pretrained features aren't corrupted.
-    * **Image-lift on the data path** — TRL detects multimodal inputs
+    * Per-component LR multipliers: vision encoder trains at
+      0.1x base LR by default so pretrained features aren't corrupted.
+    * Image-lift on the data path: TRL detects multimodal inputs
       only via a top-level ``images`` column, but our schema embeds
       images inside ``prompt`` messages. Without this patch TRL falls
       through to the text-only branch and ``pixel_values`` never
       reaches the training forward pass.
-    * **VLM-aware log-prob computation** — skips TRL's per-sample
+    * VLM-aware log-prob computation: skips TRL's per-sample
       ``pixel_values`` slicing (which assumes ``(B, C, H, W)``,
       incompatible with LFM2-VL's patch-concatenated layout) and
       forwards ``spatial_shapes`` under the correct kwarg name.
@@ -57,6 +53,12 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
     Unlike VLM SFT we do NOT subclass ``RayDataLoaderMixin``: GRPO's
     ``RepeatSampler`` must go through accelerate's per-rank
     distribution, so we use ``GRPOTrainer``'s native dataloader.
+
+    Upstreaming boundary: LR multipliers, reward loading, Ray config, and
+    dataset path/PIL normalization are local. Prompt-embedded image detection,
+    processor kwarg preservation, and non-BCHW VLM log-prob handling are
+    general TRL concerns. Any Transformers-side LFM2-VL fix should be additive
+    compatibility, not a breaking rename away from ``spatial_shapes``.
     """
 
     def __init__(self, lr_multipliers: dict[str, float] | None = None, **kwargs: Any):
@@ -92,7 +94,7 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         (or ``["image"]``). Our schema embeds images inside the prompt
         messages, so without this lift TRL takes the text-only branch,
         ``forward_kwargs`` comes back empty, and training runs with
-        ``pixel_values=None`` — the vision tower silently detaches from
+        ``pixel_values=None``; the vision tower silently detaches from
         the gradient while generation still uses real images.
 
         Images are loaded once as PIL here so downstream paths don't
@@ -142,7 +144,7 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         forward boundary in ``_get_per_token_logps_and_entropies``.
 
         Context-scoped so eval / benchmark paths (which call
-        ``processor`` → ``model.generate`` directly) see the original
+        ``processor`` -> ``model.generate`` directly) see the original
         processor and aren't handed an ``image_sizes=`` kwarg the
         model doesn't know.
 
@@ -150,7 +152,7 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         so we can't patch by assigning to ``processor.__call__``. The
         documented way to rebind method resolution on a live instance
         is to swap ``obj.__class__`` into a subclass that overrides
-        the method — which is what we build and cache here.
+        the method, which is what we build and cache here.
         """
         processor = getattr(self, "processing_class", None)
         if processor is None:
@@ -295,10 +297,8 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
 
 
 def vlm_grpo_run(training_config: dict) -> None:
-    """VLM GRPO training loop (Ray Train worker entrypoint)."""
     setup_worker_logging()
 
-    # Full dataset on each worker; GRPO sampler handles per-rank distribution.
     train_ds_ray = ray.train.get_dataset_shard("train")
     eval_ds_ray = ray.train.get_dataset_shard("eval")
     train_dataset = ray_dataset_to_hf(train_ds_ray)
@@ -326,7 +326,6 @@ def vlm_grpo_run(training_config: dict) -> None:
     if resume_from:
         logger.info("Resuming from checkpoint: %s", resume_from)
 
-    # Strip VLM-specific + GRPO-excluded keys before building GRPOConfig.
     excluded_keys = VLM_GRPO_EXCLUDED_KEYS | {"leap_run_name_template"}
     train_config_filtered = {
         k: v for k, v in train_config.items() if k not in excluded_keys
@@ -355,7 +354,7 @@ def vlm_grpo_run(training_config: dict) -> None:
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
     )
-    # GRPO needs left padding; VLM processors hold the tokenizer internally.
+    # GRPO appends completions to prompts, so left padding keeps positions sane.
     if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
         processor.tokenizer.padding_side = "left"
         if processor.tokenizer.pad_token is None:
@@ -369,12 +368,12 @@ def vlm_grpo_run(training_config: dict) -> None:
         training_config.get("config_dir") or ".",
     )
 
-    # Optional OpenEnv rollout. Deferred import so the rl-env extra stays optional.
+    # Deferred import keeps OpenEnv optional for plain reward-function GRPO.
     rl_env_cfg = training_config.get("rl_env")
     rollout_func = None
     if rl_env_cfg is not None:
         try:
-            from leap_finetune.rl_envs import (  # noqa: PLC0415
+            from leap_finetune.rl.environments import (  # noqa: PLC0415
                 build_openenv_rollout_func,
                 connect_openenv,
                 env_reward,

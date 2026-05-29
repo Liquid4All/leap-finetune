@@ -1,17 +1,27 @@
-"""Tests for the OpenEnv ↔ GRPO rollout_func adapter.
-
-No Docker / no real OpenEnv required — we drive ``build_openenv_rollout_func``
-with a fake in-process env and a monkey-patched ``generate_rollout_completions``.
-
-Run with: `uv run pytest tests/test_rl_env_adapter.py -v`
-"""
-
 import pytest
 
-from leap_finetune.rl_envs.adapter import build_openenv_rollout_func, connect_openenv
-from leap_finetune.rl_envs.env_reward import env_reward
+from leap_finetune.rl.environments.adapter import (
+    build_openenv_rollout_func,
+    connect_openenv,
+)
+from leap_finetune.rl.environments.env_reward import env_reward
 
 pytestmark = pytest.mark.configs
+
+
+# === Compatibility imports ===
+
+
+def test_legacy_rl_envs_import_path_remains_available():
+    from leap_finetune.rl_envs.adapter import (  # noqa: PLC0415
+        build_openenv_rollout_func as legacy_build_openenv_rollout_func,
+    )
+    from leap_finetune.rl_envs.env_reward import (  # noqa: PLC0415
+        env_reward as legacy_env_reward,
+    )
+
+    assert legacy_build_openenv_rollout_func is build_openenv_rollout_func
+    assert legacy_env_reward is env_reward
 
 
 # === env_reward extractor ===

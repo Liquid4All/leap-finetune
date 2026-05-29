@@ -1,22 +1,17 @@
-"""GSM8K — exact-match reward on the final numeric answer.
-
-Usage::
-
-    rewards:
-      recipe: "./rewards/tasks/gsm8k/recipe.py::GSM8KRecipe"
-
-Required columns: ``prompt`` (question), ``solution`` (gold — either
-a bare number like ``"72"`` or a CoT string ending with ``"#### 72"``).
-"""
-
 from __future__ import annotations
 
 import re
 
-from leap_finetune.rewards import Recipe
+from leap_finetune.rl.rewards import Recipe
 
 _GSM8K_MARKER = re.compile(r"####\s*([\-\+]?[\d,\.]+)")
 _ANY_NUMBER = re.compile(r"([\-\+]?[\d,\.]+)")
+
+
+# === GSM8K numeric exact match ===
+#
+# Required columns: prompt, solution. The solution may be a bare number or a
+# chain-of-thought string ending in "#### <answer>".
 
 
 def _normalize_number(s) -> str | None:
@@ -82,7 +77,7 @@ def gsm8k_reward(completions, solution=None, **kwargs) -> list[float | None]:
 
 
 class GSM8KRecipe(Recipe):
-    description = "GSM8K — exact match on the final numeric answer."
+    description = "GSM8K - exact match on the final numeric answer."
 
     required_columns = ("prompt", "solution")
 

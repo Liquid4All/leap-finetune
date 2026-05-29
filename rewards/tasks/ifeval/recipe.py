@@ -1,34 +1,19 @@
-"""IFEval — fraction of instruction-following constraints satisfied.
-
-Usage::
-
-    rewards:
-      recipe: "./rewards/tasks/ifeval/recipe.py::IFEvalRecipe"
-
-Required columns: ``prompt`` (instruction), ``solution`` (JSON
-constraint spec)::
-
-    [{"instruction_id": ["punctuation:no_comma",
-                         "length_constraints:number_words"],
-      "kwargs": [null, {"relation": "at least", "num_words": 300}]}]
-
-Supported instruction IDs: ``punctuation:no_comma``,
-``length_constraints:number_words``,
-``detectable_format:number_highlighted_sections``,
-``count:keywords_multiple``, ``counting:letter_count_in_word``.
-Unsupported IDs are skipped; samples with zero supported constraints
-return ``None`` so GRPO drops them from advantage computation.
-"""
-
 from __future__ import annotations
 
 import json
 import re
 
-from leap_finetune.rewards import Recipe
+from leap_finetune.rl.rewards import Recipe
 
 _HIGHLIGHT_PATTERN = re.compile(r"\*[^*\n]+\*")
 _WORD_PATTERN = re.compile(r"\b[\w'-]+\b")
+
+
+# === IFEval constraint scoring ===
+#
+# Required columns: prompt, solution. The solution is a JSON constraint spec.
+# Unsupported instruction IDs are skipped; samples with zero supported
+# constraints return None so GRPO drops them from advantage computation.
 
 
 def _completion_text(completion) -> str:
@@ -164,7 +149,7 @@ def ifeval_reward(completions, solution=None, **kwargs) -> list[float | None]:
 
 
 class IFEvalRecipe(Recipe):
-    description = "IFEval — fraction of instruction constraints satisfied."
+    description = "IFEval - fraction of instruction constraints satisfied."
 
     required_columns = ("prompt", "solution")
 

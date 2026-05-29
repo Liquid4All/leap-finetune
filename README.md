@@ -498,6 +498,46 @@ Benchmark data uses the **same format as training data** (HF messages schema). A
 
 See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data format examples, YAML reference, and how to add custom metrics.
 
+### Async Eval (vLLM)
+
+By default, every `eval_steps` blocks training until benchmarks finish. For large generation suites this dominates wall-clock time. Add an `async_eval` block to run benchmarks **without blocking training**, using vLLM for the actual generation. Results are logged to wandb at the **same global-step axis** as today — dashboards look identical.
+
+Three modes (default is `sync` = today's behavior):
+
+| Mode       | Engine          | Pauses training? | GPUs reserved                    | Latency                   | Multi-node training  | Best for                                              |
+| ---------- | --------------- | ---------------- | -------------------------------- | ------------------------- | -------------------- | ----------------------------------------------------- |
+| `sync`     | HF transformers | Yes              | None                             | Immediate                 | ✓                    | Small/fast eval suites; default                       |
+| `sidecar`  | vLLM            | **No**           | None (slurm-scheduled per cycle) | Slurm queue + eval time   | ✓                    | Tight clusters; eval should be free of training cost  |
+| `reserved` | vLLM            | **No**           | N throughout the run             | ~30–60s respawn per cycle | **Single-node only** | Spare GPUs on one node, want predictable eval latency |
+
+`reserved` mode carves its GPUs off the same SLURM allocation as
+training via the driver's `CUDA_VISIBLE_DEVICES`, which only affects
+the head node. Multi-node training will raise `NotImplementedError`
+at startup — use `sidecar` instead, which scales to any node count.
+
+Both async modes serve generation through vLLM. Logprob benchmarks fall back to a sync HF model inside the runner if the chosen vLLM build doesn't support them.
+
+```yaml
+# Opt in by adding this block. See job_configs/sft_with_async_eval_example.yaml
+async_eval:
+  mode: sidecar # sync (default) | sidecar | reserved
+  vllm_gpus: 1
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.9
+
+  # mode=sidecar: short sbatch job per eval_steps
+  sbatch:
+    time: "00:30:00"
+    # partition / account default to inheriting from the parent job
+
+  # mode=reserved: long-running vllm-serve on dedicated GPUs (single-node only for v1)
+  reserved:
+    weight_reload: respawn
+    server_port: 8100
+```
+
+Failures are isolated: if eval crashes or sbatch is rejected, training continues. After `failure.max_consecutive` consecutive failures the callback disables itself for the rest of the run. See [`job_configs/sft_with_async_eval_example.yaml`](./job_configs/sft_with_async_eval_example.yaml) for a full example.
+
 ### Post-Training Evaluation with lmms-eval
 
 For comprehensive post-training evaluation on standard VLM benchmarks (MMMU, OCRBench, RefCOCO, POPE, etc.), install the optional `lmms-eval` extra:

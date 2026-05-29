@@ -11,10 +11,11 @@ from trl import GRPOConfig, GRPOTrainer
 
 from leap_finetune.data_loaders.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.evaluation import (
-    BenchmarkEvalCallback,
     create_vlm_benchmarks_from_config,
+    make_eval_callback,
 )
 from leap_finetune.rl.rewards import resolve_reward_specs
+from leap_finetune.training_loops.sft_run import _get_wandb_run_id
 from leap_finetune.training_configs.grpo_configs import VLM_GRPO_EXCLUDED_KEYS
 from leap_finetune.training_configs.vlm_sft_config import DEFAULT_LR_MULTIPLIERS
 from leap_finetune.utils.checkpoint_callback import LeapCheckpointCallback
@@ -422,7 +423,18 @@ def vlm_grpo_run(training_config: dict) -> None:
     if benchmark_configs and benchmark_configs.get("benchmarks"):
         benchmarks = create_vlm_benchmarks_from_config(benchmark_configs, processor)
         if benchmarks:
-            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
+            trainer.add_callback(
+                make_eval_callback(
+                    benchmarks=benchmarks,
+                    async_eval_cfg=training_config.get("async_eval"),
+                    benchmark_configs=benchmark_configs,
+                    server_url=training_config.get("async_eval_server_url"),
+                    eval_gpu_ids=training_config.get("async_eval_gpu_ids", ""),
+                    output_dir=output_dir,
+                    wandb_run_id=_get_wandb_run_id(),
+                    config_dir=training_config.get("config_dir"),
+                )
+            )
 
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)

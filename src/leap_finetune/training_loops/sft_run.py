@@ -6,8 +6,8 @@ from transformers import Trainer, TrainingArguments
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 from leap_finetune.evaluation import (
-    BenchmarkEvalCallback,
     create_llm_benchmarks_from_config,
+    make_eval_callback,
 )
 from leap_finetune.training_configs.distributed_configs import MOE_FSDP_CONFIG
 from leap_finetune.training_configs.sft_configs import SFT_EXCLUDED_KEYS
@@ -25,6 +25,16 @@ from leap_finetune.utils.peft import apply_peft_to_model, merge_and_save_peft_mo
 from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin, run_training_safely
 
 logger = logging.getLogger(__name__)
+
+
+def _get_wandb_run_id() -> str | None:
+    """Best-effort fetch of the active wandb run id (rank 0 only)."""
+    try:
+        import wandb
+
+        return wandb.run.id if wandb.run is not None else None
+    except Exception:
+        return None
 
 
 class LFMSFTTrainer(RayDataLoaderMixin, Trainer):
@@ -121,12 +131,23 @@ def sft_run(training_config: dict) -> None:
 
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
 
-    # Add benchmark evaluation callback if configured
+    # Add benchmark evaluation callback if configured (sync | sidecar | reserved)
     benchmark_configs = training_config.get("benchmark_configs")
     if benchmark_configs and benchmark_configs.get("benchmarks"):
         benchmarks = create_llm_benchmarks_from_config(benchmark_configs, tokenizer)
         if benchmarks:
-            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
+            trainer.add_callback(
+                make_eval_callback(
+                    benchmarks=benchmarks,
+                    async_eval_cfg=training_config.get("async_eval"),
+                    benchmark_configs=benchmark_configs,
+                    server_url=training_config.get("async_eval_server_url"),
+                    eval_gpu_ids=training_config.get("async_eval_gpu_ids", ""),
+                    output_dir=output_dir,
+                    wandb_run_id=_get_wandb_run_id(),
+                    config_dir=training_config.get("config_dir"),
+                )
+            )
 
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)

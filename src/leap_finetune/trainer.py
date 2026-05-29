@@ -222,6 +222,7 @@ def ray_trainer(job_config: dict) -> None:
         "peft_config": job_config["peft_config"],
         "benchmark_configs": job_config.get("benchmark_configs"),
         "rewards": rewards_cfg,
+        "async_eval": job_config.get("async_eval"),
         "rl_env": job_config.get("rl_env"),
         "grpo_rollout": job_config.get("grpo_rollout"),
         "config_dir": job_config.get("config_dir"),
@@ -232,6 +233,49 @@ def ray_trainer(job_config: dict) -> None:
     if is_grpo and not is_multi_node:
         training_num_gpus = rollout_plan.num_training_workers
         resources_per_worker = rollout_plan.resources_per_worker
+
+    # Async-eval reserved mode: carve eval GPUs off the training pool. We
+    # only do the GPU split here; the worker (rank 0) launches its own
+    # vLLM subprocess so it owns the lifetime and can respawn on weight
+    # reload. Runs AFTER any GRPO carve above so both can coexist.
+    async_eval_cfg = job_config.get("async_eval") or {}
+    if async_eval_cfg.get("mode") == "reserved":
+        if is_multi_node:
+            raise NotImplementedError(
+                "async_eval mode=reserved is single-node only. "
+                "Use mode=sidecar for multi-node training."
+            )
+        eval_gpu_count = int(async_eval_cfg.get("vllm_gpus", 1))
+        current_train_gpus = list(range(training_num_gpus))
+        if eval_gpu_count >= len(current_train_gpus):
+            raise ValueError(
+                f"async_eval.vllm_gpus={eval_gpu_count} leaves no GPUs for training "
+                f"(remaining={len(current_train_gpus)})."
+            )
+        eval_gpus_local = current_train_gpus[:eval_gpu_count]
+        train_gpus_local = current_train_gpus[eval_gpu_count:]
+        # Map local indices to physical IDs through any existing CVD.
+        existing_cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if existing_cvd:
+            phys = [int(x) for x in existing_cvd.split(",") if x]
+            eval_gpu_ids = [phys[i] for i in eval_gpus_local]
+            train_gpu_ids = [phys[i] for i in train_gpus_local]
+        else:
+            eval_gpu_ids = eval_gpus_local
+            train_gpu_ids = train_gpus_local
+
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in train_gpu_ids)
+        training_num_gpus = len(train_gpu_ids)
+
+        eval_port = int((async_eval_cfg.get("reserved") or {}).get("server_port", 8100))
+        eval_host = resolve_server_host(None)
+        # Hand the worker the server URL + carved GPU ids via train_loop_config.
+        train_loop_config["async_eval_server_url"] = f"http://{eval_host}:{eval_port}"
+        train_loop_config["async_eval_gpu_ids"] = ",".join(str(g) for g in eval_gpu_ids)
+        print(
+            f"[async_eval/reserved] reserved GPU(s) {eval_gpu_ids} for vLLM at "
+            f"{train_loop_config['async_eval_server_url']}; training on {train_gpu_ids}"
+        )
 
     scale_config = ScalingConfig(
         num_workers=training_num_gpus,

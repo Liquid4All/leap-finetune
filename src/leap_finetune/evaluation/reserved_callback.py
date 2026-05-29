@@ -388,24 +388,18 @@ class ReservedEvalCallback(TrainerCallback):
 
             if wandb.run is None:
                 return
-            # Auto-pin benchmark/* panels to the benchmark/step axis so the
-            # wandb UI renders benchmark curves at the originating training
-            # step out of the box. Scoped to benchmark/* only so training-loss
-            # panels are untouched. Idempotent on resume.
+            # Pin the benchmark/* x-axis to benchmark/step so wandb panels auto-render
+            # without user config. Scoped — training-loss panels untouched.
             try:
                 wandb.define_metric("benchmark/step")
                 wandb.define_metric("benchmark/*", step_metric="benchmark/step")
             except Exception:
                 logger.debug("wandb.define_metric not available; skipping axis pin")
-            # Tag the originating training step as plain data fields so
-            # benchmark panels align on the trainer's step axis: train/global_step
-            # (what training dashboards already use) and benchmark/step (a clean
-            # alias). These are logged as data, NOT via step=result.step: the
-            # eval lands after the trainer has advanced past result.step, so a
-            # step= write would be backwards and wandb would drop it. Commit
-            # immediately (the default) at the current forward step — deferring
-            # with commit=False risks losing the point if no training log
-            # follows (e.g. eval on the last step).
+            # train/global_step + benchmark/step go in the payload as plain data,
+            # NOT via step=result.step: the eval lands after the trainer advanced
+            # past result.step, so step= would be a backwards write wandb drops.
+            # commit=True (the default) — commit=False would lose the point if
+            # eval is on the last step (no follow-up training log to flush it).
             payload = {
                 **result.metrics,
                 "train/global_step": result.step,

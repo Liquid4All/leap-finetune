@@ -388,6 +388,15 @@ class ReservedEvalCallback(TrainerCallback):
 
             if wandb.run is None:
                 return
+            # Auto-pin benchmark/* panels to the benchmark/step axis so the
+            # wandb UI renders benchmark curves at the originating training
+            # step out of the box. Scoped to benchmark/* only so training-loss
+            # panels are untouched. Idempotent on resume.
+            try:
+                wandb.define_metric("benchmark/step")
+                wandb.define_metric("benchmark/*", step_metric="benchmark/step")
+            except Exception:
+                logger.debug("wandb.define_metric not available; skipping axis pin")
             # Tag the originating training step as plain data fields so
             # benchmark panels align on the trainer's step axis: train/global_step
             # (what training dashboards already use) and benchmark/step (a clean

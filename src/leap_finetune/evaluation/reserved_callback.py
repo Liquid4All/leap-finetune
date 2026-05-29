@@ -388,15 +388,21 @@ class ReservedEvalCallback(TrainerCallback):
 
             if wandb.run is None:
                 return
-            # Include train/global_step alongside benchmarks so dashboards
-            # configured with train/global_step as the X axis render the
-            # async benchmark points at the originating training step.
-            payload = {**result.metrics, "train/global_step": result.step}
-            # commit=False matches the sync callback's pattern at callback.py:128;
-            # the next training-side log commits the step. Wandb may emit a
-            # backwards-step warning if the trainer is past result.step — the
-            # data still lands at the correct step in the history.
-            wandb.log(payload, step=result.step, commit=False)
+            # Tag the originating training step as plain data fields so
+            # benchmark panels align on the trainer's step axis: train/global_step
+            # (what training dashboards already use) and benchmark/step (a clean
+            # alias). These are logged as data, NOT via step=result.step: the
+            # eval lands after the trainer has advanced past result.step, so a
+            # step= write would be backwards and wandb would drop it. Commit
+            # immediately (the default) at the current forward step — deferring
+            # with commit=False risks losing the point if no training log
+            # follows (e.g. eval on the last step).
+            payload = {
+                **result.metrics,
+                "train/global_step": result.step,
+                "benchmark/step": result.step,
+            }
+            wandb.log(payload)
             logger.info(
                 "[async_eval/reserved] logged %d metrics at step %d",
                 len(result.metrics),

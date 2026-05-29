@@ -14,13 +14,11 @@
 </div>
 </br>
 
-A minimal fine-tuning repo for LFM2, fully built on Open Source.
-
 <p align="center">
 <a href="#-setup">Setup</a> · <a href="#-quickstart">Quickstart</a> · <a href="#-expected-dataset-formats">Dataset Formats</a> · <a href="#grpo-group-relative-policy-optimization">GRPO</a> · <a href="#-tool-calling-datasets">Tool Calling</a> · <a href="#-resuming-training">Resuming Training</a> · <a href="#-evaluation-benchmarks">Benchmarks</a> · <a href="#-advanced-configuration">Advanced Config</a>
 </p>
 
-We support different acceleration backends, including GPU nodes of 8xH100 80GB (both single node and multi node) as well as Modal (H100, H200, B200, ..) in case you don't have your own GPUs.
+LEAP-Finetune is a minimal fine-tuning repo for LFM2, fully built on Open Source. It handles multi-gpu orchestration, dataset formatting and validation, and model checkpointing. We support different acceleration backends, including GPU nodes of 8xH100 80GB (both single node and multi node) as well as Modal (H100, H200, B200, ..) in case you don't have your own GPUs.
 
 For feature requests or if you have a different setup, reach out to [support@liquid.ai](mailto:support@liquid.ai) and tell us about your specific configuration.
 
@@ -146,7 +144,7 @@ modal:
 uv run leap-finetune job_configs/sft_example_modal.yaml
 ```
 
-That's it. The CLI will:
+That's it. In attached mode (`detach: false`), the CLI will:
 
 1. Build the container image (~5 min on first run, cached after that)
 2. Auto-create a `huggingface-secret` on Modal from your local HF token
@@ -160,7 +158,14 @@ modal volume ls leap-finetune                                        # list save
 modal volume get leap-finetune <checkpoint-name> ./local-outputs     # download to local
 ```
 
-**Detached mode:** Set `detach: true` in the modal config to submit and disconnect. Monitor with `modal app logs leap-finetune`.
+**Detached mode:** Set `detach: true` in the modal config to submit and disconnect. The CLI prints the Modal app ID for that run, plus commands to monitor or stop it:
+
+```bash
+modal app logs ap-...
+modal app stop ap-...
+```
+
+Detached runs are ephemeral Modal apps, so use the printed `ap-...` app ID rather than the `app_name` value from your config when viewing logs.
 
 See [`job_configs/sft_example_modal.yaml`](./job_configs/sft_example_modal.yaml) for all available options.
 
@@ -330,7 +335,7 @@ Tool calls use LFM bracket notation pre-baked in the assistant `content` field. 
 
 ## 🔄 Resuming Training
 
-If a run is interrupted (SLURM preemption, crash, etc.), you can resume from the last checkpoint with full optimizer state, LR schedule, and wandb continuity.
+If a run is interrupted (GPU timeout, crash, SLURM preemption, etc.), you can resume from the last checkpoint with full optimizer state, LR schedule, and wandb continuity.
 
 Add `resume_from_checkpoint` to your `training_config`:
 
@@ -346,7 +351,7 @@ training_config:
   resume_from_checkpoint: "/path/to/outputs/my_project/run_name/checkpoint-step-8000"
 ```
 
-**What gets restored:** model weights, optimizer states, LR scheduler position, training step counter, and RNG states.
+**What gets restored:** model weights, optimizer states, LR scheduler position, training step counter, and RNG states. To resume a run, `save_only_model` must be set to `False`.
 
 **Wandb continuity:** The wandb run ID is saved to `<run_dir>/.wandb_run_id` automatically. On resume, it restores the same wandb run. Fresh runs always get a new wandb run.
 

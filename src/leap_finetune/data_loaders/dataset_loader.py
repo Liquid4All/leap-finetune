@@ -34,7 +34,7 @@ class DatasetLoader:
             )
 
     def quick_validate(self) -> None:
-        """Fast validation on ~10 samples. Raises ValueError on issues."""
+        """Fast validation on ~10 samples. Raises ValueError on issues. No-ops if already called."""
         if self._validated:
             return
         quick_validate_schema(

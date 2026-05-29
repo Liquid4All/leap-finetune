@@ -136,6 +136,8 @@ def _print_config_summary(config_dict: dict, modal_cfg: dict) -> None:
 
 
 def _submit(config_dict: dict, modal_cfg: dict) -> None:
+    from contextlib import nullcontext
+
     import modal
 
     detach = modal_cfg.get("detach", False)
@@ -192,17 +194,24 @@ def _submit(config_dict: dict, modal_cfg: dict) -> None:
 
         leap_main()
 
-    print("Waiting for container to start (image is cached after first build)...")
-    with modal.enable_output():
-        with app.run():
+    if detach:
+        print("Submitting detached Modal job (image is cached after first build)...")
+    else:
+        print("Waiting for container to start (image is cached after first build)...")
+
+    output_context = nullcontext() if detach else modal.enable_output()
+    with output_context:
+        with app.run(detach=detach):
             if detach:
                 call = train.spawn(config_str)
                 print(
                     f"Modal job submitted (detached). Function call ID: {call.object_id}"
                 )
-                print(
-                    f"Monitor with: modal app logs {modal_cfg.get('app_name', 'leap-finetune')}"
-                )
+                if app.app_id:
+                    print(f"Modal app ID: {app.app_id}")
+                    print(f"Dashboard: https://modal.com/id/{app.app_id}")
+                    print(f"Monitor with: modal app logs {app.app_id}")
+                    print(f"Stop with: modal app stop {app.app_id}")
             else:
                 train.remote(config_str)
 

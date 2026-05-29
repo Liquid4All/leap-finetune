@@ -61,6 +61,7 @@ def quick_validate_schema(
     split: str = "train",
     num_samples: int = 10,
     image_root: str | None = None,
+    model_name: str | None = None,
 ) -> None:
     """
     Fast schema validation on small sample. Fails fast on obvious errors.
@@ -87,6 +88,29 @@ def quick_validate_schema(
 
     # Use the same validation as full validation
     validate_dataset_format(sample_ds, dataset_type)
+
+    # === Tool call format validation ===
+    if model_name and dataset_type in ("sft", "dpo"):
+        from .tool_call_utils import detect_tool_format, validate_tool_format
+        from leap_finetune.utils.model_utils import get_model_family
+
+        samples = [sample_ds[i] for i in range(len(sample_ds))]
+        format_info = detect_tool_format(samples)
+
+        if format_info.has_tool_calls:
+            model_family = get_model_family(model_name)
+            issues = validate_tool_format(format_info, model_family)
+
+            for issue in issues:
+                if issue.severity == "error":
+                    raise ValueError(
+                        f"Tool call format error: {issue.message}\n"
+                        f"Fix: {issue.fix_hint}"
+                    )
+                elif issue.severity == "warning":
+                    console.print(f"[yellow]⚠ Tool format:[/yellow] {issue.message}")
+                else:
+                    console.print(f"[dim]ℹ Tool format: {issue.message}[/dim]")
 
     console.print("[green]✓ Schema validated[/green]")
 

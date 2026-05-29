@@ -21,6 +21,11 @@ overrides = [
     { name = "transformers", specifier = ">=5.3.0,<5.4.0" },
 ]
 
+[[manifest.dependency-metadata]]
+name = "flash-attn"
+version = "2.8.3"
+requires-dist = ["torch", "einops", "ninja", "packaging", "setuptools", "wheel"]
+
 [[package]]
 name = "accelerate"
 version = "1.13.0"
@@ -174,7 +179,7 @@ dependencies = [
     { name = "pybind11", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://wheels.vllm.ai/rocm/ad7125a431e176d4161099480a66f0169609a690/amd_aiter-0.1.13-cp312-cp312-manylinux_2_34_x86_64.whl" },
+    { url = "https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/amd_aiter-0.1.13-cp312-cp312-manylinux_2_34_x86_64.whl" },
 ]
 
 [[package]]
@@ -208,7 +213,7 @@ name = "amdsmi"
 version = "26.2.2+671d39a71e"
 source = { registry = "https://wheels.vllm.ai/rocm/" }
 wheels = [
-    { url = "https://wheels.vllm.ai/rocm/ad7125a431e176d4161099480a66f0169609a690/amdsmi-26.2.2%2B671d39a71e-py3-none-any.whl" },
+    { url = "https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/amdsmi-26.2.2%2B671d39a71e-py3-none-any.whl" },
 ]
 
 [[package]]
@@ -1265,7 +1270,11 @@ resolution-markers = [
 ]
 dependencies = [
     { name = "einops", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "ninja", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "packaging", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "setuptools", version = "80.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "wheel", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3b/b2/8d76c41ad7974ee264754709c22963447f7f8134613fd9ce80984ed0dab7/flash_attn-2.8.3.tar.gz", hash = "sha256:1e71dd64a9e0280e0447b8a0c2541bad4bf6ac65bdeaa2f90e51a9e57de0370d", size = 8447812 }
 
@@ -1278,10 +1287,14 @@ resolution-markers = [
 ]
 dependencies = [
     { name = "einops", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "ninja", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "packaging", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "setuptools", version = "79.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "torch", version = "2.10.0+git8514f05", source = { registry = "https://wheels.vllm.ai/rocm/" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "wheel", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://wheels.vllm.ai/rocm/ad7125a431e176d4161099480a66f0169609a690/flash_attn-2.8.3-cp312-cp312-manylinux_2_34_x86_64.whl" },
+    { url = "https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/flash_attn-2.8.3-cp312-cp312-manylinux_2_34_x86_64.whl" },
 ]
 
 [[package]]
@@ -2415,7 +2428,7 @@ rocm = [
     { name = "torchvision", version = "0.24.1+d801a34", source = { registry = "https://wheels.vllm.ai/rocm/" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "triton", version = "3.6.0", source = { registry = "https://wheels.vllm.ai/rocm/" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "triton-kernels", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
-    { name = "vllm", version = "0.21.0+rocm722", source = { registry = "https://wheels.vllm.ai/rocm/" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "vllm", version = "0.22.0+rocm722", source = { registry = "https://wheels.vllm.ai/rocm/" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
 ]
 
 [package.metadata]
@@ -2462,7 +2475,7 @@ rocm = [
     { name = "torchvision", marker = "sys_platform == 'linux'", specifier = ">=0.24.1", index = "https://wheels.vllm.ai/rocm/", conflict = { package = "leap-finetune", group = "rocm" } },
     { name = "triton", marker = "sys_platform == 'linux'", specifier = "==3.6.0", index = "https://wheels.vllm.ai/rocm/", conflict = { package = "leap-finetune", group = "rocm" } },
     { name = "triton-kernels", marker = "sys_platform == 'linux'", specifier = "==1.0.0", index = "https://wheels.vllm.ai/rocm/", conflict = { package = "leap-finetune", group = "rocm" } },
-    { name = "vllm", marker = "sys_platform == 'linux'", specifier = "==0.21.0+rocm722", index = "https://wheels.vllm.ai/rocm/", conflict = { package = "leap-finetune", group = "rocm" } },
+    { name = "vllm", marker = "sys_platform == 'linux'", specifier = "==0.22.0+rocm722", index = "https://wheels.vllm.ai/rocm/", conflict = { package = "leap-finetune", group = "rocm" } },
 ]
 
 [[package]]
@@ -2493,6 +2506,9 @@ wheels = [
 name = "llguidance"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.13' and sys_platform == 'linux'",
+]
 sdist = { url = "https://files.pythonhosted.org/packages/95/48/3f7a9d3ff1b36bba92b5107a3a21286821227afe9ea464736133994d61fb/llguidance-1.3.0.tar.gz", hash = "sha256:861249afd51dc325646834462ea827e57a5c2b2042e108e6aae7059fdad9104d", size = 1070460 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/33/be5acb85cd8cdc4afde33d9c234eece9f318e087920255af3c05864cd3e7/llguidance-1.3.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:f7685222660a762e481ac633d49cc559c64980fe2ee59c8f932a5bb5cbc0c2c2", size = 3220647 },
@@ -2502,6 +2518,32 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/83/a8/1ff2bedb8f9acb46a2d2d603415d272bb622c142ea86f5b95445cc6e366c/llguidance-1.3.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:bc17e9dd602c3879bf91664a64bf72f54c74dbfbeb24ccfab6a5fe435b12f7aa", size = 3033133 },
     { url = "https://files.pythonhosted.org/packages/d7/a7/9b8086c0cfdddf3f6d47b173a404fa7ac46272f7affbee082c36740f4f1c/llguidance-1.3.0-cp39-abi3-win32.whl", hash = "sha256:2f6f558485a43e273fc5c6c974a9a3ace5d5e170076db9b40e0560e41c3ff18f", size = 2598109 },
     { url = "https://files.pythonhosted.org/packages/5a/7e/809349638231f469b9056c0e1bfd924d5ef5558b3b3ec72d093b6fad33b1/llguidance-1.3.0-cp39-abi3-win_amd64.whl", hash = "sha256:1d1cd1c8618d1a13605d3e057c978651e551c8c469b481ee4041f1d6c436002d", size = 2789946 },
+]
+
+[[package]]
+name = "llguidance"
+version = "1.7.5"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.13' and sys_platform == 'linux'",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/74/2a/e889d6fdddda852171cf537486513d59fd8d9c38104323c1851a73675f1f/llguidance-1.7.5.tar.gz", hash = "sha256:afaa8f979708cd546c762f06a4fe4748e5ef7f06ed45875dabe7db8f07b73645", size = 1156674 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/fa/1b13a1d77998df4feca2e4c47e46d298050f60d6436e0e99fbd952b5e9fd/llguidance-1.7.5-cp314-cp314t-macosx_10_12_x86_64.whl", hash = "sha256:ea659e51f57b28af93a742f748f65be92264bdcf6bdab413b08d7a539e33550a", size = 3214888 },
+    { url = "https://files.pythonhosted.org/packages/04/10/43190ae55cad6d36d0dba599966b58f78acffca2f7aac63b05f67684dcbe/llguidance-1.7.5-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:9e7b181638f7b473d32e0ce6a1cac25a470f06de65e70e2c6fb2fde283047762", size = 3129767 },
+    { url = "https://files.pythonhosted.org/packages/6d/df/c8003f68c322e0476db341dac58d53bceec15a95d137f3a187637bf424a6/llguidance-1.7.5-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:289bce21879105ff26e30a6b37444de01ea09d05efc795ca4ed958097f14844c", size = 3471274 },
+    { url = "https://files.pythonhosted.org/packages/05/6e/f460180fb70b28c9f9d46f66fdf70e85d24d16e80ef7f5918064553245a0/llguidance-1.7.5-cp314-cp314t-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:15ebd8b87754fb904c3029d0d7a1b1a726054d92a072c4b1e16ed6d447008ca0", size = 3761960 },
+    { url = "https://files.pythonhosted.org/packages/68/de/56a42638f9c17c39c701a21c577271df962df7a7b8c9903760a0af4455eb/llguidance-1.7.5-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b950423c5e6c9c9bc35af5f86739c8a71b719a1dfa6c82bf6e3c11badeb838df", size = 3489162 },
+    { url = "https://files.pythonhosted.org/packages/25/5f/4aa0494c11ff4da598a0096e498bb9670c823dd548c0debb60f3730bb1a3/llguidance-1.7.5-cp314-cp314t-win32.whl", hash = "sha256:726dc941a900c982913f21032afce66cdd35f354031cf5e5ff444155142b39f3", size = 2600613 },
+    { url = "https://files.pythonhosted.org/packages/63/a3/e196571aa72f578a2a106ec29883cf11344480d7b4d2513acb348b30e4f6/llguidance-1.7.5-cp314-cp314t-win_amd64.whl", hash = "sha256:b3da6ceaa03739ff3418e7a97d456f47f6242aab328abf8ea5a0abf17cb49ffc", size = 2873031 },
+    { url = "https://files.pythonhosted.org/packages/d7/e7/5c019dcd5c0312bd7b2ddaa3563c630a87bc51bfa692aed60999d5ac2bc7/llguidance-1.7.5-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:dd805b8b0302edfa18c9b2b4b9ecf7f7b23f5bea42a44a91e7706238ffd21cef", size = 3225139 },
+    { url = "https://files.pythonhosted.org/packages/32/93/ecbe86d090afe4de7ab74ddc93b03a6cef8b01c62e06fa87e462e2dc4ffc/llguidance-1.7.5-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:421ff50f59fbe21bc3cba509e02366312a0de050088d2754711d1f1edb5dfe2b", size = 3136321 },
+    { url = "https://files.pythonhosted.org/packages/fc/dc/97cff2071bd9f0659db30655cfeb10bceaed91f7dee3ecbe2c813bd43642/llguidance-1.7.5-cp39-abi3-manylinux_2_31_aarch64.whl", hash = "sha256:c1dfda8d8c47da5be5e47b30084eadb2ef331ab08dc6e3a114429511ab13ae05", size = 2901942 },
+    { url = "https://files.pythonhosted.org/packages/27/c4/2b9b9d0de824a71627373b0ccdbcf61bd56133b52c3f5b988a803f55d2c0/llguidance-1.7.5-cp39-abi3-manylinux_2_31_x86_64.whl", hash = "sha256:1d02dbc64dc1afc2d2cb7e5e868886527f8c6f088062e87d81bbad6212e22500", size = 3073011 },
+    { url = "https://files.pythonhosted.org/packages/3b/c6/7cc11c2e68245cbabaf1a69a9e52a55f1216beebaeee5a8455b1d85d6d84/llguidance-1.7.5-cp39-abi3-manylinux_2_34_i686.whl", hash = "sha256:3e243bc1acf47d5200e78a082a61f4866a2a3faf59b1b2ed5748e42ecaf32397", size = 3317403 },
+    { url = "https://files.pythonhosted.org/packages/0f/78/9130ce2d49e33637de372c22620b00ae6b816c4636a3a0dee0d2390a649d/llguidance-1.7.5-cp39-abi3-manylinux_2_39_riscv64.whl", hash = "sha256:f1f9fb791a8def3de4feec9c40b5d4bd63b9f06e5315586a209d567467443293", size = 3604816 },
+    { url = "https://files.pythonhosted.org/packages/b2/98/067b0cac8143f00e72dfe81d463059fe4e3615182121df3be977443ea744/llguidance-1.7.5-cp39-abi3-win32.whl", hash = "sha256:01da2d40298c3487c188a0b3c5fba982afcccf8ed0ec523b05b6210ffa745036", size = 2612422 },
+    { url = "https://files.pythonhosted.org/packages/96/10/81469d27185bec13720ff1eff4b07c3d157d5633d0b2522ffb11ae09e81b/llguidance-1.7.5-cp39-abi3-win_amd64.whl", hash = "sha256:502e55c4521dde4be352b34e508dc665ddea3ae1f73c55c869f2d8b63475e4e5", size = 2883265 },
 ]
 
 [[package]]
@@ -5569,6 +5611,19 @@ wheels = [
 ]
 
 [[package]]
+name = "setuptools-rust"
+version = "1.12.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "semantic-version", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "setuptools", version = "79.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/11/736cfe4ec795dbce001ebdcef5cab03de1727041c805c3a45c1bda9f54a1/setuptools_rust-1.12.1.tar.gz", hash = "sha256:85ae70989d96c9cfeb5ef79cf3bac2d5200bc5564f720a06edceedbdf6664640", size = 310852 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/29/c12876926be20e100527f541c792731ea09b995139aee9676eaacd1b751e/setuptools_rust-1.12.1-py3-none-any.whl", hash = "sha256:b7ebd6a182e7aefa97a072e880530c9b0ec8fcca8617e0bb8ff299c1a064f693", size = 28959 },
+]
+
+[[package]]
 name = "setuptools-scm"
 version = "10.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -5775,7 +5830,7 @@ wheels = [
 
 [[package]]
 name = "tilelang"
-version = "0.1.9"
+version = "0.1.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-tvm-ffi", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
@@ -5789,11 +5844,12 @@ dependencies = [
     { name = "typing-extensions", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "z3-solver", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/56/70/5051f65821baa30a3d61fc48f8ba10c776490315e8c90f82559b92089756/tilelang-0.1.9.tar.gz", hash = "sha256:287f727c913bb648fcf6c1968809ba3390e55eeed257a5c6bb9a80bc05966af4", size = 93395292 }
+sdist = { url = "https://files.pythonhosted.org/packages/77/5c/07146b4527656102e48d21c2599aa80477e83ea3f149ac0df3b15a247bd4/tilelang-0.1.10.tar.gz", hash = "sha256:d8813e668fcf75843bc2d68c633c352b419c1e292895a6038a4aadd943e56c2b", size = 93184128 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/db/4dd76da8c8585c605639a21bc098d504e317fe324a72f01ce3c7370250b4/tilelang-0.1.9-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:00ed594fdeb229c5505b9ffa895c3c5daeb28641c78f783fa1f724cf1e08cecd", size = 36599020 },
-    { url = "https://files.pythonhosted.org/packages/f7/8a/1cbeee79d62abaa02441c2d00621554e41aa62dbf3b94a4feb3867184b01/tilelang-0.1.9-cp38-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4bbccfe9035aed775ffafb6dc25a5994504b24e2c5d95d0f39643edfafa7bf12", size = 45419374 },
-    { url = "https://files.pythonhosted.org/packages/c6/a7/f4bfb86f87e107703146e703204cec2c0eae2492b633e0052b0ace3febb6/tilelang-0.1.9-cp38-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:77ab0ee2f40f66ea015b6b21426d482751e28cbc635ef9d1198cbd6502454a7c", size = 42110365 },
+    { url = "https://files.pythonhosted.org/packages/76/0f/e5e01399adb5110bf885e19e879229e3fc578e1e035939f601365305c825/tilelang-0.1.10-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:246084babf0f6801ad2b8ac1d58cead37520974ae399247c89d42b68872d2cf9", size = 38492226 },
+    { url = "https://files.pythonhosted.org/packages/b0/66/ab4301dc38ca9f09832df2936c73388c611c198dc938634acb6ce80dfa74/tilelang-0.1.10-cp38-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:85180d1a96defeecdf52d5d075a31c3fc551d8485981e6b636762a9cd7eb02fe", size = 49768455 },
+    { url = "https://files.pythonhosted.org/packages/92/af/a3dfc43dad228a6e560863f071865d5a27c35b050a9fc431641cb07135d1/tilelang-0.1.10-cp38-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:15437e5f0daa0863ac9a5386007847c94070f5ab3234d040bc947afdf2f57100", size = 45629488 },
+    { url = "https://files.pythonhosted.org/packages/c3/36/2096dce95c20e13be5b5ce852190ca4b4ac41c7fd9b91a0be98353598153/tilelang-0.1.10-cp38-abi3-win_amd64.whl", hash = "sha256:93dd078113d275352698a6e72a91e80e5b0263d22a005109b3db2c1c016ea105", size = 33692452 },
 ]
 
 [[package]]
@@ -5991,7 +6047,7 @@ dependencies = [
     { name = "typing-extensions", marker = "(python_full_version < '3.13' and sys_platform == 'linux' and extra == 'group-13-leap-finetune-rocm') or (python_full_version >= '3.13' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm')" },
 ]
 wheels = [
-    { url = "https://wheels.vllm.ai/rocm/ad7125a431e176d4161099480a66f0169609a690/torch-2.10.0%2Bgit8514f05-cp312-cp312-manylinux_2_35_x86_64.whl" },
+    { url = "https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/torch-2.10.0%2Bgit8514f05-cp312-cp312-manylinux_2_35_x86_64.whl" },
 ]
 
 [[package]]
@@ -6068,7 +6124,7 @@ dependencies = [
     { name = "torch", version = "2.10.0+git8514f05", source = { registry = "https://wheels.vllm.ai/rocm/" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://wheels.vllm.ai/rocm/ad7125a431e176d4161099480a66f0169609a690/torchaudio-2.9.0%2Beaa9e4e-cp312-cp312-manylinux_2_34_x86_64.whl" },
+    { url = "https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/torchaudio-2.9.0%2Beaa9e4e-cp312-cp312-manylinux_2_34_x86_64.whl" },
 ]
 
 [[package]]
@@ -6117,7 +6173,7 @@ dependencies = [
     { name = "torch", version = "2.10.0+git8514f05", source = { registry = "https://wheels.vllm.ai/rocm/" }, marker = "(python_full_version < '3.13' and sys_platform == 'linux' and extra == 'group-13-leap-finetune-rocm') or (python_full_version >= '3.13' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm')" },
 ]
 wheels = [
-    { url = "https://wheels.vllm.ai/rocm/ad7125a431e176d4161099480a66f0169609a690/torchvision-0.24.1%2Bd801a34-cp312-cp312-manylinux_2_34_x86_64.whl" },
+    { url = "https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/torchvision-0.24.1%2Bd801a34-cp312-cp312-manylinux_2_34_x86_64.whl" },
 ]
 
 [[package]]
@@ -6264,7 +6320,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform == 'linux'",
 ]
 wheels = [
-    { url = "https://wheels.vllm.ai/rocm/ad7125a431e176d4161099480a66f0169609a690/triton-3.6.0-cp312-cp312-manylinux_2_35_x86_64.whl" },
+    { url = "https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/triton-3.6.0-cp312-cp312-manylinux_2_35_x86_64.whl" },
 ]
 
 [[package]]
@@ -6276,7 +6332,7 @@ dependencies = [
     { name = "pytest", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://wheels.vllm.ai/rocm/ad7125a431e176d4161099480a66f0169609a690/triton_kernels-1.0.0-py3-none-any.whl" },
+    { url = "https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/triton_kernels-1.0.0-py3-none-any.whl" },
 ]
 
 [[package]]
@@ -6500,7 +6556,7 @@ dependencies = [
     { name = "gguf", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "ijson", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "lark", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
-    { name = "llguidance", marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'ppc64le' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "llguidance", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'ppc64le' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "lm-format-enforcer", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "mcp", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "mistral-common", extra = ["image"], marker = "(python_full_version < '3.13' and sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda') or (python_full_version >= '3.13' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm')" },
@@ -6557,7 +6613,7 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.21.0+rocm722"
+version = "0.22.0+rocm722"
 source = { registry = "https://wheels.vllm.ai/rocm/" }
 resolution-markers = [
     "python_full_version < '3.13' and sys_platform == 'linux'",
@@ -6586,7 +6642,7 @@ dependencies = [
     { name = "grpcio-reflection", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "ijson", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "lark", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
-    { name = "llguidance", marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'ppc64le' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "llguidance", version = "1.7.5", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'ppc64le' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "lm-format-enforcer", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "mcp", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "mistral-common", extra = ["image"], marker = "(python_full_version < '3.13' and sys_platform == 'linux' and extra == 'group-13-leap-finetune-rocm') or (python_full_version >= '3.13' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm')" },
@@ -6621,9 +6677,11 @@ dependencies = [
     { name = "regex", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "requests", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "runai-model-streamer", extra = ["azure", "gcs", "s3"], marker = "(python_full_version < '3.13' and sys_platform == 'linux' and extra == 'group-13-leap-finetune-rocm') or (python_full_version >= '3.13' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "safetensors", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "sentencepiece", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "setproctitle", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "setuptools", version = "79.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+    { name = "setuptools-rust", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "setuptools-scm", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "six", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "tensorizer", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
@@ -6643,7 +6701,7 @@ dependencies = [
     { name = "xgrammar", marker = "(python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'ppc64le' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 's390x' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 wheels = [
-    { url = "https://wheels.vllm.ai/rocm/ad7125a431e176d4161099480a66f0169609a690/vllm-0.21.0%2Brocm722-cp312-cp312-manylinux_2_34_x86_64.whl" },
+    { url = "https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/vllm-0.22.0%2Brocm722-cp312-cp312-manylinux_2_34_x86_64.whl" },
 ]
 
 [[package]]
@@ -6788,6 +6846,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/b6/b9afed2afadddaf5ebb2afa801abf4b0868f42f8539bfe4b071b5266c9fe/websockets-16.0-cp314-cp314t-win32.whl", hash = "sha256:5a4b4cc550cb665dd8a47f868c8d04c8230f857363ad3c9caf7a0c3bf8c61ca6", size = 178085 },
     { url = "https://files.pythonhosted.org/packages/9f/3e/28135a24e384493fa804216b79a6a6759a38cc4ff59118787b9fb693df93/websockets-16.0-cp314-cp314t-win_amd64.whl", hash = "sha256:b14dc141ed6d2dde437cddb216004bcac6a1df0935d79656387bd41632ba0bbd", size = 178531 },
     { url = "https://files.pythonhosted.org/packages/6f/28/258ebab549c2bf3e64d2b0217b973467394a9cea8c42f70418ca2c5d0d2e/websockets-16.0-py3-none-any.whl", hash = "sha256:1637db62fad1dc833276dded54215f2c7fa46912301a24bd94d45d46a011ceec", size = 171598 },
+]
+
+[[package]]
+name = "wheel"
+version = "0.47.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/39/62/75f18a0f03b4219c456652c7780e4d749b929eb605c098ce3a5b6b6bc081/wheel-0.47.0.tar.gz", hash = "sha256:cc72bd1009ba0cf63922e28f94d9d83b920aa2bb28f798a31d0691b02fa3c9b3", size = 63854 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/1b/9e33c09813d65e248f7f773119148a612516a4bea93e9c6f545f78455b7c/wheel-0.47.0-py3-none-any.whl", hash = "sha256:212281cab4dff978f6cedd499cd893e1f620791ca6ff7107cf270781e587eced", size = 32218 },
 ]
 
 [[package]]

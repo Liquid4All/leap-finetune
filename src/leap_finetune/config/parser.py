@@ -220,6 +220,13 @@ def _parse_dataset_loader(
         raise ValueError(
             "dataset.test_size cannot be combined with dataset.val_path or dataset.val_split"
         )
+    if (
+        ds_type in ("grpo", "vlm_grpo")
+        and test_size is None
+        and val_path is None
+        and val_split is None
+    ):
+        test_size = 0.01
 
     return DatasetLoader(
         dataset_path=effective_train_path,
@@ -235,6 +242,24 @@ def _parse_dataset_loader(
         image_root=ds_config.get("image_root"),
         cache_dataset=ds_config.get("cache_dataset", False),
     )
+
+
+def _resolve_training_type(
+    raw_training_type: str,
+    model_name: str,
+    train_config_dict: dict,
+) -> str:
+    if raw_training_type not in ("sft", "dpo"):
+        return raw_training_type
+    if not is_moe_model_from_name(model_name):
+        return raw_training_type
+
+    base_config = train_config_dict.get("extends") or train_config_dict.get("base")
+    uses_moe_config = isinstance(base_config, str) and base_config.startswith("MOE_")
+    if uses_moe_config or "moe_training" in train_config_dict:
+        return f"moe_{raw_training_type}"
+
+    return raw_training_type
 
 
 def _build_training_config(train_config_dict: dict, training_type: str):
@@ -383,7 +408,11 @@ def parse_job_config(config_input: str) -> JobConfig:
     )
 
     train_config_dict = config_dict.get("training_config", {})
-    training_type = config_dict.get("training_type", "sft")
+    training_type = _resolve_training_type(
+        config_dict.get("training_type", "sft"),
+        model_name,
+        train_config_dict,
+    )
     final_training_config, train_config_overrides = _build_training_config(
         train_config_dict,
         training_type,

@@ -847,6 +847,7 @@ def validate_vlm_grpo_format(dataset: Dataset) -> Dataset:
     logger.info(f"VLM GRPO dataset validation passed: {len(dataset)} samples")
     return dataset
 
+
 def validate_sft_format(dataset: Dataset, model_family: str = "lfm2") -> Dataset:
     """Validate and convert SFT dataset to proper format."""
     columns = dataset.column_names

@@ -144,5 +144,5 @@ rocm = [
     "triton==3.6.0; sys_platform == 'linux'",
     "triton-kernels==1.0.0; sys_platform == 'linux'",
     "liger-kernel>=0.6.2; sys_platform == 'linux'",
-    "vllm==0.21.0+rocm722; sys_platform == 'linux'",
+    "vllm==0.22.0+rocm722; sys_platform == 'linux'",
 ]

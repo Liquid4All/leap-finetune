@@ -6,10 +6,10 @@ They deliberately use tiny settings (num_generations=2, 16 samples,
 max_completion_length=16) so they finish in under ~5 minutes on 1 H100.
 
 Run on a GPU node with:
-    uv run pytest --dense tests/test_grpo_e2e.py -v
+    uv run pytest --dense tests/e2e/test_grpo_e2e.py -v
 
 Or via the supplied SLURM script:
-    sbatch tests/grpo_e2e_sbatch.sh
+    tests/e2e/slurm/submit_e2e_tests.sh
 """
 
 import math

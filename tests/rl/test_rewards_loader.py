@@ -6,7 +6,7 @@ import pytest
 from leap_finetune.rl.rewards import resolve_reward_specs
 from leap_finetune import LEAP_FINETUNE_DIR
 
-pytestmark = pytest.mark.configs
+pytestmark = pytest.mark.rl
 
 
 # === Reward loader fixtures ===

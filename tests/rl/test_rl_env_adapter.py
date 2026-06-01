@@ -6,7 +6,7 @@ from leap_finetune.rl.environments.adapter import (
 )
 from leap_finetune.rl.environments.env_reward import env_reward
 
-pytestmark = pytest.mark.configs
+pytestmark = pytest.mark.rl
 
 
 # === env_reward extractor ===

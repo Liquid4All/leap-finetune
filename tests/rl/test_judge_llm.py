@@ -13,7 +13,7 @@ from leap_finetune.rl.judge import (
     judge_needs_local_server,
 )
 
-pytestmark = pytest.mark.configs
+pytestmark = pytest.mark.rl
 
 
 # === Judge LLM fixtures ===

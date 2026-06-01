@@ -98,8 +98,6 @@ DEFAULT_VLM_DPO = {
     "remove_unused_columns": False,
     "do_image_splitting": True,
     "max_image_tokens": 256,
-    "freeze_vision_encoder": True,
-    "optimizer_type": "adamw_8bit",
 }
 
 

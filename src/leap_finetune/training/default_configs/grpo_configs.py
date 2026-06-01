@@ -17,6 +17,7 @@ GRPO_EXCLUDED_KEYS = {
     "tracker",
     "trackio_space_id",
     "resume_from_checkpoint",
+    "adapter_path",
     "leap_run_name_template",
     "chat_template_path",
 }

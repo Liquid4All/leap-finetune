@@ -6,7 +6,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: tests/slurm/submit_e2e_tests.sh [--dry-run]
+Usage: tests/e2e/slurm/submit_e2e_tests.sh [--dry-run]
 
 Environment overrides:
   JOB_NAME                 SLURM job name (default: leap_e2e_tests)
@@ -40,8 +40,8 @@ for arg in "$@"; do
     esac
 done
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SLURM_DIR="${ROOT_DIR}/tests/slurm/generated"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+SLURM_DIR="${ROOT_DIR}/tests/e2e/slurm/generated"
 SCRIPT_PATH="${SLURM_DIR}/e2e_tests.sh"
 
 JOB_NAME="${JOB_NAME:-leap_e2e_tests}"
@@ -52,7 +52,7 @@ CPUS_PER_GPU="${CPUS_PER_GPU:-14}"
 TIME_LIMIT="${TIME_LIMIT:-06:00:00}"
 OUTPUT_DIR="${OUTPUT_DIR:-/lambdafs/alay/test-results}"
 TMP_ROOT="${TMP_ROOT:-/tmp/${USER}}"
-PYTEST_ARGS="${PYTEST_ARGS:-tests/test_dense_e2e.py tests/test_moe_e2e.py tests/test_vlm_e2e.py tests/test_grpo_e2e.py tests/test_vlm_grpo_e2e.py --dense --moe --vlm}"
+PYTEST_ARGS="${PYTEST_ARGS:-tests/e2e/test_dense_e2e.py tests/e2e/test_moe_e2e.py tests/e2e/test_vlm_e2e.py tests/e2e/test_grpo_e2e.py tests/e2e/test_vlm_grpo_e2e.py --dense --moe --vlm}"
 EXTRA_SBATCH_DIRECTIVES="${EXTRA_SBATCH_DIRECTIVES:-}"
 
 mkdir -p "${SLURM_DIR}" "${ROOT_DIR}/logs" "${OUTPUT_DIR}" "${TMP_ROOT}"

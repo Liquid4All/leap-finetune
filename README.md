@@ -15,7 +15,7 @@
 </br>
 
 <p align="center">
-<a href="#-setup">Setup</a> · <a href="#-quickstart">Quickstart</a> · <a href="#-expected-dataset-formats">Dataset Formats</a> · <a href="#grpo-group-relative-policy-optimization">GRPO</a> · <a href="#-tool-calling-datasets">Tool Calling</a> · <a href="#-resuming-training">Resuming Training</a> · <a href="#-evaluation-benchmarks">Benchmarks</a> · <a href="#-advanced-configuration">Advanced Config</a>
+<a href="#-setup">Setup</a> · <a href="#-quickstart">Quickstart</a> · <a href="#cli-usage">CLI</a> · <a href="#-expected-dataset-formats">Dataset Formats</a> · <a href="#grpo-group-relative-policy-optimization">GRPO</a> · <a href="#-tool-calling-datasets">Tool Calling</a> · <a href="#-resuming-training">Resuming Training</a> · <a href="#-quantization--gguf-export">Quantization</a> · <a href="#-evaluation-benchmarks">Benchmarks</a> · <a href="#-advanced-configuration">Advanced Config</a>
 </p>
 
 LEAP-Finetune is a minimal fine-tuning repo for LFM2, fully built on Open Source. It handles multi-gpu orchestration, dataset formatting and validation, and model checkpointing. We support different acceleration backends, including GPU nodes of 8xH100 80GB (both single node and multi node) as well as Modal (H100, H200, B200, ..) in case you don't have your own GPUs.
@@ -116,6 +116,56 @@ It uses Ray Train + Accelerate for distributed training.
 
 Unless you overwrote `output_dir`, results will be stored in `outputs/{project_name}/{run_name}/`. Each run gets its own directory with a unique name based on model, dataset, LR, and timestamp.
 
+### CLI Usage
+
+During development, prefer the repo environment so you get the lockfile-managed
+CUDA/vLLM stack:
+
+```bash
+uv run leap-finetune job_configs/sft_example.yaml
+uv run leap-finetune run job_configs/sft_example.yaml
+```
+
+To install the command as a reusable tool from a checkout:
+
+```bash
+uv tool install --editable . --force
+leap-finetune /absolute/path/to/config.yaml
+leap-finetune slurm /absolute/path/to/config.yaml --output-dir /absolute/path/to/slurms
+```
+
+`uv tool install` creates an isolated tool environment. Use explicit config
+paths when invoking the command outside the repo; bare names like
+`sft_example.yaml` resolve from the current directory's `job_configs/` first,
+then from the installed package's `LEAP_FINETUNE_DIR`.
+
+For one-off execution without installing the command:
+
+```bash
+uvx --from . leap-finetune /absolute/path/to/config.yaml
+```
+
+<details>
+<summary>Python usage</summary>
+
+You can also start a run from Python. This uses the same backend dispatch as
+the CLI: configs with `slurm`, `modal`, or `kuberay` submit remotely; other
+configs run local Ray training and require visible CUDA devices.
+
+```python
+from leap_finetune import run_config
+
+run_config("/absolute/path/to/config.yaml")
+```
+
+Run that file inside an environment where `leap-finetune` is installed:
+
+```bash
+uv run --with-editable . python launch_training.py
+```
+
+</details>
+
 ### Modal Support
 
 You can run training jobs on Modal's serverless GPUs directly from your Mac or laptop — no local GPU required.
@@ -183,6 +233,38 @@ To monitor your SLURM jobs in a TUI:
 uv run turm --me
 ```
 
+<details>
+<summary>Kubernetes / KubeRay Support</summary>
+
+If your config includes a `kuberay` section, `leap-finetune` submits a
+KubeRay `RayJob` instead of launching local training. You need a configured
+Kubernetes context, KubeRay CRDs installed, and a container image that already
+contains this repo plus its Python environment.
+
+```yaml
+kuberay:
+  image: "registry.example.com/leap-finetune:latest"
+  namespace: "training"
+  worker_replicas: 2
+  gpus_per_worker: 4
+  output_dir: "/outputs"
+  output_pvc: "leap-finetune-outputs"
+  env:
+    HF_HOME: "/outputs/hf-cache"
+```
+
+Run the same command as local training:
+
+```bash
+uv run leap-finetune path/to/config.yaml
+```
+
+The CLI creates a ConfigMap for the training config, submits a RayJob, and
+prints `kubectl` commands for status and logs. `worker_replicas * gpus_per_worker`
+becomes `ray.num_workers` unless you set it explicitly.
+
+</details>
+
 ### 3. (Optional) Experiment Tracking
 
 Add `tracker` to your `training_config`:
@@ -231,14 +313,52 @@ modal:
 
 When training is done, you can bundle your output checkpoint with `leap-bundle` to use it directly within LEAP. Checkout our [Quick Start guide](https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github&utm_medium=link&utm_campaign=LEAP&utm_content=general).
 
+## 🧮 Quantization / GGUF Export
+
+Export a HuggingFace checkpoint or PEFT adapter to GGUF with
+`leap-export-gguf`:
+
+```bash
+uv run leap-export-gguf /path/to/checkpoint --quant F16 --output-dir /lambdafs/gguf
+```
+
+Repeat `--quant` to produce multiple outputs:
+
+```bash
+uv run leap-export-gguf /path/to/checkpoint \
+  --quant F16 \
+  --quant Q4_K_M \
+  --output-dir /lambdafs/gguf \
+  --llama-cpp-dir /path/to/llama.cpp
+```
+
+`F16`, `BF16`, `F32`, and `Q8_0` are exported directly with the bundled
+llama.cpp conversion scripts. K-quants such as `Q4_K_M`, `Q5_K_M`, and `Q6_K`
+require a built llama.cpp checkout containing `build/bin/llama-quantize`; pass
+`--llama-cpp-dir` or set `LLAMA_CPP_DIR`.
+
+PEFT adapter directories can be exported with `F16`, `BF16`, `F32`, or `Q8_0`:
+
+```bash
+uv run leap-export-gguf /path/to/adapter \
+  --base-model-path /path/to/base-model \
+  --quant F16 \
+  --output-dir /lambdafs/gguf
+```
+
+For adapter K-quants, merge the adapter into the base model first, then export
+the merged checkpoint.
+
 ## Contents
 
 - [Expected Dataset Formats](#-expected-dataset-formats)
 - [GRPO](#grpo-group-relative-policy-optimization)
 - [Tool Calling Datasets](#-tool-calling-datasets)
 - [Resuming Training](#-resuming-training)
+- [Quantization / GGUF Export](#-quantization--gguf-export)
 - [Evaluation Benchmarks](#-evaluation-benchmarks)
 - [Advanced Configuration](#-advanced-configuration)
+- [Testing](#-testing)
 
 ## 📊 Expected Dataset Formats
 
@@ -293,6 +413,42 @@ When training is done, you can bundle your output checkpoint with `leap-bundle` 
 ```
 
 > **Note**: VLM datasets commonly have images in a separate row and are referenced in the messages column. If your image URLs or Paths are in a separate column from your messages, you'll need to merge the images into the 'messages' section like above.
+
+### VLM DPO (Vision-Language Preference Optimization)
+
+Use `training_type: "vlm_dpo"` for multimodal preference data. Each row should
+provide `prompt`, `chosen`, and `rejected` message lists plus either an
+`image` or `images` column:
+
+```json
+{
+  "image": "images/chart.png",
+  "prompt": [
+    {
+      "role": "user",
+      "content": [{ "type": "text", "text": "Which trend is most important?" }]
+    }
+  ],
+  "chosen": [
+    {
+      "role": "assistant",
+      "content": "Revenue grows fastest in Q4."
+    }
+  ],
+  "rejected": [
+    {
+      "role": "assistant",
+      "content": "The chart is inconclusive."
+    }
+  ]
+}
+```
+
+Use `images` instead of `image` for multi-image rows. Relative image paths are
+resolved against `dataset.image_root` when set. See
+[`job_configs/vlm_dpo_example.yaml`](./job_configs/vlm_dpo_example.yaml) for a
+complete LoRA config. `freeze_vision_encoder` and
+`optimizer_type: "adamw_8bit"` are optional knobs, not defaults.
 
 ### GRPO and VLM GRPO
 
@@ -566,6 +722,12 @@ The `dataset.path` field in your YAML config accepts local files, HuggingFace Hu
 | Azure           | `az://container/path/to/data.parquet`          |
 
 Cloud storage requires appropriate credentials (AWS, GCP, or Azure). Use `subset` for HuggingFace datasets with multiple configs, and `limit` to cap the number of samples for quick testing.
+
+## 🧪 Testing
+
+The suite is intentionally scoped to four buckets: config parsing, e2e, RL,
+and MoE. See [`tests/README.md`](./tests/README.md) for the current layout.
+E2E fixtures and SLURM launchers live under [`tests/e2e/`](./tests/e2e/).
 
 ## Contributing
 

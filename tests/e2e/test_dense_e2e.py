@@ -1,4 +1,7 @@
+from types import SimpleNamespace
+
 import pytest
+from torch.utils.data.distributed import DistributedSampler
 
 from conftest import (
     assert_checkpoints_exist,
@@ -6,10 +9,58 @@ from conftest import (
     requires_gpu,
     run_e2e_training,
 )
+from leap_finetune.data_loading.ray_data_utils import ray_dataset_to_hf
+from leap_finetune.training.sft import LFMSFTTrainer
 
 pytestmark = pytest.mark.dense
 
 FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
+
+
+# === Dense Ray sharding contract ===
+
+
+class _RayShard:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def iter_rows(self):
+        yield from self._rows
+
+
+def _sample_id_collator(rows):
+    return {"sample_id": [row["sample_id"] for row in rows]}
+
+
+def _collect_sample_ids(dataloader):
+    sample_ids = []
+    for batch in dataloader:
+        sample_ids.extend(batch["sample_id"])
+    return sample_ids
+
+
+class TestDenseRaySharding:
+    def test_worker_shards_are_not_sharded_again_by_trainer_dataloader(self):
+        rows = [{"sample_id": i} for i in range(8)]
+        worker_shards = [
+            ray_dataset_to_hf(_RayShard(rows[:4])),
+            ray_dataset_to_hf(_RayShard(rows[4:])),
+        ]
+
+        consumed_by_worker = []
+        for shard in worker_shards:
+            trainer = LFMSFTTrainer.__new__(LFMSFTTrainer)
+            trainer.train_dataset = shard
+            trainer.args = SimpleNamespace(per_device_train_batch_size=2)
+            trainer.data_collator = _sample_id_collator
+
+            dataloader = trainer.get_train_dataloader()
+
+            assert not isinstance(dataloader.sampler, DistributedSampler)
+            consumed_by_worker.append(sorted(_collect_sample_ids(dataloader)))
+
+        assert consumed_by_worker == [[0, 1, 2, 3], [4, 5, 6, 7]]
+        assert sorted(sum(consumed_by_worker, [])) == list(range(8))
 
 
 # === Dense SFT with LoRA ===

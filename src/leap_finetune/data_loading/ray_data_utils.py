@@ -340,6 +340,7 @@ def _build_tokenization_cache_key_if_needed(
         loader,
         shuffle_seed=shuffle_seed,
         tokenizer_id=tokenizer.name_or_path,
+        tokenizer_chat_template=getattr(tokenizer, "chat_template", None),
         training_config=training_config,
     )
 
@@ -372,6 +373,7 @@ def _build_tokenization_cache_key(
     shuffle_seed: int,
     tokenizer_id: str,
     training_config: dict,
+    tokenizer_chat_template=None,
 ) -> tuple[str, dict]:
     """Build a deterministic cache key from all parameters affecting tokenized output."""
     dataset_type = loader.dataset_type
@@ -406,6 +408,8 @@ def _build_tokenization_cache_key(
     elif dataset_type == "dpo":
         key["max_prompt_length"] = training_config.get("max_prompt_length")
         key["max_completion_length"] = training_config.get("max_completion_length")
+        key["shuffle_dataset"] = training_config.get("shuffle_dataset", True)
+        key["chat_template_sha256"] = _hash_template(tokenizer_chat_template)
 
     canonical = json.dumps(key, sort_keys=True)
     fingerprint = hashlib.sha256(canonical.encode()).hexdigest()[:16]
@@ -498,6 +502,17 @@ def _hash_text_file(path: str | os.PathLike | None) -> str | None:
     if not candidate.exists() or not candidate.is_file():
         return None
     return hashlib.sha256(candidate.read_bytes()).hexdigest()
+
+
+def _hash_template(template) -> str | None:
+    """Hash tokenizer chat templates without storing full template text in metadata."""
+    if template is None:
+        return None
+    if isinstance(template, str):
+        template_text = template
+    else:
+        template_text = json.dumps(template, sort_keys=True, default=str)
+    return hashlib.sha256(template_text.encode()).hexdigest()
 
 
 # === Environment ===

@@ -127,13 +127,14 @@ def _assert_local_cuda_available() -> None:
         sys.exit(1)
 
 
-def main() -> None:
-    command, config_path_arg, output_dir_arg = _parse_cli_args()
+def run_config(config_path: str | pathlib.Path) -> None:
+    """Launch a training job from a YAML config path.
 
-    if command == "slurm":
-        _generate_slurm_script(config_path_arg, output_dir_arg)
-        return
-
+    This is the programmatic equivalent of `leap-finetune <config>`. It keeps
+    the same backend dispatch behavior: configs with `slurm`, `kuberay`, or
+    `modal` sections submit remotely; other configs launch local Ray training.
+    """
+    config_path_arg = str(config_path)
     # === Remote backend dispatch ===
     # Keep this path light: Slurm/Modal submission should not import torch, Ray,
     # PEFT, or datasets unless we are actually launching local training.
@@ -149,12 +150,6 @@ def main() -> None:
 
     if check_and_handle_modal(config_path_arg):
         return
-
-    if not config_path_arg:
-        print("No config file provided. Please provide a path to a YAML config file.")
-        print("Usage: leap-finetune <path_to_config.yaml>")
-        print("   or: leap-finetune slurm <path_to_config.yaml>")
-        sys.exit(1)
 
     _assert_local_cuda_available()
 
@@ -185,3 +180,19 @@ def main() -> None:
         raise ValueError(f"Issue parsing configuration: {e}") from e
 
     ray_trainer(job_config_dict)
+
+
+def main() -> None:
+    command, config_path_arg, output_dir_arg = _parse_cli_args()
+
+    if command == "slurm":
+        _generate_slurm_script(config_path_arg, output_dir_arg)
+        return
+
+    if not config_path_arg:
+        print("No config file provided. Please provide a path to a YAML config file.")
+        print("Usage: leap-finetune <path_to_config.yaml>")
+        print("   or: leap-finetune slurm <path_to_config.yaml>")
+        sys.exit(1)
+
+    run_config(config_path_arg)

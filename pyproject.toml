@@ -27,6 +27,7 @@ dependencies = [
     "trackio>=0.3",
     "typer>=0.20.0",
     "kubernetes>=34.0.0",
+    "bitsandbytes>=0.48.0; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,7 @@ rl-env = [
 [project.scripts]
 leap-finetune = "leap_finetune:main"
 leap-export-manual-sharded-checkpoint = "leap_finetune.cli.export_manual_sharded_checkpoint:main"
+leap-export-gguf = "leap_finetune.cli.export_gguf:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -115,7 +117,7 @@ requires-dist = ["torch", "einops", "ninja", "packaging", "setuptools", "wheel"]
 testpaths = ["tests"]
 markers = [
     "configs: config parsing, validation, override, filtering (no GPU)",
-    "data: dataset loading, tokenization, sharding validation",
+    "rl: RL data, rewards, rollout, and environment tests",
     "dense: dense model end-to-end training tests",
     "vlm: VLM end-to-end training tests",
     "moe: MoE end-to-end training tests",

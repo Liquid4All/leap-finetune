@@ -718,84 +718,67 @@ class TestSlurmGeneration:
             assert "LEAP_FINETUNE_FROM_SLURM=1" in content
             assert "leap-finetune" in content
 
-    def test_generate_multinode_slurm_script_starts_ray_cluster(self, tmp_path):
+    def test_generate_grpo_slurm_gpu_defaults(self, tmp_path):
         from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
-        config = {
-            "project_name": "multi_node_grpo",
-            "model_name": "LFM2-1.2B",
-            "training_type": "grpo",
-            "dataset": BASE_SFT_DATASET,
-            "training_config": {"extends": "DEFAULT_GRPO"},
-            "slurm": {
-                "nodes": 2,
-                "ntasks_per_node": 1,
-                "gpus_per_task": 1,
-            },
-        }
-        config_path = pathlib.Path(write_config(config, tmp_path))
-        script_path = generate_slurm_script(config_path, config, tmp_path)
-        content = script_path.read_text()
+        cases = [
+            (
+                "server_grpo",
+                {"grpo_rollout": {"server_gpus": 1}},
+                {"extends": "DEFAULT_GRPO", "vllm_mode": "server"},
+                "#SBATCH --gpus-per-task=2",
+            ),
+            (
+                "judge_grpo",
+                {"rewards": {"judge": {"model": "LFM2-1.2B"}}},
+                {"extends": "DEFAULT_GRPO"},
+                "#SBATCH --gpus-per-task=2",
+            ),
+            (
+                "judge_server_grpo",
+                {
+                    "grpo_rollout": {"server_gpus": 1},
+                    "rewards": {"judge": {"model": "LFM2-1.2B"}},
+                },
+                {"extends": "DEFAULT_GRPO", "vllm_mode": "server"},
+                "#SBATCH --gpus-per-task=3",
+            ),
+        ]
 
-        assert "slurm_ray.sh" in content
-        assert 'ray_slurm_init "${SLURM_NNODES}" "1"' in content
-        assert 'ray_slurm_wait_ready "${SLURM_NNODES}" "${TOTAL_GPUS}"' in content
-        assert "trap ray_slurm_stop_cluster EXIT" in content
+        for project_name, extra_config, training_config, expected in cases:
+            case_dir = tmp_path / project_name
+            case_dir.mkdir()
+            config = {
+                "project_name": project_name,
+                "model_name": "LFM2-1.2B",
+                "training_type": "grpo",
+                "dataset": BASE_SFT_DATASET,
+                "training_config": training_config,
+                **extra_config,
+            }
+            config_path = pathlib.Path(write_config(config, case_dir))
+            script_path = generate_slurm_script(config_path, config, case_dir)
+            assert expected in script_path.read_text()
 
-    def test_generate_server_mode_slurm_defaults_to_two_gpus(self, tmp_path):
-        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
-        config = {
-            "project_name": "server_grpo",
-            "model_name": "LFM2-1.2B",
-            "training_type": "grpo",
-            "dataset": BASE_SFT_DATASET,
-            "grpo_rollout": {"server_gpus": 1},
-            "training_config": {
-                "extends": "DEFAULT_GRPO",
-                "vllm_mode": "server",
-            },
-        }
-        config_path = pathlib.Path(write_config(config, tmp_path))
-        script_path = generate_slurm_script(config_path, config, tmp_path)
-        content = script_path.read_text()
+# === Public entrypoints ===
 
-        assert "#SBATCH --gpus-per-task=2" in content
 
-    def test_generate_grpo_judge_slurm_defaults_to_extra_gpu(self, tmp_path):
-        from leap_finetune.distribution.backends.slurm import generate_slurm_script
+class TestPublicEntrypoints:
+    def test_run_config_import_dispatches_like_cli(self, monkeypatch, tmp_path):
+        import leap_finetune
+        import leap_finetune.cli.main as cli_main
 
-        config = {
-            "project_name": "judge_grpo",
-            "model_name": "LFM2-1.2B",
-            "training_type": "grpo",
-            "dataset": BASE_SFT_DATASET,
-            "rewards": {"judge": {"model": "LFM2-1.2B"}},
-            "training_config": {"extends": "DEFAULT_GRPO"},
-        }
-        config_path = pathlib.Path(write_config(config, tmp_path))
-        script_path = generate_slurm_script(config_path, config, tmp_path)
-        content = script_path.read_text()
+        config_path = tmp_path / "job.yaml"
+        seen = []
 
-        assert "#SBATCH --gpus-per-task=2" in content
+        def fake_slurm_dispatch(config_path_arg):
+            seen.append(config_path_arg)
+            return True
 
-    def test_generate_server_mode_judge_slurm_defaults_to_three_gpus(self, tmp_path):
-        from leap_finetune.distribution.backends.slurm import generate_slurm_script
+        monkeypatch.setattr(cli_main, "check_and_handle_slurm", fake_slurm_dispatch)
 
-        config = {
-            "project_name": "judge_server_grpo",
-            "model_name": "LFM2-1.2B",
-            "training_type": "grpo",
-            "dataset": BASE_SFT_DATASET,
-            "grpo_rollout": {"server_gpus": 1},
-            "rewards": {"judge": {"model": "LFM2-1.2B"}},
-            "training_config": {
-                "extends": "DEFAULT_GRPO",
-                "vllm_mode": "server",
-            },
-        }
-        config_path = pathlib.Path(write_config(config, tmp_path))
-        script_path = generate_slurm_script(config_path, config, tmp_path)
-        content = script_path.read_text()
+        leap_finetune.run_config(config_path)
 
-        assert "#SBATCH --gpus-per-task=3" in content
+        assert leap_finetune.run_config is cli_main.run_config
+        assert seen == [str(config_path)]

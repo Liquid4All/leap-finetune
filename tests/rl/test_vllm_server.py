@@ -5,7 +5,7 @@ from leap_finetune.rl.vllm_server import (
     resolve_vllm_rollout_plan,
 )
 
-pytestmark = pytest.mark.configs
+pytestmark = pytest.mark.rl
 
 
 # === vLLM server resource planning ===

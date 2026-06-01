@@ -8,7 +8,7 @@ Verifies the VLM GRPO training loop works end-to-end including:
 - One optimizer step
 
 Run on a GPU node with:
-    uv run pytest --vlm tests/test_vlm_grpo_e2e.py -v
+    uv run pytest --vlm tests/e2e/test_vlm_grpo_e2e.py -v
 """
 
 import math

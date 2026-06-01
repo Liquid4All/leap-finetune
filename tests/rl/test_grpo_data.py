@@ -11,7 +11,7 @@ from leap_finetune.data_loading.validate_dataset_format import (
     validate_dataset_format,
 )
 
-pytestmark = pytest.mark.data
+pytestmark = pytest.mark.rl
 
 
 # === GRPO dataset validation ===
@@ -445,7 +445,7 @@ class TestVLMGRPOSFTNormalization:
 
 _SPEC_JSON = importlib.util.spec_from_file_location(
     "vlm_grounding_recipe",
-    pathlib.Path(__file__).parent.parent
+    pathlib.Path(__file__).parents[2]
     / "rewards"
     / "tasks"
     / "vlm_grounding"
@@ -564,7 +564,7 @@ class TestVLMGroundingJSONExtract:
 
 # === Text GRPO task bundles ===
 
-_TASKS_ROOT = pathlib.Path(__file__).parent.parent / "rewards" / "tasks"
+_TASKS_ROOT = pathlib.Path(__file__).parents[2] / "rewards" / "tasks"
 
 _SPEC_GSM8K = importlib.util.spec_from_file_location(
     "gsm8k_recipe",

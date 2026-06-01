@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from leap_finetune.cli.main import main
+from leap_finetune.cli.main import main, run_config
 
 HOME = Path.home()
 
@@ -28,4 +28,5 @@ __all__ = [
     "SFT_OUTPUT_PATH",
     "TOKENIZATION_CACHE_DIR",
     "main",
+    "run_config",
 ]

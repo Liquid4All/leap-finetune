@@ -1026,6 +1026,15 @@ wheels = [
 ]
 
 [[package]]
+name = "durationpy"
+version = "0.10"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/a4/e44218c2b394e31a6dd0d6b095c4e1f32d0be54c2a4b250032d717647bab/durationpy-0.10.tar.gz", hash = "sha256:1fa6893409a6e739c9c72334fc65cca1f355dbdd93405d30f726deb5bde42fba", size = 3335 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/0d/9feae160378a3553fa9a339b0e9c1a048e147a4127210e286ef18b730f03/durationpy-0.10-py3-none-any.whl", hash = "sha256:3b41e1b601234296b4fb368338fdcd3e13e0b4fb5b67345948f4f2bf9868b286", size = 3922 },
+]
+
+[[package]]
 name = "einops"
 version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1339,6 +1348,8 @@ version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9b/24/58afdfe0be89139378b09ecf6f0ae0424c1b7274b413eb3976dd9ecbc8f4/flydsl-0.1.4-cp312-cp312-manylinux_2_35_x86_64.whl", hash = "sha256:86ddedb36ccf95d17f7ef91fd143ccd6e58c936fdc5bbee653f19a1490471156", size = 74040270 },
+    { url = "https://files.pythonhosted.org/packages/86/d9/620a1fa732352093bafdf1047f19d6a40ac916c88397c45c273fa2addb46/flydsl-0.1.4-cp313-cp313-manylinux_2_35_x86_64.whl", hash = "sha256:0866d9a238d35970b1ac37ec7326d49b30384161f4063632a28207dd0aaf4f3c", size = 74050827 },
+    { url = "https://files.pythonhosted.org/packages/97/12/543b6295beb40b6d48c1cca67219b1fec574d991e70fbab3306392656ebf/flydsl-0.1.4-cp314-cp314-manylinux_2_35_x86_64.whl", hash = "sha256:d9ff473e1521ee83aa076a6fafc7e93d069c4fa31dd80af39a781ea75c9db741", size = 74050599 },
 ]
 
 [[package]]
@@ -2370,6 +2381,27 @@ wheels = [
 ]
 
 [[package]]
+name = "kubernetes"
+version = "36.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "certifi", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "durationpy", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "python-dateutil", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "pyyaml", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "requests", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "requests-oauthlib", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "six", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "urllib3", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "websocket-client", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/63/c2/cb08cd4cc2874c4ca6e12cb94f7639176043905e9d12bdda34db9ad9a3a0/kubernetes-36.0.1.tar.gz", hash = "sha256:3eadd6ae1be3b742ae63bd382b139c9fd5171afb6e00771dcefaae2d49001992", size = 2337184 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/92/6b/62f3d6cd024b1d0cfe8a87189b3562a4bb2dc581279056ccfd8cc233c556/kubernetes-36.0.1-py2.py3-none-any.whl", hash = "sha256:7631d11dd761f18658064a6ee91a36923cec3bef3cd92b99e08a53745b95f7d0", size = 4617214 },
+]
+
+[[package]]
 name = "lark"
 version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2385,6 +2417,7 @@ source = { editable = "." }
 dependencies = [
     { name = "accelerate", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
     { name = "deepspeed", marker = "(python_full_version < '3.13' and sys_platform == 'linux') or (python_full_version >= '3.13' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (python_full_version >= '3.13' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "kubernetes", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
     { name = "modal", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
     { name = "mpi4py", marker = "(python_full_version < '3.13' and sys_platform == 'linux') or (python_full_version >= '3.13' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (python_full_version >= '3.13' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
     { name = "numpy", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
@@ -2442,6 +2475,7 @@ rocm = [
 requires-dist = [
     { name = "accelerate", specifier = ">=1.7.0" },
     { name = "deepspeed", marker = "sys_platform == 'linux'", specifier = ">=0.17.1" },
+    { name = "kubernetes", specifier = ">=34.0.0" },
     { name = "modal", specifier = ">=0.73" },
     { name = "mpi4py", marker = "sys_platform == 'linux'", specifier = ">=4.1.0" },
     { name = "numpy", specifier = ">=2.4.1" },
@@ -3504,6 +3538,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/10/c0/1b303feea90d296f6176f32a2a70b5ef230f9bdeb3a72bddb0dc922dc137/nvidia_nvtx_cu12-12.8.90-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d7ad891da111ebafbf7e015d34879f7112832fc239ff0d7d776b6cb685274615", size = 91161 },
     { url = "https://files.pythonhosted.org/packages/a2/eb/86626c1bbc2edb86323022371c39aa48df6fd8b0a1647bc274577f72e90b/nvidia_nvtx_cu12-12.8.90-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:5b17e2001cc0d751a5bc2c6ec6d26ad95913324a4adb86788c944f8ce9ba441f", size = 89954 },
     { url = "https://files.pythonhosted.org/packages/9f/99/4c9c0c329bf9fc125008c3b54c7c94c0023518d06fc025ae36431375e1fe/nvidia_nvtx_cu12-12.8.90-py3-none-win_amd64.whl", hash = "sha256:619c8304aedc69f02ea82dd244541a83c3d9d40993381b3b590f1adaed3db41e", size = 56492 },
+]
+
+[[package]]
+name = "oauthlib"
+version = "3.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065 },
 ]
 
 [[package]]
@@ -5054,6 +5097,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5f/a4/98b9c7c6428a668bf7e42ebb7c79d576a1c3c1e3ae2d47e674b468388871/requests-2.33.1.tar.gz", hash = "sha256:18817f8c57c6263968bc123d237e3b8b08ac046f5456bd1e307ee8f4250d3517", size = 134120 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/8e/7540e8a2036f79a125c1d2ebadf69ed7901608859186c856fa0388ef4197/requests-2.33.1-py3-none-any.whl", hash = "sha256:4e6d1ef462f3626a1f0a0a9c42dd93c63bad33f9f1c1937509b8c5c8718ab56a", size = 64947 },
+]
+
+[[package]]
+name = "requests-oauthlib"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "oauthlib", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+    { name = "requests", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'darwin' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-cuda' and extra == 'group-13-leap-finetune-rocm') or (sys_platform == 'linux' and extra == 'group-13-leap-finetune-flash-attn' and extra == 'group-13-leap-finetune-rocm')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36", size = 24179 },
 ]
 
 [[package]]
@@ -6809,6 +6865,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4f/55/2af26693fd15165c4ff7857e38330e1b61ab8c37d15dc79118cdba115b7a/watchfiles-1.1.1-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8c91ed27800188c2ae96d16e3149f199d62f86c7af5f5f4d2c61a3ed8cd3666c", size = 455072 },
     { url = "https://files.pythonhosted.org/packages/66/1d/d0d200b10c9311ec25d2273f8aad8c3ef7cc7ea11808022501811208a750/watchfiles-1.1.1-cp314-cp314t-musllinux_1_1_aarch64.whl", hash = "sha256:311ff15a0bae3714ffb603e6ba6dbfba4065ab60865d15a6ec544133bdb21099", size = 629104 },
     { url = "https://files.pythonhosted.org/packages/e3/bd/fa9bb053192491b3867ba07d2343d9f2252e00811567d30ae8d0f78136fe/watchfiles-1.1.1-cp314-cp314t-musllinux_1_1_x86_64.whl", hash = "sha256:a916a2932da8f8ab582f242c065f5c81bed3462849ca79ee357dd9551b0e9b01", size = 622112 },
+]
+
+[[package]]
+name = "websocket-client"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/41/aa4bf9664e4cda14c3b39865b12251e8e7d239f4cd0e3cc1b6c2ccde25c1/websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98", size = 70576 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/db/b10e48aa8fff7407e67470363eac595018441cf32d5e1001567a7aeba5d2/websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef", size = 82616 },
 ]
 
 [[package]]

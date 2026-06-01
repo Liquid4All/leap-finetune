@@ -20,6 +20,7 @@ TRAINING_TYPE_TO_CONFIG = {
     "sft": "DEFAULT_SFT",
     "dpo": "DEFAULT_DPO",
     "vlm_sft": "DEFAULT_VLM_SFT",
+    "vlm_dpo": "DEFAULT_VLM_DPO",
     "moe_sft": "MOE_SFT",
     "moe_dpo": "MOE_DPO",
     "grpo": "DEFAULT_GRPO",
@@ -29,7 +30,7 @@ DATASET_TYPE_ALIASES = {
     "moe_sft": "sft",
     "moe_dpo": "dpo",
 }
-VALID_DATASET_TYPES = {"sft", "dpo", "vlm_sft", "grpo", "vlm_grpo"}
+VALID_DATASET_TYPES = {"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo"}
 
 
 def resolve_config_path(config_input: str) -> pathlib.Path:
@@ -241,6 +242,7 @@ def _parse_dataset_loader(
         val_subset=val_subset,
         image_root=ds_config.get("image_root"),
         cache_dataset=ds_config.get("cache_dataset", False),
+        hf_streaming_batch_size=ds_config.get("hf_streaming_batch_size", 10000),
     )
 
 
@@ -420,6 +422,10 @@ def parse_job_config(config_input: str) -> JobConfig:
     final_train_values = final_training_config.value
     final_train_values["chat_template_path"] = _resolve_local_path(
         final_train_values.get("chat_template_path"),
+        base_dir=config_dir,
+    )
+    final_train_values["adapter_path"] = _resolve_local_path(
+        final_train_values.get("adapter_path"),
         base_dir=config_dir,
     )
 

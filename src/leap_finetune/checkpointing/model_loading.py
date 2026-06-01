@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LFM_TIED_WORD_EMBEDDING_MODEL_TYPES = {"lfm2", "lfm2_moe"}
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH = (
+    _REPO_ROOT / "job_configs" / "chat_templates" / "lfm2_5_chat_template.jinja"
+)
 
 
 def _get_attn_implementation() -> str:
@@ -52,7 +56,29 @@ def _resolve_model_id(model_name: str) -> str:
     return f"LiquidAI/{model_name}"
 
 
+def _is_lfm25_chat_template_model(model_name: str) -> bool:
+    model_lower = model_name.lower()
+    return any(
+        marker in model_lower
+        for marker in (
+            "lfm2.5",
+            "lfm2-24b",
+            "lfm2_24b",
+        )
+    )
+
+
+def _default_chat_template_path(model_name: str) -> pathlib.Path | None:
+    model_path = pathlib.Path(model_name)
+    if model_path.exists() and model_path.is_dir():
+        return None
+    if _is_lfm25_chat_template_model(model_name):
+        return _LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH
+    return None
+
+
 def _resolve_chat_template(
+    model_name: str = "",
     chat_template: str | None = None,
     chat_template_path: str | None = None,
 ) -> str | None:
@@ -62,16 +88,26 @@ def _resolve_chat_template(
     if chat_template_path:
         return pathlib.Path(chat_template_path).expanduser().read_text()
 
+    default_template_path = _default_chat_template_path(model_name)
+    if default_template_path is not None and default_template_path.exists():
+        logger.info(
+            "Using default tokenizer chat template for %s from %s",
+            model_name,
+            default_template_path,
+        )
+        return default_template_path.read_text()
+
     return chat_template
 
 
 def _apply_chat_template_override(
     tokenizer: AutoTokenizer,
     *,
+    model_name: str,
     chat_template: str | None = None,
     chat_template_path: str | None = None,
 ) -> AutoTokenizer:
-    resolved = _resolve_chat_template(chat_template, chat_template_path)
+    resolved = _resolve_chat_template(model_name, chat_template, chat_template_path)
     if resolved:
         tokenizer.chat_template = resolved
         logger.info("Applied tokenizer chat template override")
@@ -164,6 +200,7 @@ def load_tokenizer(
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     return _apply_chat_template_override(
         tokenizer,
+        model_name=model_name,
         chat_template=chat_template,
         chat_template_path=chat_template_path,
     )
@@ -221,6 +258,7 @@ def load_model(
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer = _apply_chat_template_override(
         tokenizer,
+        model_name=model_name,
         chat_template=chat_template,
         chat_template_path=chat_template_path,
     )

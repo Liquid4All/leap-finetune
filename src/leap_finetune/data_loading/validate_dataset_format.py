@@ -214,12 +214,20 @@ def _load_sample_dataset(
 
         else:
             # HuggingFace Hub - use streaming then convert to Dataset
-            ds_stream = load_dataset(dataset_path, subset, split=split, streaming=True)
             samples = []
-            for i, item in enumerate(ds_stream):
-                if i >= num_samples:
+            split_parts = [part.strip() for part in split.split("+") if part.strip()]
+            if not split_parts:
+                raise ValueError("Dataset split cannot be empty")
+            for split_part in split_parts:
+                ds_stream = load_dataset(
+                    dataset_path, subset, split=split_part, streaming=True
+                )
+                for item in ds_stream:
+                    if len(samples) >= num_samples:
+                        break
+                    samples.append(item)
+                if len(samples) >= num_samples:
                     break
-                samples.append(item)
             return Dataset.from_list(samples)
     except Exception as e:
         raise ValueError(f"Failed to load dataset samples from '{dataset_path}': {e}")
@@ -258,8 +266,6 @@ def get_row_filter(
         for msg in messages:
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
-            if "tool_calls" in msg:
-                return False
             content = msg.get("content", "")
             if isinstance(content, str) and ("<" in content or "[" in content):
                 if has_foreign_tool_markers(content):
@@ -286,8 +292,6 @@ def get_row_filter(
                 for msg in data:
                     if not isinstance(msg, dict) or msg.get("role") != "assistant":
                         continue
-                    if "tool_calls" in msg:
-                        return False
                     content = msg.get("content", "")
                     if isinstance(content, str) and ("<" in content or "[" in content):
                         if has_foreign_tool_markers(content):
@@ -335,6 +339,34 @@ def get_row_filter(
                     return False
 
         return True
+
+    def is_valid_vlm_dpo(row: dict) -> bool:
+        """Check VLM DPO rows with image path(s) and preference messages."""
+        prompt = row.get("prompt")
+        chosen = row.get("chosen")
+        rejected = row.get("rejected")
+        if not prompt or not chosen or not rejected:
+            return False
+        if chosen == rejected:
+            return False
+        if not (
+            isinstance(prompt, list)
+            and isinstance(chosen, list)
+            and isinstance(rejected, list)
+        ):
+            return False
+
+        from leap_finetune.data_loading.image_loader import is_image_loadable
+
+        image = row.get("image")
+        images = row.get("images")
+        if isinstance(image, str):
+            return is_image_loadable(image)
+        if isinstance(images, list) and images:
+            return all(
+                isinstance(item, str) and is_image_loadable(item) for item in images
+            )
+        return False
 
     def is_valid_grpo(row: dict) -> bool:
         """Check if row has a valid GRPO format: non-empty `prompt` (str or messages list)."""
@@ -397,6 +429,8 @@ def get_row_filter(
         return is_valid_dpo
     elif dataset_type == "vlm_sft":
         return is_valid_vlm_sft
+    elif dataset_type == "vlm_dpo":
+        return is_valid_vlm_dpo
     elif dataset_type == "grpo":
         return is_valid_grpo
     elif dataset_type == "vlm_grpo":
@@ -467,6 +501,58 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
                         and not pathlib.PurePosixPath(item["image"]).is_absolute()
                     ):
                         item["image"] = str(root / item["image"])
+
+        return row
+
+    def normalize_vlm_dpo(row: dict) -> dict:
+        import json
+        import pathlib
+
+        import numpy as np
+
+        def as_py(value):
+            if isinstance(value, np.ndarray):
+                return [as_py(v) for v in value.tolist()]
+            if isinstance(value, list):
+                return [as_py(v) for v in value]
+            if isinstance(value, tuple):
+                return [as_py(v) for v in value]
+            if isinstance(value, dict):
+                return {k: as_py(v) for k, v in value.items()}
+            return value
+
+        for key in ("prompt", "chosen", "rejected", "images"):
+            val = as_py(row.get(key))
+            if isinstance(val, str) and key in {
+                "prompt",
+                "chosen",
+                "rejected",
+                "images",
+            }:
+                try:
+                    val = json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            row[key] = val
+
+        if image_root:
+            root = pathlib.PurePosixPath(image_root)
+            image = row.get("image")
+            if (
+                isinstance(image, str)
+                and not pathlib.PurePosixPath(image).is_absolute()
+            ):
+                row["image"] = str(root / image)
+
+            images = row.get("images")
+            if isinstance(images, list):
+                row["images"] = [
+                    str(root / item)
+                    if isinstance(item, str)
+                    and not pathlib.PurePosixPath(item).is_absolute()
+                    else item
+                    for item in images
+                ]
 
         return row
 
@@ -643,6 +729,8 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
 
     if dataset_type == "vlm_sft":
         return normalize_vlm_sft
+    elif dataset_type == "vlm_dpo":
+        return normalize_vlm_dpo
     elif dataset_type == "sft":
         return normalize_sft
     elif dataset_type == "dpo":
@@ -717,6 +805,8 @@ def validate_dataset_format(
         return validate_dpo_format(dataset, model_family=model_family)
     elif dataset_type == "vlm_sft":
         return validate_vlm_sft_format(dataset)
+    elif dataset_type == "vlm_dpo":
+        return validate_vlm_dpo_format(dataset)
     elif dataset_type == "grpo":
         return validate_grpo_format(dataset)
     elif dataset_type == "vlm_grpo":
@@ -880,7 +970,7 @@ def validate_sft_format(dataset: Dataset, model_family: str = "lfm2") -> Dataset
 
     # === Tool-Call Format ===
     for i in range(len(dataset)):
-        validate_tool_calls_in_messages(dataset[i][conv_col], i)
+        validate_tool_calls_in_messages(dataset[i][conv_col], i, model_family)
 
     # Rename column if needed
     if conv_col != "messages":
@@ -948,13 +1038,80 @@ def validate_dpo_format(dataset: Dataset, model_family: str = "lfm2") -> Dataset
 
     # === Tool-Call Format ===
     for i in range(len(dataset)):
-        validate_tool_calls_dpo(dataset[i]["chosen"], dataset[i]["rejected"], i)
+        validate_tool_calls_dpo(
+            dataset[i]["chosen"], dataset[i]["rejected"], i, model_family
+        )
 
     # Add prompt if missing
     if "prompt" in columns:
         return dataset
 
     return dataset.map(lambda x: {**x, "prompt": _extract_prompt(x["chosen"])})
+
+
+def validate_vlm_dpo_format(dataset: Dataset) -> Dataset:
+    """Validate VLM DPO rows for TRL's vision preference collator.
+
+    Expected columns are prompt/chosen/rejected plus either image or images.
+    Image paths stay as strings and are opened lazily by the training collator.
+    """
+    columns = set(dataset.column_names)
+    required = {"prompt", "chosen", "rejected"}
+    if not required.issubset(columns) or not ({"image", "images"} & columns):
+        expected = sorted(required | {"image"})
+        raise ValueError(
+            f"VLM DPO needs {expected} columns, or 'images' instead of 'image'. "
+            f"Found: {list(columns)}"
+        )
+
+    from leap_finetune.data_loading.image_loader import is_image_loadable
+
+    invalid: list[int] = []
+    identical: list[int] = []
+
+    def _images_loadable(row: dict) -> bool:
+        image = row.get("image")
+        if isinstance(image, str):
+            return is_image_loadable(image)
+
+        images = row.get("images")
+        if isinstance(images, list) and images:
+            return all(
+                isinstance(item, str) and is_image_loadable(item) for item in images
+            )
+        return False
+
+    for i in range(len(dataset)):
+        row = dataset[i]
+        prompt = row["prompt"]
+        chosen = row["chosen"]
+        rejected = row["rejected"]
+
+        if not (
+            isinstance(prompt, list)
+            and isinstance(chosen, list)
+            and isinstance(rejected, list)
+            and _images_loadable(row)
+        ):
+            invalid.append(i)
+            continue
+        if chosen == rejected:
+            identical.append(i)
+
+    if invalid:
+        shown = invalid[:5]
+        raise ValueError(
+            f"Found {len(invalid)} invalid VLM DPO samples "
+            f"(indices: {shown}{'...' if len(invalid) > 5 else ''})"
+        )
+    if identical:
+        shown = identical[:5]
+        raise ValueError(
+            f"Found {len(identical)} VLM DPO samples where chosen == rejected "
+            f"(indices: {shown}{'...' if len(identical) > 5 else ''})"
+        )
+
+    return dataset
 
 
 def validate_vlm_sft_format(dataset: Dataset) -> Dataset:

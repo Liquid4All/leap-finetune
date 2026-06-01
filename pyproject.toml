@@ -26,6 +26,7 @@ dependencies = [
     "modal>=0.73",
     "trackio>=0.3",
     "typer>=0.20.0",
+    "kubernetes>=34.0.0",
 ]
 
 [project.optional-dependencies]
@@ -120,6 +121,9 @@ markers = [
     "moe: MoE end-to-end training tests",
 ]
 addopts = "-v --tb=short"
+
+[tool.ruff]
+exclude = ["src/leap_finetune/quantization/gguf"]
 
 [dependency-groups]
 cuda = [

@@ -22,6 +22,7 @@ SFT_EXCLUDED_KEYS = {
     "assistant_only_loss",
     "chat_template",
     "chat_template_path",
+    "adapter_path",
     "reshard_after_forward",
     "fsdp_cpu_offload",
     "resume_from_checkpoint",

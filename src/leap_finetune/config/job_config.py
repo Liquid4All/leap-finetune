@@ -12,7 +12,14 @@ class JobConfig:
     job_name: str
     model_name: str = "LFM2-1.2B"
     training_type: Literal[
-        "sft", "dpo", "vlm_sft", "moe_sft", "moe_dpo", "grpo", "vlm_grpo"
+        "sft",
+        "dpo",
+        "vlm_sft",
+        "vlm_dpo",
+        "moe_sft",
+        "moe_dpo",
+        "grpo",
+        "vlm_grpo",
     ] = "sft"
     dataset: DatasetLoader | tuple[Dataset, Dataset] | None = None
     training_config: TrainingConfig = TrainingConfig.DEFAULT_SFT

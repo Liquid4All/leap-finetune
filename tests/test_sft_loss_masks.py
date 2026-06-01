@@ -14,13 +14,14 @@ class _FakeTokenizer:
     def apply_chat_template(
         self,
         messages,
+        tools=None,
         tokenize=True,
         truncation=True,
         max_length=None,
         return_dict=False,
         return_assistant_tokens_mask=False,
     ):
-        del messages, tokenize, truncation, max_length
+        del messages, tools, tokenize, truncation, max_length
         output = {"input_ids": [10, 11, 12, 13, 14, 15]}
         if return_assistant_tokens_mask:
             output["assistant_masks"] = [0, 1, 1, 0, 1, 1]
@@ -49,6 +50,23 @@ def test_tokenize_sft_emits_assistant_masks():
 
     assert tokenized["input_ids"] == [10, 11, 12, 13, 14, 15]
     assert tokenized["assistant_masks"] == [0, 1, 1, 0, 1, 1]
+
+
+def test_tokenize_sft_passes_tools_to_chat_template():
+    class RecordingTokenizer(_FakeTokenizer):
+        seen_tools = None
+
+        def apply_chat_template(self, messages, tools=None, **kwargs):
+            self.seen_tools = tools
+            return super().apply_chat_template(messages, tools=tools, **kwargs)
+
+    tokenizer = RecordingTokenizer()
+    tools = [{"type": "function", "function": {"name": "search"}}]
+    row = {"messages": [{"role": "user", "content": "x"}], "tools": tools}
+
+    tokenize_sft(row, tokenizer, max_length=128)
+
+    assert tokenizer.seen_tools == tools
 
 
 def test_tokenize_sft_emits_completion_mask_for_final_assistant_span():
@@ -145,13 +163,14 @@ class _PackingTokenizer(_FakeTokenizer):
     def apply_chat_template(
         self,
         messages,
+        tools=None,
         tokenize=True,
         truncation=True,
         max_length=None,
         return_dict=False,
         return_assistant_tokens_mask=False,
     ):
-        del tokenize, truncation, max_length
+        del tools, tokenize, truncation, max_length
         key = messages[0]["content"]
         if key == "one":
             output = {"input_ids": [1, 2, 3]}
@@ -221,13 +240,14 @@ class _VariableLengthTokenizer(_FakeTokenizer):
     def apply_chat_template(
         self,
         messages,
+        tools=None,
         tokenize=True,
         truncation=True,
         max_length=None,
         return_dict=False,
         return_assistant_tokens_mask=False,
     ):
-        del tokenize
+        del tools, tokenize
         length = int(messages[0]["content"])
         input_ids = list(range(length))
         if truncation and max_length is not None:

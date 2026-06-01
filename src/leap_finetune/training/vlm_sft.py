@@ -23,6 +23,7 @@ from leap_finetune.training.utils.logging import (
 )
 from leap_finetune.training.peft.peft import (
     apply_peft_to_model,
+    load_peft_adapter,
     merge_and_save_peft_model,
 )
 from leap_finetune.training.utils.trainer_mixins import (
@@ -104,6 +105,7 @@ def vlm_sft_run(training_config: dict) -> None:
 
     # Resume path is already resolved by the config parser.
     resume_from = train_config.get("resume_from_checkpoint")
+    adapter_path = train_config.get("adapter_path")
     output_dir = train_config.get("output_dir", "")
     if resume_from:
         logger.info("Resuming from checkpoint: %s", resume_from)
@@ -159,7 +161,9 @@ def vlm_sft_run(training_config: dict) -> None:
         do_image_splitting=do_image_splitting,
     )
 
-    if peft_config:
+    if adapter_path:
+        model = load_peft_adapter(model, adapter_path)
+    elif peft_config:
         model = apply_peft_to_model(model, peft_config)
 
     collate_fn = create_vlm_collate_fn(processor)
@@ -182,7 +186,7 @@ def vlm_sft_run(training_config: dict) -> None:
     run_training_safely(trainer, resume_from_checkpoint=resume_from)
 
     # Save PEFT model if applicable
-    if peft_config and is_rank_zero():
+    if (peft_config or adapter_path) and is_rank_zero():
         merge_and_save_peft_model(
             model, processor, training_args.output_dir, run_name_template
         )

@@ -3,6 +3,7 @@ from leap_finetune.distribution.ray_runtime import (
     resolve_num_workers,
 )
 from leap_finetune.distribution.backends.slurm import generate_slurm_script
+from leap_finetune import LEAP_FINETUNE_DIR
 
 
 def test_get_requested_ray_address_prefers_leap_env(monkeypatch):
@@ -92,3 +93,25 @@ slurm:
     assert "src/leap_finetune/distribution/backends/slurm_ray.sh" in script
     assert "export RAY_ADDRESS" in script
     assert "ray_slurm_start_cluster_bg" in script
+
+
+def test_slurm_ray_stop_cluster_kills_recorded_srun_pids_without_new_srun():
+    helper = (
+        LEAP_FINETUNE_DIR
+        / "src"
+        / "leap_finetune"
+        / "distribution"
+        / "backends"
+        / "slurm_ray.sh"
+    )
+    content = helper.read_text()
+    stop_body = content.split("ray_slurm_stop_cluster() {", 1)[1]
+    executable_lines = [
+        line.strip()
+        for line in stop_body.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+    assert 'kill "${pid}"' in stop_body
+    assert 'wait "${pid}"' in stop_body
+    assert not any(line.startswith("srun ") for line in executable_lines)

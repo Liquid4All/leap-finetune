@@ -74,6 +74,35 @@ DEFAULT_DPO = {
 }
 
 
+DEFAULT_VLM_DPO = {
+    **DEFAULT_DPO,
+    "training_type": "vlm_dpo",
+    "per_device_train_batch_size": 1,
+    "per_device_eval_batch_size": 1,
+    "gradient_accumulation_steps": 16,
+    "learning_rate": 5e-7,
+    "lr_scheduler_type": "cosine_with_min_lr",
+    "lr_scheduler_kwargs": {"min_lr_rate": 0.02},
+    "warmup_ratio": 0.05,
+    "num_train_epochs": 1,
+    "max_length": 4096,
+    "max_prompt_length": None,
+    "max_completion_length": None,
+    "precompute_ref_log_probs": False,
+    "eval_strategy": "steps",
+    "eval_steps": 100,
+    "save_strategy": "steps",
+    "save_steps": 100,
+    "save_total_limit": 3,
+    "gradient_checkpointing": True,
+    "remove_unused_columns": False,
+    "do_image_splitting": True,
+    "max_image_tokens": 256,
+    "freeze_vision_encoder": True,
+    "optimizer_type": "adamw_8bit",
+}
+
+
 ########################
 #   MOE DPO CONFIGS    #
 ########################

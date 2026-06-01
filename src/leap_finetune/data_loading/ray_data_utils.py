@@ -21,7 +21,15 @@ logger = logging.getLogger(__name__)
 
 
 _CACHE_SUCCESS_MARKER = "_SUCCESS"
-_TOKENIZATION_CACHE_FORMAT_VERSION = 3
+_TOKENIZATION_CACHE_FORMAT_VERSION = 4
+
+
+def _shuffle_raw_dataset(
+    ds: ray.data.Dataset, shuffle_seed: int, training_config: dict
+) -> ray.data.Dataset:
+    if not training_config.get("shuffle_dataset", True):
+        return ds
+    return ds.random_shuffle(seed=shuffle_seed)
 
 
 def create_ray_datasets(
@@ -62,7 +70,9 @@ def create_ray_datasets(
         )
 
     # === Load / Normalize / Filter / Split ===
-    train_ds, eval_ds = _load_and_prepare_datasets(loader, shuffle_seed, console)
+    train_ds, eval_ds = _load_and_prepare_datasets(
+        loader, shuffle_seed, console, training_config or {}
+    )
 
     # === Tokenize / Pack ===
     if use_pretokenize:
@@ -112,27 +122,34 @@ def _load_and_prepare_datasets(
     loader: DatasetLoader,
     shuffle_seed: int,
     console: Console,
+    training_config: dict,
 ) -> tuple[ray.data.Dataset, ray.data.Dataset | None]:
     """Load raw data, normalize/filter rows, shuffle, and build train/eval splits."""
 
     if not _should_skip_quick_validate():
         loader.quick_validate()
-    if loader.dataset_type == "vlm_sft":
+    if loader.dataset_type in ("vlm_sft", "vlm_dpo"):
         console.print(
             "[dim]Filtering VLM samples (validating images across workers)...[/dim]"
         )
 
     if loader.val_dataset_path is not None or loader.val_split is not None:
-        return _load_explicit_train_eval_datasets(loader, shuffle_seed, console)
+        return _load_explicit_train_eval_datasets(
+            loader, shuffle_seed, console, training_config
+        )
 
-    ds = _normalize_and_filter_dataset(
-        loader,
-        loader.to_ray_dataset(
-            dataset_path=loader.get_train_path(),
-            subset=loader.subset,
-            split=loader.split,
+    ds = _shuffle_raw_dataset(
+        _normalize_and_filter_dataset(
+            loader,
+            loader.to_ray_dataset(
+                dataset_path=loader.get_train_path(),
+                subset=loader.subset,
+                split=loader.split,
+            ),
         ),
-    ).random_shuffle(seed=shuffle_seed)
+        shuffle_seed,
+        training_config,
+    )
     total_count = ds.count()
 
     if total_count == 0:
@@ -174,6 +191,7 @@ def _normalize_and_filter_dataset(
     normalizer = normalize_columns(loader.dataset_type, image_root=loader.image_root)
     ds = ds.map(normalizer)
 
+    model_family = "lfm2"
     if loader.dataset_type in ("sft", "dpo"):
         from leap_finetune.checkpointing.model_info import get_model_family
 
@@ -183,7 +201,7 @@ def _normalize_and_filter_dataset(
         ds = ds.map(get_tool_normalizer(model_family))
 
     # Filter invalid rows using Ray's native filter (pure Python, Ray handles Arrow)
-    row_filter = get_row_filter(loader.dataset_type)
+    row_filter = get_row_filter(loader.dataset_type, model_family=model_family)
     return ds.filter(row_filter)
 
 
@@ -191,16 +209,21 @@ def _load_explicit_train_eval_datasets(
     loader: DatasetLoader,
     shuffle_seed: int,
     console: Console,
+    training_config: dict,
 ) -> tuple[ray.data.Dataset, ray.data.Dataset | None]:
     """Load train and optional eval datasets from explicit source configuration."""
-    train_ds = _normalize_and_filter_dataset(
-        loader,
-        loader.to_ray_dataset(
-            dataset_path=loader.get_train_path(),
-            subset=loader.subset,
-            split=loader.split,
+    train_ds = _shuffle_raw_dataset(
+        _normalize_and_filter_dataset(
+            loader,
+            loader.to_ray_dataset(
+                dataset_path=loader.get_train_path(),
+                subset=loader.subset,
+                split=loader.split,
+            ),
         ),
-    ).random_shuffle(seed=shuffle_seed)
+        shuffle_seed,
+        training_config,
+    )
     train_count = train_ds.count()
     if train_count == 0:
         raise ValueError(
@@ -374,6 +397,7 @@ def _build_tokenization_cache_key(
         key["drop_overlength"] = training_config.get("drop_overlength", False)
         key["assistant_only_loss"] = training_config.get("assistant_only_loss", False)
         key["completion_only_loss"] = training_config.get("completion_only_loss", False)
+        key["shuffle_dataset"] = training_config.get("shuffle_dataset", True)
         key["chat_template"] = training_config.get("chat_template")
         key["chat_template_path"] = training_config.get("chat_template_path")
         key["chat_template_path_sha256"] = _hash_text_file(

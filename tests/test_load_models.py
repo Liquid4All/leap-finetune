@@ -89,6 +89,28 @@ def test_resolve_chat_template_explicit_override_wins():
     assert _resolve_chat_template(chat_template="custom-template") == "custom-template"
 
 
+def test_resolve_chat_template_defaults_lfm25_nonlocal_model():
+    template = _resolve_chat_template("LiquidAI/LFM2.5-1.2B-Instruct")
+
+    assert template is not None
+    assert "{%- generation -%}" in template
+    assert "List of tools" in template
+
+
+def test_resolve_chat_template_defaults_lfm2_24b_nonlocal_model():
+    template = _resolve_chat_template("LiquidAI/LFM2-24B-A2B")
+
+    assert template is not None
+    assert "{%- generation -%}" in template
+
+
+def test_resolve_chat_template_does_not_default_local_model(tmp_path):
+    model_dir = tmp_path / "LiquidAI" / "LFM2.5-local"
+    model_dir.mkdir(parents=True)
+
+    assert _resolve_chat_template(str(model_dir)) is None
+
+
 def test_grouped_mm_override_only_applies_to_moe_models():
     dense = DummyModel("lfm2", ["Lfm2ForCausalLM"])
     moe = DummyModel("lfm2_moe", ["Lfm2MoeForCausalLM"])

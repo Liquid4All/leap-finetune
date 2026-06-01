@@ -110,3 +110,24 @@ def test_sft_cache_key_includes_template_hash_and_overlength_policy(tmp_path):
     assert key_v1["drop_overlength"] is True
     assert key_v1["chat_template_path_sha256"] != key_v2["chat_template_path_sha256"]
     assert fingerprint_v1 != fingerprint_v2
+
+
+def test_sft_cache_key_includes_shuffle_dataset():
+    loader = DatasetLoader(dataset_path="/data/train", dataset_type="sft")
+
+    fingerprint_shuffle, key_shuffle = _build_tokenization_cache_key(
+        loader,
+        shuffle_seed=42,
+        tokenizer_id="model",
+        training_config={"shuffle_dataset": True},
+    )
+    fingerprint_ordered, key_ordered = _build_tokenization_cache_key(
+        loader,
+        shuffle_seed=42,
+        tokenizer_id="model",
+        training_config={"shuffle_dataset": False},
+    )
+
+    assert key_shuffle["shuffle_dataset"] is True
+    assert key_ordered["shuffle_dataset"] is False
+    assert fingerprint_shuffle != fingerprint_ordered

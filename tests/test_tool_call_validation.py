@@ -1,7 +1,10 @@
 from leap_finetune.data_loading.validate_tool_format import (
     ToolFormatInfo,
     detect_tool_format,
+    normalize_messages_for_chat_template,
+    normalize_row_for_chat_template,
     normalize_tool_format,
+    validate_tool_calls_in_messages,
     validate_tool_format,
     tool_calls_to_pythonic,
 )
@@ -283,6 +286,11 @@ class TestToolCallsToPythonic:
         result = tool_calls_to_pythonic(tc)
         assert result == '<|tool_call_start|>[f(x="hello")]<|tool_call_end|>'
 
+    def test_none_arguments(self):
+        tc = [{"type": "function", "function": {"name": "f", "arguments": None}}]
+        result = tool_calls_to_pythonic(tc)
+        assert result == "<|tool_call_start|>[f()]<|tool_call_end|>"
+
     def test_bool_arg(self):
         tc = [
             {"type": "function", "function": {"name": "f", "arguments": {"flag": True}}}
@@ -457,6 +465,27 @@ class TestNormalizeToolFormat:
         assert 'get_weather(location="SF")' in assistant_msg["content"]
         assert "tool_calls" not in assistant_msg
 
+    def test_lfm25_keeps_text_before_structured_tool_call(self):
+        row = {
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": "Let me check.",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {"name": "f", "arguments": {"x": 1}},
+                        }
+                    ],
+                },
+            ]
+        }
+        result = normalize_tool_format(row, "lfm25")
+        content = result["messages"][1]["content"]
+        assert content.startswith("Let me check.")
+        assert content.endswith("<|tool_call_end|>")
+
     def test_no_modification_when_clean(self):
         row = {
             "messages": [
@@ -495,3 +524,72 @@ class TestNormalizeToolFormat:
         result = normalize_tool_format(row, "lfm2")
         # After normalization, tool content should be clean
         assert result["messages"][2]["content"] == '{"r": 1}'
+
+
+def test_validate_allows_structured_tool_calls_with_tool_response():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"type": "function", "function": {"name": "f", "arguments": {}}}
+            ],
+        },
+        {"role": "tool", "content": "{}"},
+    ]
+
+    validate_tool_calls_in_messages(messages, sample_idx=0)
+
+
+def test_lfm25_validation_allows_prose_before_tool_marker():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "Checking.\n<|tool_call_start|>[f()]<|tool_call_end|>",
+        },
+        {"role": "tool", "content": "{}"},
+    ]
+
+    validate_tool_calls_in_messages(messages, sample_idx=0, model_family="lfm25")
+
+
+def test_normalize_messages_for_chat_template_parses_json_arguments():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {"name": "f", "arguments": '{"x": "y"}'},
+                }
+            ],
+        }
+    ]
+
+    normalized = normalize_messages_for_chat_template(messages)
+
+    assert normalized[0]["tool_calls"][0]["function"]["arguments"] == {"x": "y"}
+
+
+def test_normalize_row_for_chat_template_rejects_json_array_arguments():
+    row = {
+        "chosen": [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"type": "function", "function": {"name": "f", "arguments": "[]"}}
+                ],
+            }
+        ]
+    }
+
+    try:
+        normalize_row_for_chat_template(row)
+    except ValueError as exc:
+        assert "JSON must decode to an object" in str(exc)
+    else:
+        raise AssertionError("Expected malformed structured arguments to fail")

@@ -234,10 +234,21 @@ def tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
         func = tc.get("function", tc)
         name = func["name"]
         args = func.get("arguments", {})
+        if args is None:
+            args = {}
         if isinstance(args, str):
-            args = json.loads(args)
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                rendered_args = args.strip()
+                calls.append(f"{name}({rendered_args})")
+                continue
         # Skip malformed tool calls instead of failing the whole row.
         if not isinstance(args, dict):
+            if isinstance(args, str):
+                rendered_args = args.strip()
+                calls.append(f"{name}({rendered_args})")
+                continue
             logger.warning(
                 "Skipping tool_call with non-dict arguments (got %s): name=%s",
                 type(args).__name__,
@@ -248,6 +259,102 @@ def tool_calls_to_pythonic(tool_calls: list[dict]) -> str:
         calls.append(f"{name}({', '.join(parts)})")
 
     return f"{TOOL_CALL_START}[{', '.join(calls)}]{TOOL_CALL_END}"
+
+
+def _normalize_argument_payload_for_template(args):
+    if args is None:
+        return {}
+    if not isinstance(args, str):
+        return args
+
+    try:
+        parsed_args = json.loads(args)
+    except json.JSONDecodeError:
+        raise ValueError(
+            "Structured tool_call arguments must be a dict, JSON object string, "
+            "or None before chat-template rendering"
+        ) from None
+
+    if parsed_args is None:
+        return {}
+    if isinstance(parsed_args, dict):
+        return parsed_args
+    raise ValueError(
+        "Structured tool_call arguments JSON must decode to an object before "
+        "chat-template rendering"
+    )
+
+
+def _normalize_tool_call_arguments_for_template(tool_calls: list[dict]) -> list[dict]:
+    """Canonicalize structured tool-call arguments before chat-template rendering."""
+    normalized_tool_calls = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            normalized_tool_calls.append(tool_call)
+            continue
+
+        new_tool_call = dict(tool_call)
+        func = tool_call.get("function")
+        if isinstance(func, dict):
+            new_func = dict(func)
+            new_func["arguments"] = _normalize_argument_payload_for_template(
+                new_func.get("arguments", {})
+            )
+            new_tool_call["function"] = new_func
+        else:
+            new_tool_call["arguments"] = _normalize_argument_payload_for_template(
+                new_tool_call.get("arguments", {})
+            )
+
+        normalized_tool_calls.append(new_tool_call)
+
+    return normalized_tool_calls
+
+
+def _is_message_list(value) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, dict) and "role" in item for item in value
+    )
+
+
+def normalize_messages_for_chat_template(messages: list[dict]) -> list[dict]:
+    """Normalize structured tool-call arguments before applying a chat template."""
+    normalized_messages = []
+    modified = False
+
+    for message in messages:
+        if not isinstance(message, dict):
+            normalized_messages.append(message)
+            continue
+
+        new_message = dict(message)
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            new_tool_calls = _normalize_tool_call_arguments_for_template(tool_calls)
+            if new_tool_calls != tool_calls:
+                new_message["tool_calls"] = new_tool_calls
+                modified = True
+
+        normalized_messages.append(new_message)
+
+    return normalized_messages if modified else messages
+
+
+def normalize_row_for_chat_template(row: dict) -> dict:
+    """Normalize any conversational fields before TRL/HF chat templating."""
+    normalized_row = None
+    for key in ("messages", "prompt", "chosen", "rejected"):
+        value = row.get(key)
+        if not _is_message_list(value):
+            continue
+
+        normalized_value = normalize_messages_for_chat_template(value)
+        if normalized_value is not value:
+            if normalized_row is None:
+                normalized_row = dict(row)
+            normalized_row[key] = normalized_value
+
+    return row if normalized_row is None else normalized_row
 
 
 def normalize_tool_format(row: dict, model_family: str) -> dict:
@@ -286,13 +393,15 @@ def normalize_tool_format(row: dict, model_family: str) -> dict:
             if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
                 pythonic = tool_calls_to_pythonic(tool_calls)
                 existing_content = content.strip()
-                if existing_content:
+                if existing_content and model_family == "lfm25":
+                    new_msg["content"] = f"{existing_content}\n{pythonic}"
+                elif existing_content:
                     new_msg["content"] = f"{pythonic}\n{existing_content}"
                 else:
                     new_msg["content"] = pythonic
-                # Remove the tool_calls field so template doesn't try to process it
-                new_msg.pop("tool_calls", None)
                 modified = True
+            new_msg.pop("tool_calls", None)
+            modified = True
 
         new_messages.append(new_msg)
 
@@ -315,20 +424,21 @@ def get_tool_normalizer(model_family: str):
     return _normalize
 
 
-def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
+def _tool_call_must_be_first(model_family: str) -> bool:
+    """Legacy LFM2 expects tool-call-first text; LFM2.5 permits prose first."""
+    return model_family != "lfm25"
+
+
+def validate_tool_calls_in_messages(
+    messages: list,
+    sample_idx: int,
+    model_family: str = "lfm2",
+) -> None:
     """Validate LFM tool-call formatting in a message list."""
     for msg_idx, msg in enumerate(messages):
         if not isinstance(msg, dict):
             continue
         role = msg.get("role", "")
-
-        # === Structured Tool Fields ===
-        if role == "assistant" and "tool_calls" in msg:
-            raise ValueError(
-                f"Sample {sample_idx}, message {msg_idx}: 'tool_calls' field is not "
-                f"supported by the LFM chat template. Tool calls must be pre-formatted "
-                f"in the 'content' field using {TOOL_CALL_START}/{TOOL_CALL_END} markers."
-            )
 
         if role != "assistant":
             continue
@@ -351,10 +461,10 @@ def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
             continue
 
         text_before = content[:tool_call_pos].strip()
-        if text_before:
+        if text_before and _tool_call_must_be_first(model_family):
             raise ValueError(
                 f"Sample {sample_idx}, message {msg_idx}: Text appears before tool call "
-                f"in assistant content. LFM expects tool call first, then text. "
+                f"in assistant content. Legacy LFM2 expects tool call first, then text. "
                 f"Found: '{text_before[:50]}...' before {TOOL_CALL_START}"
             )
 
@@ -365,7 +475,16 @@ def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
         role = msg.get("role", "")
         content = msg.get("content", "")
 
-        has_tool_call = isinstance(content, str) and TOOL_CALL_START in content
+        structured_tool_calls = msg.get("tool_calls")
+        has_tool_call = (
+            isinstance(content, str)
+            and TOOL_CALL_START in content
+            or (
+                role == "assistant"
+                and isinstance(structured_tool_calls, list)
+                and len(structured_tool_calls) > 0
+            )
+        )
         if not has_tool_call or role != "assistant":
             continue
 
@@ -387,7 +506,12 @@ def validate_tool_calls_in_messages(messages: list, sample_idx: int) -> None:
             )
 
 
-def validate_tool_calls_in_text(text: str, sample_idx: int, field: str) -> None:
+def validate_tool_calls_in_text(
+    text: str,
+    sample_idx: int,
+    field: str,
+    model_family: str = "lfm2",
+) -> None:
     """Validate LFM tool-call formatting in a pre-formatted DPO string."""
     format_name = has_foreign_tool_markers(text)
     if format_name:
@@ -401,18 +525,23 @@ def validate_tool_calls_in_text(text: str, sample_idx: int, field: str) -> None:
         return
 
     text_before = text[:tool_call_pos].strip()
-    if text_before:
+    if text_before and _tool_call_must_be_first(model_family):
         raise ValueError(
             f"Sample {sample_idx}, {field}: Text appears before tool call. "
-            f"LFM expects tool call first, then text. "
+            f"Legacy LFM2 expects tool call first, then text. "
             f"Found: '{text_before[:50]}...' before {TOOL_CALL_START}"
         )
 
 
-def validate_tool_calls_dpo(chosen: Any, rejected: Any, sample_idx: int) -> None:
+def validate_tool_calls_dpo(
+    chosen: Any,
+    rejected: Any,
+    sample_idx: int,
+    model_family: str = "lfm2",
+) -> None:
     """Validate LFM tool-call formatting in DPO chosen/rejected data."""
     for field_name, data in [("chosen", chosen), ("rejected", rejected)]:
         if isinstance(data, str):
-            validate_tool_calls_in_text(data, sample_idx, field_name)
+            validate_tool_calls_in_text(data, sample_idx, field_name, model_family)
         elif isinstance(data, list):
-            validate_tool_calls_in_messages(data, sample_idx)
+            validate_tool_calls_in_messages(data, sample_idx, model_family)

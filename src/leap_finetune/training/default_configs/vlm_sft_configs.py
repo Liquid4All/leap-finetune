@@ -46,6 +46,7 @@ VLM_SFT_EXCLUDED_KEYS = {
     "model_config",
     "chat_template",
     "chat_template_path",
+    "adapter_path",
     "leap_run_name_template",
     "reshard_after_forward",
     "fsdp_cpu_offload",

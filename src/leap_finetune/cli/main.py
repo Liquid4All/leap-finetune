@@ -140,6 +140,11 @@ def main() -> None:
     if check_and_handle_slurm(config_path_arg):
         return
 
+    from leap_finetune.distribution.backends.kuberay import check_and_handle_kuberay
+
+    if check_and_handle_kuberay(config_path_arg):
+        return
+
     from leap_finetune.distribution.backends.modal import check_and_handle_modal
 
     if check_and_handle_modal(config_path_arg):

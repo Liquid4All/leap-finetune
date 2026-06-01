@@ -15,7 +15,31 @@ from __future__ import annotations
 import logging
 from typing import Any, Iterable
 
+import torch
+
 logger = logging.getLogger(__name__)
+
+
+def freeze_vlm_modules(model: Any, prefixes: Iterable[str]) -> dict[str, int]:
+    """Disable gradients for parameters whose names match configured prefixes."""
+    frozen_counts: dict[str, int] = {prefix: 0 for prefix in prefixes}
+    frozen_params = 0
+
+    for name, param in model.named_parameters():
+        for prefix in prefixes:
+            if name.startswith(prefix):
+                if param.requires_grad:
+                    param.requires_grad = False
+                    frozen_params += param.numel()
+                frozen_counts[prefix] += param.numel()
+                break
+
+    for prefix, count in frozen_counts.items():
+        if count == 0:
+            raise ValueError(f"No parameters matched freeze prefix {prefix!r}")
+        logger.info("Frozen VLM module '%s': %d params", prefix, count)
+    logger.info("Frozen VLM trainable params disabled: %d", frozen_params)
+    return frozen_counts
 
 
 def build_vlm_param_groups(
@@ -97,6 +121,40 @@ def build_vlm_param_groups(
         )
 
     return optimizer_groups, group_names
+
+
+def create_vlm_optimizer(
+    optimizer_groups: list[dict[str, Any]],
+    optimizer_type: str,
+    betas: tuple[float, float],
+) -> Any:
+    """Create the configured optimizer for VLM trainers."""
+    normalized = optimizer_type.lower().replace("-", "_")
+    if normalized in {"adamw", "torch_adamw", "fused_adamw"}:
+        return torch.optim.AdamW(
+            optimizer_groups, betas=betas, fused=torch.cuda.is_available()
+        )
+
+    if normalized in {"adamw_8bit", "bitsandbytes_adamw_8bit", "bnb_adamw_8bit"}:
+        try:
+            import bitsandbytes as bnb
+        except ImportError as exc:
+            raise ImportError(
+                "optimizer_type='adamw_8bit' requires bitsandbytes to be installed "
+                "in the training environment"
+            ) from exc
+        return bnb.optim.AdamW8bit(optimizer_groups, betas=betas)
+
+    if normalized in {"adam_fp8", "adamw_fp8"}:
+        raise ValueError(
+            "FP8 Adam is not supported by this trainer. Use optimizer_type='adamw_8bit' "
+            "for bitsandbytes 8-bit optimizer states, or leave optimizer_type='adamw'."
+        )
+
+    raise ValueError(
+        f"Unsupported VLM optimizer_type={optimizer_type!r}; expected one of "
+        "'adamw' or 'adamw_8bit'"
+    )
 
 
 def log_per_group_lrs(

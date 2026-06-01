@@ -19,6 +19,7 @@ from leap_finetune.training.utils.logging import (
 )
 from leap_finetune.training.peft.peft import (
     apply_peft_to_model,
+    load_peft_adapter,
     merge_and_save_peft_model,
 )
 from leap_finetune.training.utils.trainer_mixins import (
@@ -56,6 +57,7 @@ def sft_run(training_config: dict) -> None:
     train_config = training_config.get("train_config", {})
     run_name_template = train_config.get("leap_run_name_template")
     resume_from = train_config.get("resume_from_checkpoint")
+    adapter_path = train_config.get("adapter_path")
     output_dir = train_config.get("output_dir", "")
     if resume_from:
         logger.info("Resuming from checkpoint: %s", resume_from)
@@ -91,7 +93,9 @@ def sft_run(training_config: dict) -> None:
         train_config=train_config,
     )
 
-    if peft_config:
+    if adapter_path:
+        model = load_peft_adapter(model, adapter_path)
+    elif peft_config:
         model = apply_peft_to_model(model, peft_config)
 
     data_collator = build_sft_data_collator(tokenizer, train_config)
@@ -108,7 +112,7 @@ def sft_run(training_config: dict) -> None:
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)
 
-    if peft_config and is_rank_zero():
+    if (peft_config or adapter_path) and is_rank_zero():
         merge_and_save_peft_model(
             model, tokenizer, training_args.output_dir, run_name_template
         )

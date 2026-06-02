@@ -29,6 +29,7 @@ class DatasetLoader:
     # Prepended to relative image paths in VLM datasets (e.g. "/data/images")
     image_root: str | None = None
     cache_dataset: bool = False
+    hf_streaming_batch_size: int = 10000
     # Optional preprocessing function: takes Ray Dataset, returns Ray Dataset
     # Applied before validation - use for custom filtering, transforms, joins, etc.
     preprocess_fn: Callable | None = field(default=None, repr=False)
@@ -159,18 +160,13 @@ class DatasetLoader:
 
         console = Console()
         console.print(f"[dim]Streaming from HuggingFace: {path}[/dim]")
-
-        # Use HF streaming to avoid loading full dataset into memory
-        hf_stream = load_dataset(
-            path,
-            subset,
-            split=split,
-            streaming=True,
-        )
+        split_parts = [part.strip() for part in split.split("+") if part.strip()]
+        if not split_parts:
+            raise ValueError("Dataset split cannot be empty")
 
         # Stream batches and put into Ray object store
         refs = []
-        batch_size = 10000
+        batch_size = self.hf_streaming_batch_size
         total_items = 0
 
         with Progress(
@@ -183,12 +179,31 @@ class DatasetLoader:
         ) as progress:
             task = progress.add_task("Streaming dataset...", total=None, items=0)
 
-            for batch in hf_stream.batch(batch_size=batch_size):
-                # batch is a dict of lists, convert to DataFrame
-                df = pd.DataFrame(batch)
-                refs.append(ray.put(df))
-                total_items += len(df)
-                progress.update(task, items=f"{total_items:,}")
+            for split_part in split_parts:
+                # Use HF streaming to avoid loading full dataset into memory. HF
+                # streaming does not accept split expressions like
+                # "train+validation", so stream each named split sequentially.
+                hf_stream = load_dataset(
+                    path,
+                    subset,
+                    split=split_part,
+                    streaming=True,
+                )
+
+                for batch in hf_stream.batch(batch_size=batch_size):
+                    # batch is a dict of lists, convert to DataFrame
+                    df = pd.DataFrame(batch)
+                    if self.limit is not None:
+                        remaining = self.limit - total_items
+                        if remaining <= 0:
+                            break
+                        df = df.iloc[:remaining]
+                    refs.append(ray.put(df))
+                    total_items += len(df)
+                    progress.update(task, items=f"{total_items:,}")
+
+                    if self.limit and total_items >= self.limit:
+                        break
 
                 if self.limit and total_items >= self.limit:
                     break

@@ -172,6 +172,7 @@ def tokenize_sft(
         messages = normalize_messages_for_chat_template(row["messages"])
         result = tokenizer.apply_chat_template(
             messages,
+            tools=row.get("tools") or None,
             tokenize=True,
             truncation=truncate,
             max_length=max_length if truncate else None,

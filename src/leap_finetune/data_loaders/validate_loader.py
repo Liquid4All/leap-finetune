@@ -214,12 +214,19 @@ def _load_sample_dataset(
 
         else:
             # HuggingFace Hub - use streaming then convert to Dataset
-            ds_stream = load_dataset(dataset_path, subset, split=split, streaming=True)
+            split_parts = [part.strip() for part in split.split("+") if part.strip()]
+            if not split_parts:
+                raise ValueError("Dataset split cannot be empty")
             samples = []
-            for i, item in enumerate(ds_stream):
-                if i >= num_samples:
-                    break
-                samples.append(item)
+            per_split = max(1, num_samples // len(split_parts))
+            for split_part in split_parts:
+                ds_stream = load_dataset(
+                    dataset_path, subset, split=split_part, streaming=True
+                )
+                for i, item in enumerate(ds_stream):
+                    if i >= per_split or len(samples) >= num_samples:
+                        break
+                    samples.append(item)
             return Dataset.from_list(samples)
     except Exception as e:
         raise ValueError(f"Failed to load dataset samples from '{dataset_path}': {e}")

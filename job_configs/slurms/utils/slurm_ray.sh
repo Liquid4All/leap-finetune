@@ -154,10 +154,25 @@ PY
 }
 
 ray_slurm_stop_cluster() {
+  # The Ray processes are owned by background `srun ... ray start --block`
+  # steps. Creating new `srun ray stop` steps here can deadlock teardown when
+  # the allocation is still occupied by those blocking steps.
+  local stop_timeout_s="${RAY_SLURM_STOP_TIMEOUT:-30}"
+  local deadline=$((SECONDS + stop_timeout_s))
   local pid
   for pid in "${RAY_SLURM_PIDS[@]:-}"; do
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" 2>/dev/null || true
     fi
+  done
+
+  for pid in "${RAY_SLURM_PIDS[@]:-}"; do
+    while [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && (( SECONDS < deadline )); do
+      sleep 1
+    done
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+    wait "${pid}" 2>/dev/null || true
   done
 }

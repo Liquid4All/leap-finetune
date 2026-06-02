@@ -157,6 +157,7 @@ def _parse_dataset_loader(
         val_subset=val_subset,
         image_root=ds_config.get("image_root"),
         cache_dataset=ds_config.get("cache_dataset", False),
+        hf_streaming_batch_size=ds_config.get("hf_streaming_batch_size", 10000),
         preprocess_fn=preprocess_fn,
     )
 

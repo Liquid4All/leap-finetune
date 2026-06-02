@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 _CACHE_SUCCESS_MARKER = "_SUCCESS"
-_TOKENIZATION_CACHE_FORMAT_VERSION = 3
+_TOKENIZATION_CACHE_FORMAT_VERSION = 4
 
 
 def _should_skip_quick_validate() -> bool:
@@ -41,6 +41,14 @@ def _hash_text_file(path: str | os.PathLike | None) -> str | None:
     if not candidate.exists() or not candidate.is_file():
         return None
     return hashlib.sha256(candidate.read_bytes()).hexdigest()
+
+
+def _shuffle_raw_dataset(
+    ds: ray.data.Dataset, shuffle_seed: int, training_config: dict
+):
+    if not training_config.get("shuffle_dataset", True):
+        return ds
+    return ds.random_shuffle(seed=shuffle_seed)
 
 
 # === Tokenization Cache ===
@@ -76,6 +84,7 @@ def _build_cache_key(
         key["drop_overlength"] = training_config.get("drop_overlength", False)
         key["assistant_only_loss"] = training_config.get("assistant_only_loss", False)
         key["completion_only_loss"] = training_config.get("completion_only_loss", False)
+        key["shuffle_dataset"] = training_config.get("shuffle_dataset", True)
         key["chat_template"] = training_config.get("chat_template")
         key["chat_template_path"] = training_config.get("chat_template_path")
         key["chat_template_path_sha256"] = _hash_text_file(
@@ -195,6 +204,7 @@ def _materialize_explicit_split_datasets(
     loader: DatasetLoader,
     shuffle_seed: int,
     console: Console,
+    training_config: dict,
 ) -> tuple[ray.data.Dataset, ray.data.Dataset | None]:
     """Load train and optional eval datasets from explicit source configuration."""
     train_ds = _prepare_dataset(
@@ -204,7 +214,8 @@ def _materialize_explicit_split_datasets(
             subset=loader.subset,
             split=loader.split,
         ),
-    ).random_shuffle(seed=shuffle_seed)
+    )
+    train_ds = _shuffle_raw_dataset(train_ds, shuffle_seed, training_config)
     train_count = train_ds.count()
     if train_count == 0:
         raise ValueError(
@@ -301,7 +312,7 @@ def create_ray_datasets(
 
     if loader.val_dataset_path is not None or loader.val_split is not None:
         train_ds, eval_ds = _materialize_explicit_split_datasets(
-            loader, shuffle_seed, console
+            loader, shuffle_seed, console, training_config or {}
         )
     else:
         ds = _prepare_dataset(
@@ -311,7 +322,8 @@ def create_ray_datasets(
                 subset=loader.subset,
                 split=loader.split,
             ),
-        ).random_shuffle(seed=shuffle_seed)
+        )
+        ds = _shuffle_raw_dataset(ds, shuffle_seed, training_config or {})
         total_count = ds.count()
 
         if total_count == 0:

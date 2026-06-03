@@ -369,6 +369,9 @@ testing.
 
 ### DPO
 
+DPO uses preference columns instead of a top-level `messages` field. For
+single-turn data, `prompt`, `chosen`, and `rejected` can be plain strings:
+
 ```json
 {
   "prompt": "What is the capital of France?",
@@ -376,6 +379,30 @@ testing.
   "rejected": "The capital of France is London."
 }
 ```
+
+For multi-turn DPO, make `prompt` the shared conversation history and make
+`chosen` / `rejected` the preferred and rejected assistant completions:
+
+```json
+{
+  "prompt": [
+    { "role": "system", "content": "You are a helpful assistant." },
+    { "role": "user", "content": "I am planning a trip to France." },
+    { "role": "assistant", "content": "What would you like to know?" },
+    { "role": "user", "content": "What is the capital?" }
+  ],
+  "chosen": [
+    { "role": "assistant", "content": "The capital of France is Paris." }
+  ],
+  "rejected": [
+    { "role": "assistant", "content": "The capital of France is London." }
+  ]
+}
+```
+
+Rows without `prompt` are also accepted if `chosen` and `rejected` are full
+conversations with the same shared prefix; the tokenizer extracts that prefix
+as the prompt. Prefer the explicit `prompt` shape above when writing new data.
 
 ### VLM SFT
 

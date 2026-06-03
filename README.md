@@ -32,21 +32,6 @@ for local GPU nodes, SLURM clusters, Modal, and Kubernetes/KubeRay.
 For feature requests or custom infrastructure support, reach out to
 [support@liquid.ai](mailto:support@liquid.ai) with your setup.
 
-## Contents
-
-- [Setup](#setup)
-- [Quickstart](#quickstart)
-- [CLI and Python Usage](#cli-and-python-usage)
-- [Execution Backends](#execution-backends)
-- [Datasets](#datasets)
-- [Tool Calling Datasets](#tool-calling-datasets)
-- [Resuming Training](#resuming-training)
-- [GRPO](#grpo)
-- [Evaluation](#evaluation)
-- [Quantization / GGUF Export](#quantization--gguf-export)
-- [Advanced Configuration](#advanced-configuration)
-- [Contributing](#contributing)
-
 ## Setup
 
 Install `uv`:

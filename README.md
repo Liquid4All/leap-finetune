@@ -5,61 +5,83 @@
     style="width: 100%; max-width: 100%; height: auto; display: inline-block; margin-bottom: 0.5em; margin-top: 0.5em;"
   />
   <div style="display: flex; justify-content: center; gap: 0.5em;">
-    <a href="https://playground.liquid.ai/"><strong>Try LFM</strong></a> •
-    <a href="https://docs.liquid.ai/lfm"><strong>Documentation</strong></a> •
+    <a href="https://playground.liquid.ai/"><strong>Try LFM</strong></a> -
+    <a href="https://docs.liquid.ai/lfm"><strong>Documentation</strong></a> -
     <a href="https://leap.liquid.ai/"><strong>LEAP</strong></a>
   </div>
   <br/>
   <a href="https://discord.com/invite/liquid-ai"><img src="https://img.shields.io/discord/1385439864920739850?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Join Discord"></a>
 </div>
-</br>
 
 <p align="center">
-<a href="#-setup">Setup</a> · <a href="#-quickstart">Quickstart</a> · <a href="#cli-usage">CLI</a> · <a href="#-expected-dataset-formats">Dataset Formats</a> · <a href="#grpo-group-relative-policy-optimization">GRPO</a> · <a href="#-tool-calling-datasets">Tool Calling</a> · <a href="#-resuming-training">Resuming Training</a> · <a href="#-quantization--gguf-export">Quantization</a> · <a href="#-evaluation-benchmarks">Benchmarks</a> · <a href="#-advanced-configuration">Advanced Config</a> · <a href="#contributing">Contributing</a>
+<a href="#setup">Setup</a> -
+<a href="#quickstart">Quickstart</a> -
+<a href="#cli-and-python-usage">CLI</a> -
+<a href="#execution-backends">Backends</a> -
+<a href="#datasets">Datasets</a> -
+<a href="#grpo">GRPO</a> -
+<a href="#evaluation">Evaluation</a> -
+<a href="#quantization--gguf-export">GGUF</a> -
+<a href="#contributing">Contributing</a>
 </p>
 
-LEAP-Finetune is a minimal fine-tuning repo for LFM2, fully built on Open Source. It handles multi-gpu orchestration, dataset formatting and validation, and model checkpointing. We support different acceleration backends, including GPU nodes of 8xH100 80GB (both single node and multi node) as well as Modal (H100, H200, B200, ..) in case you don't have your own GPUs.
+LEAP-Finetune is a minimal fine-tuning repo for LFM2. It handles dataset
+formatting, validation, distributed orchestration, checkpointing, and export
+for local GPU nodes, SLURM clusters, Modal, and Kubernetes/KubeRay.
 
-For feature requests or if you have a different setup, reach out to [support@liquid.ai](mailto:support@liquid.ai) and tell us about your specific configuration.
+For feature requests or custom infrastructure support, reach out to
+[support@liquid.ai](mailto:support@liquid.ai) with your setup.
 
-## 🔧 Setup
+## Contents
 
-### 1. Install uv
+- [Setup](#setup)
+- [Quickstart](#quickstart)
+- [CLI and Python Usage](#cli-and-python-usage)
+- [Execution Backends](#execution-backends)
+- [Datasets](#datasets)
+- [Tool Calling Datasets](#tool-calling-datasets)
+- [Resuming Training](#resuming-training)
+- [GRPO](#grpo)
+- [Evaluation](#evaluation)
+- [Quantization / GGUF Export](#quantization--gguf-export)
+- [Advanced Configuration](#advanced-configuration)
+- [Contributing](#contributing)
+
+## Setup
+
+Install `uv`:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 2. Clone Repo
+Clone the repo:
 
 ```bash
 git clone <repository-url>
 cd leap_finetune
 ```
 
-### 3. Set up virtual environment
-
-For CUDA / NVIDIA clusters, CUDA dependencies are included by default:
+CUDA / NVIDIA clusters use the default dependency groups:
 
 ```bash
 uv sync
 ```
 
-For AMD / ROCm clusters, install the ROCm dependency group instead of the default CUDA group:
+AMD / ROCm clusters should use the ROCm group instead:
 
 ```bash
 uv sync --no-group cuda --group rocm
 ```
 
-The ROCm group is lockfile-managed and uses vLLM's ROCm wheel index for vLLM plus
-its matching `torch`, `torchvision`, `torchaudio`, `flash-attn`, and `triton`
-stack. The currently pinned vLLM ROCm wheels are Python 3.12 Linux wheels, so use
-the repo's `.python-version` when creating AMD environments.
+The ROCm group is lockfile-managed and uses vLLM's ROCm wheel index for vLLM
+plus the matching `torch`, `torchvision`, `torchaudio`, `flash-attn`, and
+`triton` stack. The pinned ROCm vLLM wheels are Python 3.12 Linux wheels, so
+use the repo's `.python-version` when creating AMD environments.
 
-`flash-attn` is built against the selected Torch/CUDA ABI. If you previously
-synced with a different Torch, CUDA, or vLLM version and see an error like
-`flash_attn_2_cuda... undefined symbol`, clear the cached build and recreate
-the environment:
+If `flash-attn` was built against a different Torch/CUDA ABI, errors such as
+`flash_attn_2_cuda... undefined symbol` usually mean the environment needs to
+be rebuilt:
 
 ```bash
 uv cache clean flash-attn
@@ -68,14 +90,11 @@ MAX_JOBS=1 uv sync
 ```
 
 Run this on a machine with a CUDA toolkit and enough build memory available if
-uv needs to rebuild `flash-attn` from source. `MAX_JOBS=1` keeps the fallback
-source build from spawning too many CUDA compiler jobs at once.
+uv needs to rebuild `flash-attn` from source.
 
-## 🚀 Quickstart
+## Quickstart
 
-### 1. Job Configuration Setup
-
-Create a YAML config file (or copy one from [`job_configs/`](./job_configs/)):
+Create a YAML config file or copy one from [`job_configs/`](./job_configs/):
 
 ```yaml
 project_name: "my_sft_project"
@@ -100,23 +119,38 @@ peft_config:
   use_peft: true
 ```
 
-- `training_config.extends` inherits from a base config (e.g. `DEFAULT_SFT`, `DEFAULT_DPO`, `DEFAULT_VLM_SFT`) — any fields you specify override the base
-- `peft_config.extends` works the same way (e.g. `DEFAULT_LORA`, `DEFAULT_VLM_LORA`)
-- See [`job_configs/`](./job_configs/) for more examples (DPO, MoE, VLM, SLURM)
+`training_config.extends` inherits from a base config such as `DEFAULT_SFT`,
+`DEFAULT_DPO`, or `DEFAULT_VLM_SFT`; fields in your YAML override the base.
+`peft_config.extends` works the same way for LoRA defaults such as
+`DEFAULT_LORA` and `DEFAULT_VLM_LORA`.
 
-### 2. Launch Training
-
-Run locally:
+Launch training:
 
 ```bash
-uv run leap-finetune <path_to_config.yaml>
+uv run leap-finetune job_configs/sft_example.yaml
 ```
 
-It uses Ray Train + Accelerate for distributed training.
+Training uses Ray Train and Accelerate for distributed execution. Unless
+`output_dir` is set, results are written to
+`outputs/{project_name}/{run_name}/`. Each run gets a unique name based on the
+model, dataset, learning rate, and timestamp.
 
-Unless you overwrote `output_dir`, results will be stored in `outputs/{project_name}/{run_name}/`. Each run gets its own directory with a unique name based on model, dataset, LR, and timestamp.
+Useful starter configs:
 
-### CLI Usage
+| Mode                    | Config                                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| SFT                     | [`job_configs/sft_example.yaml`](./job_configs/sft_example.yaml)                               |
+| SFT + LoRA              | [`job_configs/sft_with_lora_example.yaml`](./job_configs/sft_with_lora_example.yaml)           |
+| DPO                     | [`job_configs/dpo_example.yaml`](./job_configs/dpo_example.yaml)                               |
+| VLM SFT                 | [`job_configs/vlm_sft_example.yaml`](./job_configs/vlm_sft_example.yaml)                       |
+| VLM DPO                 | [`job_configs/vlm_dpo_example.yaml`](./job_configs/vlm_dpo_example.yaml)                       |
+| GRPO                    | [`job_configs/grpo_example.yaml`](./job_configs/grpo_example.yaml)                             |
+| VLM GRPO                | [`job_configs/vlm_grpo_grounding_example.yaml`](./job_configs/vlm_grpo_grounding_example.yaml) |
+| MoE SFT                 | [`job_configs/moe_sft_example.yaml`](./job_configs/moe_sft_example.yaml)                       |
+| MoE DPO                 | [`job_configs/moe_dpo_example.yaml`](./job_configs/moe_dpo_example.yaml)                       |
+| Expert-parallel MoE SFT | [`job_configs/moe_ep_sft_example.yaml`](./job_configs/moe_ep_sft_example.yaml)                 |
+
+## CLI and Python Usage
 
 During development, prefer the repo environment so you get the lockfile-managed
 CUDA/vLLM stack:
@@ -126,7 +160,7 @@ uv run leap-finetune job_configs/sft_example.yaml
 uv run leap-finetune run job_configs/sft_example.yaml
 ```
 
-To install the command as a reusable tool from a checkout:
+Install the command as a reusable tool from a checkout:
 
 ```bash
 uv tool install --editable . --force
@@ -145,9 +179,6 @@ For one-off execution without installing the command:
 uvx --from . leap-finetune /absolute/path/to/config.yaml
 ```
 
-<details>
-<summary>Python usage</summary>
-
 You can also start a run from Python. This uses the same backend dispatch as
 the CLI: configs with `slurm`, `modal`, or `kuberay` submit remotely; other
 configs run local Ray training and require visible CUDA devices.
@@ -164,20 +195,25 @@ Run that file inside an environment where `leap-finetune` is installed:
 uv run --with-editable . python launch_training.py
 ```
 
-</details>
+## Execution Backends
 
-### Modal Support
+Configs without a remote backend section run in the current environment through
+Ray Train. Add one of the backend blocks below to submit the same config to a
+remote runtime.
 
-You can run training jobs on Modal's serverless GPUs directly from your Mac or laptop — no local GPU required.
+### Modal
 
-**One-time setup:**
+Modal lets you run training jobs on serverless GPUs from a laptop or Mac. No
+local GPU is required.
+
+One-time setup:
 
 ```bash
-huggingface-cli login   # required — used for model downloads and trackio
-modal setup              # configure Modal credentials
+huggingface-cli login
+modal setup
 ```
 
-**Add a `modal:` section to any config:**
+Add a `modal:` section:
 
 ```yaml
 modal:
@@ -188,58 +224,61 @@ modal:
   detach: false
 ```
 
-**Run:**
+Run:
 
 ```bash
 uv run leap-finetune job_configs/sft_example_modal.yaml
 ```
 
-That's it. In attached mode (`detach: false`), the CLI will:
+In attached mode (`detach: false`), the CLI builds the container image,
+auto-creates a `huggingface-secret` from your local HF token, streams logs, and
+saves checkpoints to a Modal Volume.
 
-1. Build the container image (~5 min on first run, cached after that)
-2. Auto-create a `huggingface-secret` on Modal from your local HF token
-3. Stream build and training logs to your terminal in real-time
-4. Save checkpoints to a Modal Volume
-
-**Retrieving checkpoints:**
+Retrieve checkpoints:
 
 ```bash
-modal volume ls leap-finetune                                        # list saved checkpoints
-modal volume get leap-finetune <checkpoint-name> ./local-outputs     # download to local
+modal volume ls leap-finetune
+modal volume get leap-finetune <checkpoint-name> ./local-outputs
 ```
 
-**Detached mode:** Set `detach: true` in the modal config to submit and disconnect. The CLI prints the Modal app ID for that run, plus commands to monitor or stop it:
+Set `detach: true` to submit and disconnect. The CLI prints the Modal app ID
+plus commands to monitor or stop it:
 
 ```bash
 modal app logs ap-...
 modal app stop ap-...
 ```
 
-Detached runs are ephemeral Modal apps, so use the printed `ap-...` app ID rather than the `app_name` value from your config when viewing logs.
+Use the printed `ap-...` app ID for detached logs. See
+[`job_configs/sft_example_modal.yaml`](./job_configs/sft_example_modal.yaml).
 
-See [`job_configs/sft_example_modal.yaml`](./job_configs/sft_example_modal.yaml) for all available options.
+### SLURM
 
-### SLURM Support
+If your config includes a `slurm:` section, `leap-finetune` auto-generates and
+submits a SLURM script:
 
-If your config includes a `slurm` section, running `leap-finetune` will auto-generate and submit a SLURM script. You can also generate SLURM scripts without submitting:
+```bash
+uv run leap-finetune job_configs/sft_example_with_slurm.yaml
+```
+
+Generate a SLURM script without submitting it:
 
 ```bash
 uv run leap-finetune slurm <path_to_config.yaml>
 ```
 
-To monitor your SLURM jobs in a TUI:
+Monitor your SLURM jobs in a TUI:
 
 ```bash
 uv run turm --me
 ```
 
-<details>
-<summary>Kubernetes / KubeRay Support</summary>
+### Kubernetes / KubeRay
 
-If your config includes a `kuberay` section, `leap-finetune` submits a
-KubeRay `RayJob` instead of launching local training. You need a configured
-Kubernetes context, KubeRay CRDs installed, and a container image that already
-contains this repo plus its Python environment.
+If your config includes a `kuberay:` section, `leap-finetune` submits a KubeRay
+`RayJob` instead of launching local training. You need a configured Kubernetes
+context, KubeRay CRDs installed, and a container image that already contains
+this repo plus its Python environment.
 
 ```yaml
 kuberay:
@@ -260,48 +299,45 @@ uv run leap-finetune path/to/config.yaml
 ```
 
 The CLI creates a ConfigMap for the training config, submits a RayJob, and
-prints `kubectl` commands for status and logs. `worker_replicas * gpus_per_worker`
-becomes `ray.num_workers` unless you set it explicitly.
+prints `kubectl` commands for status and logs. The product of
+`worker_replicas` and `gpus_per_worker` becomes `ray.num_workers` unless you
+set it explicitly.
 
-</details>
+### Experiment Tracking
 
-### 3. (Optional) Experiment Tracking
-
-Add `tracker` to your `training_config`:
+Add `tracker` to `training_config`:
 
 ```yaml
 training_config:
   tracker: "trackio" # or "wandb"
 ```
 
-#### Trackio
-
-[Trackio](https://huggingface.co/blog/trackio) is a free experiment tracker that logs to a HuggingFace Space.
+[Trackio](https://huggingface.co/blog/trackio) logs to a HuggingFace Space.
+`trackio_space_id` is auto-created if needed, and Modal injects the HF token
+automatically:
 
 ```yaml
 training_config:
   tracker: "trackio"
-  trackio_space_id: "username/my-dashboard" # auto-created if it doesn't exist
+  trackio_space_id: "username/my-dashboard"
 ```
 
-Requires a HF token (via `huggingface-cli login`). On Modal, the token is auto-injected — no extra setup needed. View your dashboard at `https://huggingface.co/spaces/<trackio_space_id>`.
-
-#### Weights & Biases
-
-[Weights & Biases](https://wandb.ai) is a popular experiment tracking platform.
+[Weights & Biases](https://wandb.ai) uses `WANDB_API_KEY`:
 
 ```yaml
 training_config:
   tracker: "wandb"
 ```
 
-Set your API key locally with `export WANDB_API_KEY=your_key`. On Modal, add a secret:
+Set the key locally or add it as a Modal secret:
+
+```bash
+export WANDB_API_KEY=your_key
+```
 
 ```bash
 modal secret create wandb-secret WANDB_API_KEY=your_key
 ```
-
-Then add it to your Modal config:
 
 ```yaml
 modal:
@@ -309,11 +345,385 @@ modal:
     - "wandb-secret"
 ```
 
-### 4. Bundle Checkpoint for LEAP
+### Bundle Checkpoints for LEAP
 
-When training is done, you can bundle your output checkpoint with `leap-bundle` to use it directly within LEAP. Checkout our [Quick Start guide](https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github&utm_medium=link&utm_campaign=LEAP&utm_content=general).
+When training is done, bundle your output checkpoint with `leap-bundle` to use
+it directly within LEAP. See the
+[LEAP bundle quickstart](https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github&utm_medium=link&utm_campaign=LEAP&utm_content=general).
 
-## 🧮 Quantization / GGUF Export
+## Datasets
+
+### Loading Data
+
+The `dataset.path` field accepts local files, HuggingFace Hub IDs, and cloud
+storage URIs:
+
+| Source          | Example `path`                                 |
+| --------------- | ---------------------------------------------- |
+| Local file      | `/path/to/data.jsonl`, `/path/to/data.parquet` |
+| HuggingFace Hub | `HuggingFaceTB/smoltalk`                       |
+| S3              | `s3://bucket/path/to/data.parquet`             |
+| GCS             | `gs://bucket/path/to/data.parquet`             |
+| Azure           | `az://container/path/to/data.parquet`          |
+
+Cloud storage requires appropriate AWS, GCP, or Azure credentials. Use `subset`
+for HuggingFace datasets with multiple configs, `split` for HF split
+expressions such as `train+validation`, and `limit` to cap samples for quick
+testing.
+
+### SFT
+
+```json
+{
+  "messages": [
+    { "role": "user", "content": "What is the capital of France?" },
+    { "role": "assistant", "content": "The capital of France is Paris." }
+  ]
+}
+```
+
+### DPO
+
+```json
+{
+  "prompt": "What is the capital of France?",
+  "chosen": "The capital of France is Paris.",
+  "rejected": "The capital of France is London."
+}
+```
+
+### VLM SFT
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are an image-based assistant. Answer questions based on the provided image."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        { "type": "image", "image": "/path/to/image.jpg" },
+        { "type": "text", "text": "What do you see in this image?" }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [{ "type": "text", "text": "I see a car in the image." }]
+    }
+  ]
+}
+```
+
+VLM datasets often store image paths in a separate column. Merge those image
+references into each row's `messages` content before training.
+
+### VLM DPO
+
+Use `training_type: "vlm_dpo"` for multimodal preference data. Each row should
+provide `prompt`, `chosen`, and `rejected` message lists plus either an `image`
+or `images` column:
+
+```json
+{
+  "image": "images/chart.png",
+  "prompt": [
+    {
+      "role": "user",
+      "content": [{ "type": "text", "text": "Which trend is most important?" }]
+    }
+  ],
+  "chosen": [
+    {
+      "role": "assistant",
+      "content": "Revenue grows fastest in Q4."
+    }
+  ],
+  "rejected": [
+    {
+      "role": "assistant",
+      "content": "The chart is inconclusive."
+    }
+  ]
+}
+```
+
+Use `images` instead of `image` for multi-image rows. Relative image paths are
+resolved against `dataset.image_root` when set. See
+[`job_configs/vlm_dpo_example.yaml`](./job_configs/vlm_dpo_example.yaml) for a
+complete LoRA config. `freeze_vision_encoder` and
+`optimizer_type: "adamw_8bit"` are optional knobs, not defaults.
+
+### GRPO and VLM GRPO
+
+GRPO can reuse the SFT/VLM SFT `messages` format. The loader turns each row
+into `prompt` and `solution` for online reward computation, and any extra
+columns are forwarded to reward functions. See [GRPO](#grpo) for the full
+dataset, reward, and vLLM rollout contract.
+
+## Tool Calling Datasets
+
+Tool calls use LFM bracket notation in the assistant `content` field. Tool
+definitions go in the system prompt, and tool responses use `role: "tool"`.
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "List of tools: [{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get weather for a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\"}},\"required\":[\"location\"]}}}]"
+    },
+    { "role": "user", "content": "What's the weather in Boston?" },
+    {
+      "role": "assistant",
+      "content": "<|tool_call_start|>[get_weather(location=\"Boston\")]<|tool_call_end|>"
+    },
+    {
+      "role": "tool",
+      "content": "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    },
+    { "role": "assistant", "content": "It's 72 F and sunny in Boston." }
+  ]
+}
+```
+
+- Tool calls must be pre-baked in `content` using
+  `<|tool_call_start|>[func(args)]<|tool_call_end|>` bracket notation.
+- Structured `tool_calls` fields in OpenAI format are auto-converted when
+  present.
+- Foreign formats such as `<tool_call>` XML are rejected with an actionable
+  error.
+- Do not include `<|tool_response_start|>` or `<|tool_response_end|>` markers
+  in `role: "tool"` messages. The LFM2 chat template adds them during
+  tokenization.
+- LFM2 models expect `<|tool_list_start|>` and `<|tool_list_end|>` around tool
+  definitions in the system prompt. Include them for LFM2 and omit them for
+  LFM2.5. The pipeline warns on mismatches and auto-strips
+  `<|tool_list_start|>` when training LFM2.5.
+
+## Resuming Training
+
+Resume interrupted runs from the last checkpoint with optimizer state, LR
+schedule, training step, RNG state, and tracker continuity intact:
+
+```yaml
+training_config:
+  resume_from_checkpoint: "latest"
+```
+
+`latest` finds the most recent run directory under `outputs/{project_name}/`
+and resumes from its latest checkpoint. To resume from a specific checkpoint:
+
+```yaml
+training_config:
+  resume_from_checkpoint: "/path/to/outputs/my_project/run_name/checkpoint-step-8000"
+```
+
+To resume a run, `save_only_model` must be `False`. The wandb run ID is saved
+to `<run_dir>/.wandb_run_id`; resumed runs reuse the same wandb run, and fresh
+runs create a new one.
+
+## GRPO
+
+GRPO runs online RL with TRL v1's `GRPOTrainer`. Use `training_type: "grpo"`
+for text models and `training_type: "vlm_grpo"` for vision-language models.
+Both modes use the same YAML entrypoint as SFT/DPO, the same Ray Train
+launcher, and vLLM rollouts by default.
+
+### Dataset Contract
+
+Text GRPO can reuse the SFT `messages` format: the loader builds `prompt` from
+non-assistant turns and `solution` from the last assistant message. Native
+`prompt` / `solution` columns also work. VLM GRPO uses the same multimodal
+`messages` shape as VLM SFT. Extra dataset columns are forwarded to reward
+functions as keyword arguments.
+
+### Rewards
+
+The `rewards:` block resolves plain Python callables and task recipes from
+[`rewards/`](./rewards/README.md). Shipped primitive functions can be
+referenced by function name:
+
+```yaml
+rewards:
+  funcs:
+    - "accuracy_reward"
+    - "length_reward"
+  weights: [1.0, 0.1]
+```
+
+Task recipes bundle multiple reward functions and their default weights:
+
+```yaml
+rewards:
+  recipe: "tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
+```
+
+If you combine `recipe:` and `funcs:`, recipe rewards are ordered first. A
+`weights:` override must match the expanded reward list. Absolute paths and
+`./rewards/file.py::function_name` specs work for custom rewards.
+
+### Judge LLM Reward
+
+Add `rewards.judge` when the reward signal should come from an LLM grader.
+Without `base_url`, the driver starts a local `trl vllm-serve` judge server
+before Ray initializes and exports the endpoint to workers:
+
+```yaml
+rewards:
+  judge:
+    model: "LFM2-1.2B"
+    weight: 1.0
+    prompt_template: |
+      Prompt:
+      {prompt}
+
+      Assistant response:
+      {completion}
+
+      Reference answer or rubric:
+      {solution}
+
+      Return only JSON: {"score": 0.0}
+
+grpo_rollout:
+  judge_gpus: 1
+```
+
+For an external judge, set `rewards.judge.base_url` and omit `judge_gpus`.
+Judge scores are parsed from JSON or the first number in the response and
+normalized from `min_score`/`max_score` to `[0, 1]`.
+
+### vLLM Rollouts
+
+`DEFAULT_GRPO` and `DEFAULT_VLM_GRPO` set `use_vllm: true` and
+`vllm_mode: "colocate"`. Colocate mode runs vLLM inside each training worker.
+Server mode starts `trl vllm-serve` on driver GPUs before Ray initializes.
+Configure GPU counts, not device ids:
+
+```yaml
+grpo_rollout:
+  server_gpus: 1 # reserve 1 local GPU for vLLM; training gets the rest
+  judge_gpus: 1 # optional: reserve 1 local GPU for rewards.judge
+  # training_gpus: 3    # or set only this and vLLM gets the remaining GPUs
+  tensor_parallel_size: 1
+  dtype: "bfloat16"
+  gpu_memory_utilization: 0.9
+
+training_config:
+  extends: "DEFAULT_GRPO"
+  vllm_mode: "server"
+  vllm_server_host: "auto"
+  vllm_server_port: 8000
+```
+
+Local server partitioning is single-node only. For multi-node GRPO, use
+colocate mode or point `vllm_server_base_url` at an externally managed vLLM
+server without setting `server_gpus` or `training_gpus`.
+
+Example configs:
+
+- [`job_configs/grpo_example.yaml`](./job_configs/grpo_example.yaml): text GRPO
+  quickstart with the GSM8K recipe.
+- [`job_configs/grpo_server_mode_example.yaml`](./job_configs/grpo_server_mode_example.yaml):
+  text GRPO with a local `trl vllm-serve` rollout server.
+- [`job_configs/vlm_grpo_grounding_example.yaml`](./job_configs/vlm_grpo_grounding_example.yaml):
+  VLM GRPO with the visual-grounding recipe.
+
+Launch the same way as SFT/DPO:
+
+```bash
+uv run leap-finetune job_configs/grpo_example.yaml
+```
+
+### Agentic Environments
+
+For tasks where the environment state evolves from agent actions, such as
+browsing, tool use, game simulators, or stateful multi-turn tasks,
+`leap-finetune` supports [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
+via an optional `rl_env:` block:
+
+```bash
+uv sync --extra rl-env
+```
+
+See
+[`src/leap_finetune/rl/environments/README.md`](./src/leap_finetune/rl/environments/README.md).
+For anything scorable by a pure Python function, prefer the `rewards:` path; it
+is simpler and faster.
+
+## Evaluation
+
+Run benchmarks during training at every `eval_steps` by adding a `benchmarks:`
+section:
+
+```yaml
+benchmarks:
+  max_new_tokens: 128
+  benchmarks:
+    - name: "mmmu_val"
+      path: "/data/mmmu_val.jsonl"
+      metric: "short_answer"
+
+    - name: "imagenette"
+      path: "/data/imagenette_eval.jsonl"
+      metric: "logprob_zero_shot"
+```
+
+Benchmark data uses the same HF messages schema as training data. Available
+metrics include `short_answer`, `grounding_iou`, `mcq_gen`, and
+`logprob_zero_shot`. Results are logged to wandb at
+`benchmark/{name}/score`.
+
+See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data
+format examples, YAML reference, and custom metrics.
+
+### Post-Training Evaluation with lmms-eval
+
+For standard VLM benchmarks such as MMMU, OCRBench, RefCOCO, and POPE, use an
+environment that includes the private Liquid4All `lmms-eval` fork with LFM2
+model support.
+
+Evaluate a fine-tuned checkpoint:
+
+```bash
+python -m lmms_eval \
+  --model lfm2_vl \
+  --model_args pretrained=/path/to/checkpoint \
+  --tasks mmmu_val,ocrbench,pope \
+  --batch_size 1
+```
+
+Multi-GPU:
+
+```bash
+torchrun --nproc-per-node=4 -m lmms_eval \
+  --model lfm2_vl \
+  --model_args pretrained=/path/to/checkpoint \
+  --tasks mmmu_val,ocrbench,pope \
+  --batch_size 1
+```
+
+For faster evaluation with the vLLM backend:
+
+```bash
+python -m lmms_eval \
+  --model lfm2_vl_vllm \
+  --model_args pretrained=/path/to/checkpoint,tensor_parallel_size=1,gpu_memory_utilization=0.85 \
+  --tasks mmmu_val,ocrbench,pope \
+  --batch_size 64
+```
+
+The `lmms-eval` and vLLM packages are sourced from private Liquid4All forks
+with LFM2 model support, so SSH access to those repos is required.
+
+## Quantization / GGUF Export
 
 Export a HuggingFace checkpoint or PEFT adapter to GGUF with
 `leap-export-gguf`:
@@ -349,397 +759,57 @@ uv run leap-export-gguf /path/to/adapter \
 For adapter K-quants, merge the adapter into the base model first, then export
 the merged checkpoint.
 
-## Contents
-
-- [Expected Dataset Formats](#-expected-dataset-formats)
-- [GRPO](#grpo-group-relative-policy-optimization)
-- [Tool Calling Datasets](#-tool-calling-datasets)
-- [Resuming Training](#-resuming-training)
-- [Quantization / GGUF Export](#-quantization--gguf-export)
-- [Evaluation Benchmarks](#-evaluation-benchmarks)
-- [Advanced Configuration](#-advanced-configuration)
-- [Contributing](#contributing)
-
-## 📊 Expected Dataset Formats
-
-### SFT (Supervised Fine-Tuning)
-
-```json
-{
-  "messages": [
-    { "role": "user", "content": "What is the capital of France?" },
-    { "role": "assistant", "content": "The capital of France is Paris." }
-  ]
-}
-```
-
-### DPO (Direct Preference Optimization)
-
-```json
-{
-  "prompt": "What is the capital of France?",
-  "chosen": "The capital of France is Paris.",
-  "rejected": "The capital of France is London."
-}
-```
-
-### VLM SFT (Vision-Language Model)
-
-```json
-{
-  "messages": [
-    {
-      "role": "system",
-      "content": [
-        {
-          "type": "text",
-          "text": "You are an image-based assistant. Answer questions based on the provided image."
-        }
-      ]
-    },
-    {
-      "role": "user",
-      "content": [
-        { "type": "image", "image": "/path/to/image.jpg" },
-        { "type": "text", "text": "What do you see in this image?" }
-      ]
-    },
-    {
-      "role": "assistant",
-      "content": [{ "type": "text", "text": "I see a car in the image." }]
-    }
-  ]
-}
-```
-
-> **Note**: VLM datasets commonly have images in a separate row and are referenced in the messages column. If your image URLs or Paths are in a separate column from your messages, you'll need to merge the images into the 'messages' section like above.
-
-### VLM DPO (Vision-Language Preference Optimization)
-
-Use `training_type: "vlm_dpo"` for multimodal preference data. Each row should
-provide `prompt`, `chosen`, and `rejected` message lists plus either an
-`image` or `images` column:
-
-```json
-{
-  "image": "images/chart.png",
-  "prompt": [
-    {
-      "role": "user",
-      "content": [{ "type": "text", "text": "Which trend is most important?" }]
-    }
-  ],
-  "chosen": [
-    {
-      "role": "assistant",
-      "content": "Revenue grows fastest in Q4."
-    }
-  ],
-  "rejected": [
-    {
-      "role": "assistant",
-      "content": "The chart is inconclusive."
-    }
-  ]
-}
-```
-
-Use `images` instead of `image` for multi-image rows. Relative image paths are
-resolved against `dataset.image_root` when set. See
-[`job_configs/vlm_dpo_example.yaml`](./job_configs/vlm_dpo_example.yaml) for a
-complete LoRA config. `freeze_vision_encoder` and
-`optimizer_type: "adamw_8bit"` are optional knobs, not defaults.
-
-### GRPO and VLM GRPO
-
-GRPO can reuse the SFT/VLM SFT `messages` format. The loader turns each
-row into `prompt` and `solution` for online reward computation, and any
-extra columns are forwarded to reward functions. See the
-[GRPO section](#grpo-group-relative-policy-optimization) for the full
-dataset, reward, and vLLM rollout contract.
-
-### 🔧 Tool Calling Datasets
-
-Tool calls use LFM bracket notation pre-baked in the assistant `content` field. Tool definitions go in the system prompt, and tool responses use `role: "tool"`.
-
-```json
-{
-  "messages": [
-    {
-      "role": "system",
-      "content": "List of tools: [{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get weather for a city\",\"parameters\":{\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\"}},\"required\":[\"location\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"search_web\",\"description\":\"Search the web\",\"parameters\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"send_email\",\"description\":\"Send an email\",\"parameters\":{\"type\":\"object\",\"properties\":{\"to\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"}},\"required\":[\"to\",\"body\"]}}}]"
-    },
-    { "role": "user", "content": "What's the weather in Boston?" },
-    {
-      "role": "assistant",
-      "content": "<|tool_call_start|>[get_weather(location=\"Boston\")]<|tool_call_end|>"
-    },
-    {
-      "role": "tool",
-      "content": "{\"temperature\": 72, \"condition\": \"sunny\"}"
-    },
-    { "role": "assistant", "content": "It's 72°F and sunny in Boston." }
-  ]
-}
-```
-
-- Tool calls must be pre-baked in `content` using `<|tool_call_start|>[func(args)]<|tool_call_end|>` bracket notation
-- Structured `tool_calls` fields (OpenAI format) are auto-converted if present
-- Foreign formats (e.g. `<tool_call>` XML) are rejected with an actionable error
-- Do not include `<|tool_response_start|>` / `<|tool_response_end|>` markers in `role: "tool"` messages — the LFM2 chat template adds these automatically during tokenization
-- **LFM2 models** additionally expect `<|tool_list_start|>` / `<|tool_list_end|>` around tool definitions in the system prompt. Include these in your data if training an LFM2 model; omit them for LFM2.5. The pipeline warns on mismatches and auto-strips `<|tool_list_start|>` when training LFM2.5.
-
-## 🔄 Resuming Training
-
-If a run is interrupted (GPU timeout, crash, SLURM preemption, etc.), you can resume from the last checkpoint with full optimizer state, LR schedule, and wandb continuity.
-
-Add `resume_from_checkpoint` to your `training_config`:
-
-```yaml
-training_config:
-  resume_from_checkpoint: "latest" # resumes from the most recent checkpoint
-```
-
-This finds the most recent run directory under `outputs/{project_name}/` and resumes from its latest checkpoint. To resume from a specific checkpoint instead:
-
-```yaml
-training_config:
-  resume_from_checkpoint: "/path/to/outputs/my_project/run_name/checkpoint-step-8000"
-```
-
-**What gets restored:** model weights, optimizer states, LR scheduler position, training step counter, and RNG states. To resume a run, `save_only_model` must be set to `False`.
-
-**Wandb continuity:** The wandb run ID is saved to `<run_dir>/.wandb_run_id` automatically. On resume, it restores the same wandb run. Fresh runs always get a new wandb run.
-
-## GRPO (Group Relative Policy Optimization)
-
-GRPO runs online RL with TRL v1's `GRPOTrainer`. Use
-`training_type: "grpo"` for text models and `training_type: "vlm_grpo"`
-for vision-language models. Both modes use the same YAML entrypoint as
-SFT/DPO, the same Ray Train launcher, and vLLM rollouts by default.
-
-**Dataset contract.** Text GRPO can reuse the SFT `messages` format: the
-loader splits each row into `prompt` (non-assistant turns) and `solution`
-(the last assistant message). Native `prompt` / `solution` columns also
-work. VLM GRPO uses the same multimodal `messages` shape as VLM SFT;
-`dataset.image_root` is prepended to relative image paths. Any extra
-dataset columns are forwarded to reward functions as keyword arguments.
-
-**Rewards.** The `rewards:` block resolves plain Python callables and
-task recipes from [`rewards/`](./rewards/README.md). Shipped primitive
-functions can be referenced by function name:
-
-```yaml
-rewards:
-  funcs:
-    - "accuracy_reward"
-    - "length_reward"
-  weights: [1.0, 0.1]
-```
-
-Task recipes bundle multiple reward functions and their default weights:
-
-```yaml
-rewards:
-  recipe: "tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
-```
-
-If you combine `recipe:` and `funcs:`, the final reward order is recipe
-rewards first, then individual funcs. A `weights:` override must match
-that expanded order. Absolute paths and explicit
-`./rewards/file.py::function_name` specs still work for custom rewards.
-
-**Judge LLM reward.** Add `rewards.judge` when the reward signal should
-come from an LLM grader. Without `base_url`, the driver starts a local
-`trl vllm-serve` judge server before Ray initializes and exports the
-endpoint to workers:
-
-```yaml
-rewards:
-  judge:
-    model: "LFM2-1.2B"
-    weight: 1.0
-    prompt_template: |
-      Prompt:
-      {prompt}
-
-      Assistant response:
-      {completion}
-
-      Reference answer or rubric:
-      {solution}
-
-      Return only JSON: {"score": 0.0}
-
-grpo_rollout:
-  judge_gpus: 1
-```
-
-For an external judge, set `rewards.judge.base_url` and omit
-`judge_gpus`. Judge scores are parsed from JSON or the first number in
-the response and normalized from `min_score`/`max_score` to `[0, 1]`.
-
-**vLLM rollout modes.** `DEFAULT_GRPO` and `DEFAULT_VLM_GRPO` set
-`use_vllm: true` and `vllm_mode: "colocate"`.
-
-- **Colocate** — vLLM runs inside each training worker and shares GPU
-  memory. This is the default and works on single-node and multi-node
-  jobs.
-- **Server** — the driver starts `trl vllm-serve` before Ray initializes,
-  then narrows `CUDA_VISIBLE_DEVICES` so Ray only sees training GPUs.
-  Configure counts, not device ids:
-
-```yaml
-grpo_rollout:
-  server_gpus: 1 # reserve 1 local GPU for vLLM; training gets the rest
-  judge_gpus: 1 # optional: reserve 1 local GPU for rewards.judge
-  # training_gpus: 3    # or set only this and vLLM gets the remaining GPUs
-  tensor_parallel_size: 1
-  dtype: "bfloat16"
-  gpu_memory_utilization: 0.9
-
-training_config:
-  extends: "DEFAULT_GRPO"
-  vllm_mode: "server"
-  vllm_server_host: "auto"
-  vllm_server_port: 8000
-```
-
-Local server partitioning is single-node only. For multi-node GRPO, use
-colocate mode or point `vllm_server_base_url` at an externally managed
-vLLM server without setting `server_gpus` / `training_gpus`.
-
-**Example configs** — copy and edit instead of writing YAML from scratch:
-
-- [`job_configs/grpo_example.yaml`](./job_configs/grpo_example.yaml) —
-  text GRPO quickstart with the GSM8K recipe.
-- [`job_configs/grpo_server_mode_example.yaml`](./job_configs/grpo_server_mode_example.yaml)
-  — text GRPO with a local `trl vllm-serve` rollout server.
-- [`job_configs/vlm_grpo_grounding_example.yaml`](./job_configs/vlm_grpo_grounding_example.yaml)
-  — VLM GRPO with the visual-grounding recipe.
-
-Launch the same way as SFT/DPO:
-
-```bash
-uv run leap-finetune job_configs/grpo_example.yaml
-```
-
-**Agentic environments (advanced).** For tasks where the environment
-state evolves from agent actions (browsing, tool use, game simulators,
-stateful multi-turn), `leap-finetune` also supports
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) via an optional
-`rl_env:` block. Install with `uv sync --extra rl-env` and see
-[`src/leap_finetune/rl/environments/README.md`](./src/leap_finetune/rl/environments/README.md).
-For anything scorable by a pure Python function, prefer the `rewards:`
-path above — it is simpler and faster.
-
-## 📈 Evaluation Benchmarks
-
-Run benchmarks automatically during training at every `eval_steps`. Add a `benchmarks` section to your YAML config:
-
-```yaml
-benchmarks:
-  max_new_tokens: 128
-  benchmarks:
-    - name: "mmmu_val"
-      path: "/data/mmmu_val.jsonl"
-      metric: "short_answer"
-
-    - name: "imagenette"
-      path: "/data/imagenette_eval.jsonl"
-      metric: "logprob_zero_shot"
-```
-
-Benchmark data uses the **same format as training data** (HF messages schema). Available metrics: `short_answer`, `grounding_iou`, `mcq_gen`, `logprob_zero_shot`. Results are logged to wandb at `benchmark/{name}/score`.
-
-See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data format examples, YAML reference, and how to add custom metrics.
-
-### Post-Training Evaluation with lmms-eval
-
-For comprehensive post-training evaluation on standard VLM benchmarks (MMMU, OCRBench, RefCOCO, POPE, etc.), install the optional `lmms-eval` extra:
-
-```bash
-uv sync --extra lmms-eval
-```
-
-This installs [lmms-eval](https://github.com/Liquid4All/lmms-eval) with built-in LFM2-VL model support.
-
-**Evaluate a fine-tuned checkpoint:**
-
-```bash
-# Single GPU
-python -m lmms_eval \
-    --model lfm2_vl \
-    --model_args pretrained=/path/to/checkpoint \
-    --tasks mmmu_val,ocrbench,pope \
-    --batch_size 1
-
-# Multi-GPU
-torchrun --nproc-per-node=4 -m lmms_eval \
-    --model lfm2_vl \
-    --model_args pretrained=/path/to/checkpoint \
-    --tasks mmmu_val,ocrbench,pope \
-    --batch_size 1
-```
-
-**For faster evaluation with vLLM backend (~8x speedup):**
-
-```bash
-uv sync --extra lmms-eval-vllm
-
-python -m lmms_eval \
-    --model lfm2_vl_vllm \
-    --model_args pretrained=/path/to/checkpoint,tensor_parallel_size=1,gpu_memory_utilization=0.85 \
-    --tasks mmmu_val,ocrbench,pope \
-    --batch_size 64
-```
-
-**Updating lmms-eval to latest:**
-
-```bash
-uv lock --upgrade-package lmms-eval
-uv sync --extra lmms-eval
-```
-
-> **Note:** Requires SSH access to the Liquid4All GitHub repos. The lmms-eval and vllm packages are sourced from private Liquid4All forks with LFM2 model support.
-
-## 🧪 Advanced Configuration
-
-Default base configs live in [`src/leap_finetune/training/default_configs/`](./src/leap_finetune/training/default_configs/) and are auto-discovered — new configs added to these files are immediately available via `extends` in YAML.
-
-[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is pre-installed. Enable it with `use_liger_kernel: true` in your `training_config`.
-
-## 📂 Dataset Loading
-
-The `dataset.path` field in your YAML config accepts local files, HuggingFace Hub IDs, and cloud storage URIs:
-
-| Source          | Example `path`                                 |
-| --------------- | ---------------------------------------------- |
-| Local file      | `/path/to/data.jsonl`, `/path/to/data.parquet` |
-| HuggingFace Hub | `HuggingFaceTB/smoltalk`                       |
-| S3              | `s3://bucket/path/to/data.parquet`             |
-| GCS             | `gs://bucket/path/to/data.parquet`             |
-| Azure           | `az://container/path/to/data.parquet`          |
-
-Cloud storage requires appropriate credentials (AWS, GCP, or Azure). Use `subset` for HuggingFace datasets with multiple configs, and `limit` to cap the number of samples for quick testing.
+## Advanced Configuration
+
+Default base configs live in
+[`src/leap_finetune/training/default_configs/`](./src/leap_finetune/training/default_configs/)
+and are auto-discovered. New configs added to those files are immediately
+available via `extends` in YAML.
+
+[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is installed by the
+default CUDA group. Enable it with `use_liger_kernel: true` in
+`training_config`.
+
+LoRA is configured through `peft_config`. Continued LoRA training can load an
+existing adapter with `adapter_path`; VLM configs can optionally freeze the
+vision encoder with `freeze_vision_encoder` and use bitsandbytes 8-bit AdamW
+with `optimizer_type: "adamw_8bit"`.
+
+Pinned chat templates live in
+[`job_configs/chat_templates/`](./job_configs/chat_templates/). Non-local
+LiquidAI LFM2.5 and LFM2-24B models select the pinned LFM2.5 template by
+default.
 
 ## Contributing
 
 ### Testing
 
-The suite is intentionally scoped to four buckets: config parsing, e2e, RL,
-and MoE. See [`tests/README.md`](./tests/README.md) for the current layout.
+The test suite is intentionally scoped to four buckets: config parsing, e2e,
+RL, and MoE. See [`tests/README.md`](./tests/README.md) for the current layout.
 E2E fixtures and SLURM launchers live under [`tests/e2e/`](./tests/e2e/).
+
+Run the normal tests:
+
+```bash
+uv run pytest tests/config tests/rl tests/moe -q
+```
+
+GPU e2e tests require an appropriate GPU or cluster backend; see
+[`tests/e2e/`](./tests/e2e/) for launchers and fixtures.
 
 ### Pull Requests
 
-1. Hook `pre-commit` to git: `uv run pre-commit install`
-2. Open a PR with your changes
+Install pre-commit hooks:
 
-Pre-commit will now run automatically on commits, or run manually:
+```bash
+uv run pre-commit install
+```
+
+Run hooks manually:
 
 ```bash
 uv run pre-commit run --all-files
 ```
 
-Please include a thorough description of changes and additions in your PR.
+Open a PR with a clear description of the behavior changed, tests run, and any
+known limitations.

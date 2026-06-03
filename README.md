@@ -15,7 +15,7 @@
 </br>
 
 <p align="center">
-<a href="#-setup">Setup</a> · <a href="#-quickstart">Quickstart</a> · <a href="#cli-usage">CLI</a> · <a href="#-expected-dataset-formats">Dataset Formats</a> · <a href="#grpo-group-relative-policy-optimization">GRPO</a> · <a href="#-tool-calling-datasets">Tool Calling</a> · <a href="#-resuming-training">Resuming Training</a> · <a href="#-quantization--gguf-export">Quantization</a> · <a href="#-evaluation-benchmarks">Benchmarks</a> · <a href="#-advanced-configuration">Advanced Config</a>
+<a href="#-setup">Setup</a> · <a href="#-quickstart">Quickstart</a> · <a href="#cli-usage">CLI</a> · <a href="#-expected-dataset-formats">Dataset Formats</a> · <a href="#grpo-group-relative-policy-optimization">GRPO</a> · <a href="#-tool-calling-datasets">Tool Calling</a> · <a href="#-resuming-training">Resuming Training</a> · <a href="#-quantization--gguf-export">Quantization</a> · <a href="#-evaluation-benchmarks">Benchmarks</a> · <a href="#-advanced-configuration">Advanced Config</a> · <a href="#contributing">Contributing</a>
 </p>
 
 LEAP-Finetune is a minimal fine-tuning repo for LFM2, fully built on Open Source. It handles multi-gpu orchestration, dataset formatting and validation, and model checkpointing. We support different acceleration backends, including GPU nodes of 8xH100 80GB (both single node and multi node) as well as Modal (H100, H200, B200, ..) in case you don't have your own GPUs.
@@ -358,7 +358,7 @@ the merged checkpoint.
 - [Quantization / GGUF Export](#-quantization--gguf-export)
 - [Evaluation Benchmarks](#-evaluation-benchmarks)
 - [Advanced Configuration](#-advanced-configuration)
-- [Testing](#-testing)
+- [Contributing](#contributing)
 
 ## 📊 Expected Dataset Formats
 
@@ -723,13 +723,15 @@ The `dataset.path` field in your YAML config accepts local files, HuggingFace Hu
 
 Cloud storage requires appropriate credentials (AWS, GCP, or Azure). Use `subset` for HuggingFace datasets with multiple configs, and `limit` to cap the number of samples for quick testing.
 
-## 🧪 Testing
+## Contributing
+
+### Testing
 
 The suite is intentionally scoped to four buckets: config parsing, e2e, RL,
 and MoE. See [`tests/README.md`](./tests/README.md) for the current layout.
 E2E fixtures and SLURM launchers live under [`tests/e2e/`](./tests/e2e/).
 
-## Contributing
+### Pull Requests
 
 1. Hook `pre-commit` to git: `uv run pre-commit install`
 2. Open a PR with your changes

@@ -321,6 +321,7 @@ class SidecarEvalCallback(TrainerCallback):
 
         jobid = content.split(":", 1)[0] if ":" in content else ""
         if jobid.isdigit():
+            proc = None
             try:
                 proc = subprocess.run(
                     ["sacct", "-j", jobid, "-o", "State", "-P", "-n"],
@@ -329,20 +330,26 @@ class SidecarEvalCallback(TrainerCallback):
                     timeout=10,
                     check=False,
                 )
-                if proc.returncode == 0:
-                    for line in proc.stdout.strip().splitlines():
-                        state = line.strip().split(None, 1)[0]
-                        if state in _SACCT_TERMINAL_STATES:
-                            logger.warning(
-                                "[async_eval/sidecar] clearing stale marker "
-                                "(job %s ended with %s)",
-                                jobid,
-                                state,
-                            )
-                            marker.unlink(missing_ok=True)
-                            return
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass  # sacct unavailable; fall through to mtime check.
+            if proc is not None and proc.returncode == 0 and proc.stdout.strip():
+                # sacct gave a definitive answer. Clear only on terminal state;
+                # if the job is in ANY non-terminal state (PENDING, RUNNING,
+                # COMPLETING, ...) we must keep the marker — falling through
+                # to the mtime cutoff here would delete a live sidecar's
+                # marker and the next _fire would submit a duplicate.
+                for line in proc.stdout.strip().splitlines():
+                    state = line.strip().split(None, 1)[0]
+                    if state in _SACCT_TERMINAL_STATES:
+                        logger.warning(
+                            "[async_eval/sidecar] clearing stale marker "
+                            "(job %s ended with %s)",
+                            jobid,
+                            state,
+                        )
+                        marker.unlink(missing_ok=True)
+                        return
+                return  # sacct says alive; keep the marker.
 
         try:
             age = time.time() - marker.stat().st_mtime

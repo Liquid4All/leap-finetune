@@ -788,6 +788,106 @@ class TestReservedFailureAccounting:
         assert cb._consecutive_failures == 0
 
 
+class TestRunOneCycleClassification:
+    """``_run_one_cycle`` must distinguish three empty-metrics cases:
+    healthy no-op (no samples / NotImplementedError) vs all-benchmarks-raised.
+    Codex caught the latter slipping through with ok=True."""
+
+    def _cb_with_benches(self, tmp_path, benches):
+        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+        from leap_finetune.evaluation.reserved_callback import ReservedEvalCallback
+
+        return ReservedEvalCallback(
+            benchmarks=benches,
+            cfg=AsyncEvalConfig.from_dict({"mode": "reserved"}),
+            server_url="http://localhost:8100",
+            output_dir=str(tmp_path),
+            eval_gpu_ids="0",
+        )
+
+    def _patch_server(self, monkeypatch, cb):
+        """No-op _respawn_server + _wait_for_health so the test exercises
+        only the per-benchmark loop classification."""
+        monkeypatch.setattr(cb, "_respawn_server", lambda ckpt: None)
+        import leap_finetune.utils.vllm_server as vllm_server
+
+        monkeypatch.setattr(vllm_server, "_wait_for_health", lambda *a, **kw: None)
+
+    def _make_bench(self, *, name, raises=None, samples=None, metrics=None, count=1):
+        from leap_finetune.evaluation.base import BenchmarkResult
+
+        bench = MagicMock(name=name)
+        bench.name = name
+        bench.get_samples.return_value = samples if samples is not None else [{"x": 1}]
+        if raises is not None:
+            bench.evaluate_with_backend.side_effect = raises
+        else:
+            bench.evaluate_with_backend.return_value = BenchmarkResult(
+                metrics=metrics or {"score": 1.0}, count=count
+            )
+        return bench
+
+    def test_all_real_errors_marks_ok_false(self, tmp_path, monkeypatch):
+        """Every benchmark raises a real Exception → cycle is a failure."""
+        from pathlib import Path
+
+        cb = self._cb_with_benches(
+            tmp_path,
+            [
+                self._make_bench(name="b1", raises=RuntimeError("boom")),
+                self._make_bench(name="b2", raises=RuntimeError("boom")),
+            ],
+        )
+        self._patch_server(monkeypatch, cb)
+        from leap_finetune.evaluation.reserved_callback import _EvalRequest
+
+        results, ok = cb._run_one_cycle(
+            MagicMock(), _EvalRequest(step=1, ckpt_path=Path("/dev/null"))
+        )
+        assert results == {}
+        assert ok is False  # all-fail must be flagged so auto-disable can fire
+
+    def test_all_not_implemented_marks_ok_true(self, tmp_path, monkeypatch):
+        """NotImplementedError means backend mismatch, not failure."""
+        from pathlib import Path
+
+        cb = self._cb_with_benches(
+            tmp_path,
+            [
+                self._make_bench(name="b1", raises=NotImplementedError("no logprobs")),
+                self._make_bench(name="b2", raises=NotImplementedError("no logprobs")),
+            ],
+        )
+        self._patch_server(monkeypatch, cb)
+        from leap_finetune.evaluation.reserved_callback import _EvalRequest
+
+        results, ok = cb._run_one_cycle(
+            MagicMock(), _EvalRequest(step=1, ckpt_path=Path("/dev/null"))
+        )
+        assert results == {}
+        assert ok is True  # healthy: backend just doesn't support this benchmark
+
+    def test_partial_failure_still_ok(self, tmp_path, monkeypatch):
+        """If at least one benchmark salvaged data, ok=True (partial)."""
+        from pathlib import Path
+
+        cb = self._cb_with_benches(
+            tmp_path,
+            [
+                self._make_bench(name="b1", raises=RuntimeError("boom")),
+                self._make_bench(name="b2", metrics={"score": 2.0}, count=2),
+            ],
+        )
+        self._patch_server(monkeypatch, cb)
+        from leap_finetune.evaluation.reserved_callback import _EvalRequest
+
+        results, ok = cb._run_one_cycle(
+            MagicMock(), _EvalRequest(step=1, ckpt_path=Path("/dev/null"))
+        )
+        assert "benchmark/b2/score" in results
+        assert ok is True
+
+
 class TestAsyncRunnerWandbAxis:
     def test_define_metric_enumerates_every_benchmark_key(self, monkeypatch):
         """Per-key registration vs glob-only: a regression to a single

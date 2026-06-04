@@ -276,7 +276,12 @@ class ReservedEvalCallback(TrainerCallback):
             self._ensure_thread()
             ckpt_path = self._save_checkpoint(model, state)
             self._input_q.put(_EvalRequest(step=state.global_step, ckpt_path=ckpt_path))
-            self._consecutive_failures = 0
+            # NOTE: do NOT reset _consecutive_failures here. The counter is
+            # shared with helper-thread cycle failures drained in
+            # _account_result; a successful submit followed by N failed
+            # cycles would otherwise keep wiping the running count and
+            # auto-disable could never fire. Only an ok=True cycle drain
+            # resets the counter — see _account_result.
         except Exception:
             self._consecutive_failures += 1
             logger.exception(

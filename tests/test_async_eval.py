@@ -787,6 +787,50 @@ class TestReservedFailureAccounting:
         cb._account_result(_EvalResult(step=2, metrics={"benchmark/x": 0.5}, ok=True))
         assert cb._consecutive_failures == 0
 
+    def test_disable_after_repeated_broken_cycles_end_to_end(
+        self, tmp_path, monkeypatch
+    ):
+        """End-to-end regression: on_evaluate submits successfully + the
+        cycle drained later is ok=False. After max_consecutive such
+        cycles the callback must disable. Catches the bug where
+        on_evaluate's success-reset wiped the cycle-failure counter,
+        leaving auto-disable unable to fire on a totally broken helper.
+        """
+        from pathlib import Path
+
+        from leap_finetune.evaluation.reserved_callback import _EvalResult
+
+        cb = self._cb(tmp_path, max_consecutive=2)
+        # Stub the submit-side internals so on_evaluate runs cleanly to
+        # the _input_q.put (no real thread, no real checkpoint).
+        monkeypatch.setattr(cb, "_ensure_thread", lambda: None)
+        monkeypatch.setattr(cb, "_save_checkpoint", lambda model, state: Path("/tmp"))
+        monkeypatch.setattr(
+            "leap_finetune.evaluation.reserved_callback.is_rank_zero",
+            lambda: True,
+        )
+
+        # Cycle 1: submit OK, helper "fails" (we feed the result directly).
+        cb.on_evaluate(
+            MagicMock(),
+            MagicMock(global_step=1),
+            MagicMock(),
+            model=MagicMock(),
+        )
+        cb._account_result(_EvalResult(step=1, metrics={}, ok=False))
+        assert cb._consecutive_failures == 1
+
+        # Cycle 2: submit OK again. Counter must NOT reset here.
+        cb.on_evaluate(
+            MagicMock(),
+            MagicMock(global_step=2),
+            MagicMock(),
+            model=MagicMock(),
+        )
+        cb._account_result(_EvalResult(step=2, metrics={}, ok=False))
+        assert cb._consecutive_failures == 2
+        assert cb._disabled is True
+
 
 class TestRunOneCycleClassification:
     """``_run_one_cycle`` must distinguish three empty-metrics cases:

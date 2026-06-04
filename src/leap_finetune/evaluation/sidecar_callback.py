@@ -27,7 +27,13 @@ from leap_finetune.utils.logging_utils import is_rank_zero
 
 logger = logging.getLogger(__name__)
 
-_MARKER_NAME = ".in_flight"
+_MARKER_PREFIX = (
+    ".in_flight.step_"  # one file per in-flight step → ".in_flight.step_<N>"
+)
+# Glob pattern for "any sidecar in flight". Per-step markers let
+# ``on_overlap=queue`` actually allow concurrent evals without one
+# sidecar's EXIT trap wiping another sidecar's marker.
+_MARKER_GLOB = ".in_flight.step_*"
 _STAGING_KEEP = 10
 
 # Allowlist of slurm states where the job is still running. Anything
@@ -175,17 +181,20 @@ class SidecarEvalCallback(TrainerCallback):
         args: TrainingArguments,
         wait_for_completion: bool = False,
     ) -> None:
-        marker = self._eval_dir / _MARKER_NAME
-        self._clear_marker_if_stale(marker)
-        if marker.exists():
+        self._sweep_stale_markers()
+        in_flight = sorted(self._eval_dir.glob(_MARKER_GLOB))
+        if in_flight:
             if self.cfg.on_overlap == "skip":
                 logger.warning(
-                    "[async_eval/sidecar] previous eval in flight; skipping step %d",
+                    "[async_eval/sidecar] %d eval(s) in flight; skipping step %d",
+                    len(in_flight),
                     state.global_step,
                 )
                 return
             logger.info(
-                "[async_eval/sidecar] previous eval in flight; queueing step %d",
+                "[async_eval/sidecar] %d eval(s) in flight; submitting step %d "
+                "anyway (on_overlap=queue)",
+                len(in_flight),
                 state.global_step,
             )
 
@@ -215,7 +224,10 @@ class SidecarEvalCallback(TrainerCallback):
         args: TrainingArguments,
     ) -> str | None:
         eval_dir = self._eval_dir
-        marker = eval_dir / _MARKER_NAME
+        # One marker per in-flight step so concurrent sidecars under
+        # ``on_overlap=queue`` don't share state. The sbatch script's
+        # EXIT trap removes only its own (templated by step number).
+        marker = eval_dir / f"{_MARKER_PREFIX}{state.global_step}"
 
         ckpt_root = eval_dir / "checkpoints"
         ckpt_root.mkdir(parents=True, exist_ok=True)
@@ -331,8 +343,18 @@ class SidecarEvalCallback(TrainerCallback):
             f"sbatch submission failed after {max_attempts} attempt(s): {last_err}"
         )
 
+    def _sweep_stale_markers(self) -> None:
+        """Sweep ALL per-step in-flight markers and clear ones whose
+        sbatch job is no longer alive. Called at the top of ``_fire``
+        so a dead orphan never blocks the next eval under
+        ``on_overlap=skip`` and the queue-mode "in-flight count" is
+        accurate.
+        """
+        for marker in self._eval_dir.glob(_MARKER_GLOB):
+            self._clear_marker_if_stale(marker)
+
     def _clear_marker_if_stale(self, marker: Path) -> None:
-        """Remove an orphan ``.in_flight`` marker whose job is no longer alive.
+        """Remove a single orphan marker whose job is no longer alive.
 
         The sidecar script's EXIT trap doesn't fire if slurm OOM-kills the
         step, NODE_FAILs, or the user ``scancel``s with ``--signal=KILL``;
@@ -374,8 +396,9 @@ class SidecarEvalCallback(TrainerCallback):
                     if state in _SACCT_ACTIVE_STATES:
                         return  # at least one row alive; keep marker.
                 logger.warning(
-                    "[async_eval/sidecar] clearing stale marker "
+                    "[async_eval/sidecar] clearing stale marker %s "
                     "(job %s no longer active; sacct states: %s)",
+                    marker.name,
                     jobid,
                     ",".join(states_seen),
                 )
@@ -386,7 +409,8 @@ class SidecarEvalCallback(TrainerCallback):
             age = time.time() - marker.stat().st_mtime
             if age > 6 * 3600:
                 logger.warning(
-                    "[async_eval/sidecar] clearing stale marker (mtime %.1fh old)",
+                    "[async_eval/sidecar] clearing stale marker %s (mtime %.1fh old)",
+                    marker.name,
                     age / 3600,
                 )
                 marker.unlink(missing_ok=True)

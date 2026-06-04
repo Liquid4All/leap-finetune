@@ -30,7 +30,7 @@ benchmarks:
   max_new_tokens: 32
   benchmarks:
     - name: tiny_qa
-      path: /home/rouzbeh/leap-finetune/tests/fixtures/tiny_qa_bench.jsonl
+      path: tests/fixtures/tiny_qa_bench.jsonl
       metric: short_answer
       match_mode: contains
 

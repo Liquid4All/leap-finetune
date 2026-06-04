@@ -13,12 +13,14 @@
 
 set -euo pipefail
 
-module load cuda12.9/toolkit/12.9.1 2>/dev/null || true
-export CUDA_HOME="${CUDA_HOME:-/cm/shared/apps/cuda12.9/toolkit/12.9.1}"
+if [ -n "${LEAP_CUDA_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
+    module load "$LEAP_CUDA_MODULE" 2>/dev/null || true
+fi
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 
-cd /home/rouzbeh/leap-finetune
+cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 source .venv/bin/activate
-source ~/.env
+[ -f "$HOME/.env" ] && source "$HOME/.env"
 
 export TMPDIR="${HOME}/tmp"
 export TRITON_CACHE_DIR="${HOME}/.triton_cache"

@@ -50,7 +50,9 @@ def render_sbatch_script(
     script_path = scripts_dir / f"step_{trigger_step}.sh"
     log_out = logs_dir / f"step_{trigger_step}.out"
     log_err = logs_dir / f"step_{trigger_step}.err"
-    marker = eval_dir / ".in_flight"
+    # Per-step marker so concurrent sidecars (on_overlap=queue) don't share
+    # state and one sbatch's EXIT trap doesn't wipe another's marker.
+    marker = eval_dir / f".in_flight.step_{trigger_step}"
 
     runner_args = [
         "--checkpoint",

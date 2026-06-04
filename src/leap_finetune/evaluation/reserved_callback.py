@@ -107,23 +107,31 @@ class ReservedEvalCallback(TrainerCallback):
             if req is None:
                 break
             try:
-                metrics = self._run_one_cycle(backend, req)
-                self._output_q.put(_EvalResult(step=req.step, metrics=metrics, ok=True))
+                metrics, ok = self._run_one_cycle(backend, req)
+                self._output_q.put(_EvalResult(step=req.step, metrics=metrics, ok=ok))
             except Exception:
                 logger.exception(
                     "[async_eval/reserved] cycle failed at step %d", req.step
                 )
                 self._output_q.put(_EvalResult(step=req.step, metrics={}, ok=False))
 
-    def _run_one_cycle(self, backend, req: _EvalRequest) -> dict:
+    def _run_one_cycle(self, backend, req: _EvalRequest) -> tuple[dict, bool]:
         """Respawn the server with the new checkpoint, wait for /health,
-        then run all benchmarks through ``backend``."""
+        then run all benchmarks through ``backend``.
+
+        Returns ``(results, ok)``. ``ok=False`` only when at least one
+        benchmark raised a real error AND no benchmark produced any
+        metrics — i.e. the cycle yielded nothing despite a real failure.
+        NotImplementedError and empty-samples paths don't count as
+        failures; they're healthy ways for a cycle to be a no-op.
+        """
         from leap_finetune.utils.vllm_server import _wait_for_health  # noqa: PLC2701
 
         self._respawn_server(req.ckpt_path)
         _wait_for_health(self.server_url, timeout=600.0, process=self._server_process)
 
         results: dict[str, float] = {}
+        real_errors = 0
         for bench in self.benchmarks:
             samples = bench.get_samples()
             if not samples:
@@ -142,12 +150,16 @@ class ReservedEvalCallback(TrainerCallback):
                     "[async_eval/reserved] [%s] failed; other benchmarks continue",
                     bench.name,
                 )
+                real_errors += 1
                 continue
             for metric, total in r.metrics.items():
                 avg = total / r.count if r.count > 0 else 0.0
                 results[f"benchmark/{bench.name}/{metric}"] = avg
 
-        return results
+        # Partial data (some succeeded) → ok. No real errors → ok (healthy
+        # no-op). Real errors with zero salvaged metrics → not ok.
+        ok = bool(results) or real_errors == 0
+        return results, ok
 
     # === Subprocess management (helper thread owns it) ===
 

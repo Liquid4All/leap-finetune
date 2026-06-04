@@ -364,3 +364,24 @@ class TestGroundingIouMalformedDoesNotInflate:
             '[{"bbox": 42}]',  # int bbox inside list-of-dicts
         ]:
             assert _parse_bbox(junk) is None, f"{junk!r} should parse to None"
+
+    def test_boolean_coords_rejected_not_coerced(self):
+        """``[false, false, true, true]`` must NOT coerce to ``[0,0,1,1]``.
+
+        ``bool`` is a subclass of ``int``, so float() happily turns booleans
+        into 0.0/1.0. If we allowed that, a model emitting JSON booleans as
+        its bbox would score IoU=1.0 against a full-image GT — a free
+        perfect score from semantic nonsense.
+        """
+        from leap_finetune.evaluation.metrics import _parse_bbox, score_grounding_iou
+
+        assert _parse_bbox("[false, false, true, true]") is None
+        assert _parse_bbox('[{"label":"x","bbox":[false,false,true,true]}]') is None
+        assert score_grounding_iou("[false, false, true, true]", "[0, 0, 1, 1]") == 0.0
+        assert (
+            score_grounding_iou(
+                '[{"label":"x","bbox":[false,false,true,true]}]',
+                "[0, 0, 1, 1]",
+            )
+            == 0.0
+        )

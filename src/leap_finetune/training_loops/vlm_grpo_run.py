@@ -464,8 +464,13 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
             return None  # text-only batch
 
         # Use getattr so tests can construct an instance via __new__ without
-        # going through __init__/processing_class wiring.
+        # going through __init__/processing_class wiring. We need BOTH the
+        # processor (for downsample_factor) and an image_token_id to do the
+        # per-sample reconciliation — bail with no preflight if either is
+        # missing rather than crashing on ``None.image_processor`` below.
         proc = getattr(self, "processing_class", None)
+        if proc is None:
+            return None
         image_token_id = getattr(proc, "image_token_id", None)
         if image_token_id is None:
             image_token_id = getattr(
@@ -475,7 +480,8 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
             return None
 
         B = ids.shape[0]
-        df = int(getattr(proc.image_processor, "downsample_factor", 2) or 2)
+        image_processor = getattr(proc, "image_processor", None)
+        df = int(getattr(image_processor, "downsample_factor", 2) or 2)
 
         # Split spatial_shapes per sample.  spatial is (total_images, 2).
         # num_images[i] = number of images in sample i.
@@ -486,7 +492,9 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
             num_images_list = list(num_images)
 
         # Compute per-sample expected feature count from spatial_shapes split.
-        splits = torch.split(spatial, num_images_list, dim=0)  # tuple of (n_i, 2) tensors
+        splits = torch.split(
+            spatial, num_images_list, dim=0
+        )  # tuple of (n_i, 2) tensors
         expected_per_sample = [
             int(((s[:, 0] // df) * (s[:, 1] // df)).sum().item()) for s in splits
         ]
@@ -535,7 +543,11 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
                     "[vlm_grpo] sample %d: padded image-token UNDERFLOW "
                     "placeholders %d -> %d (features=%d, n_images=%d) — "
                     "dropping from loss",
-                    i, act, exp, exp, num_images_list[i],
+                    i,
+                    act,
+                    exp,
+                    exp,
+                    num_images_list[i],
                 )
             else:
                 # Surplus: replace trailing surplus image tokens with pad so the
@@ -547,7 +559,11 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
                 logger.warning(
                     "[vlm_grpo] sample %d: trimmed %d surplus image-token(s) "
                     "placeholders %d -> %d (features=%d) — dropping from loss",
-                    i, surplus, act, exp, exp,
+                    i,
+                    surplus,
+                    act,
+                    exp,
+                    exp,
                 )
 
         if any_bad:
@@ -624,9 +640,7 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         # each sample independently, trims any surplus image tokens in-place,
         # and returns a boolean mask of "bad" rows whose loss contribution
         # should be zeroed instead of running a model forward that would crash.
-        bad_rows = self._check_image_token_mismatch(
-            model, model_inputs, num_images
-        )
+        bad_rows = self._check_image_token_mismatch(model, model_inputs, num_images)
 
         logits = model(**model_inputs).logits
         # Drop next-token logit, keep only the completion region.

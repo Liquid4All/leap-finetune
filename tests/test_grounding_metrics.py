@@ -306,3 +306,61 @@ class TestGroundingIouLegacy:
             score_grounding_iou("[0, 0, 0.5, 0.5]", "[0, 0, 1, 1]", iou_threshold=0.5)
             == 0.0
         )
+
+
+class TestGroundingIouMalformedDoesNotInflate:
+    """Malformed predictions must score 0, not raise. ``Benchmark.evaluate``
+    drops per-sample failures from the count, so any exception escaping
+    the parser silently inflates the mean."""
+
+    def test_bbox_value_is_int_returns_none(self):
+        """``{"bbox": 42}`` used to raise ``TypeError`` from ``len(42)``."""
+        from leap_finetune.evaluation.metrics import _parse_bbox
+
+        assert _parse_bbox('{"bbox": 42}') is None
+
+    def test_bbox_value_is_int_scores_zero(self):
+        from leap_finetune.evaluation.metrics import score_grounding_iou
+
+        assert (
+            score_grounding_iou('{"bbox": 42}', "[0, 0, 1, 1]", iou_threshold=0.5)
+            == 0.0
+        )
+
+    def test_bbox_value_is_dict_returns_none(self):
+        from leap_finetune.evaluation.metrics import _parse_bbox
+
+        assert _parse_bbox('{"bbox": {"x": 1}}') is None
+
+    def test_bbox_value_is_string_returns_none(self):
+        from leap_finetune.evaluation.metrics import _parse_bbox
+
+        assert _parse_bbox('{"bbox": "(0,0,1,1)"}') is None
+
+    def test_nan_rejected(self):
+        from leap_finetune.evaluation.metrics import _parse_bbox
+
+        # Python's json doesn't accept literal NaN but Python literals do.
+        assert _parse_bbox("[0, 0, float('nan'), 1]") is None
+        # ast.literal_eval rejects function calls; the parser falls through.
+        assert _parse_bbox("[0, 0, 1, 1e500]") is None  # parses to inf
+
+    def test_garbage_input_never_raises(self):
+        from leap_finetune.evaluation.metrics import _parse_bbox
+
+        # Pathological strings — every one must return None, never raise.
+        for junk in [
+            "",
+            "not json",
+            "{",
+            "[",
+            "{}",
+            "[]",
+            '{"bbox": null}',
+            '{"bbox": [1, 2]}',  # wrong arity
+            '{"bbox": [1, 2, 3, 4, 5]}',  # wrong arity
+            '[{"label": "x"}]',  # no bbox field
+            '{"box": [0, 0, 1, 1]}',  # wrong key
+            '[{"bbox": 42}]',  # int bbox inside list-of-dicts
+        ]:
+            assert _parse_bbox(junk) is None, f"{junk!r} should parse to None"

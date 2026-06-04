@@ -310,6 +310,12 @@ def _parse_bbox_unchecked(text: str) -> list[float] | None:
     # and the failure inflates the running mean.
     if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
         return None
+    # Reject bool entries before they coerce to 0.0/1.0: ``bool`` subclasses
+    # ``int``, so ``[false, false, true, true]`` would otherwise become a
+    # clean-looking ``[0, 0, 1, 1]`` and score IoU=1.0 against the full-image
+    # GT — a free perfect score from gibberish output.
+    if any(isinstance(v, bool) for v in bbox):
+        return None
 
     try:
         bbox = [float(x) for x in bbox]

@@ -716,6 +716,35 @@ class TestStaleMarkerRecovery:
         cb._clear_marker_if_stale(marker)
         assert not marker.exists()
 
+    def test_preserves_live_job_even_with_old_marker(self, tmp_path, monkeypatch):
+        """Adversarial: marker > 6h old AND sacct says RUNNING. The mtime
+        fallback must NOT delete a live sidecar's marker (would cause a
+        duplicate submit on the next _fire). Regression test for the
+        sacct-success path silently falling through to mtime.
+        """
+        import os
+
+        import leap_finetune.evaluation.sidecar_callback as sc
+
+        cb = _make_sidecar_for_submit(tmp_path)
+        eval_dir = tmp_path / "_async_eval"
+        eval_dir.mkdir(exist_ok=True)
+        marker = eval_dir / ".in_flight"
+        marker.write_text("12345:7")
+        old = marker.stat().st_mtime - 7 * 3600
+        os.utime(marker, (old, old))
+
+        monkeypatch.setattr(
+            sc.subprocess,
+            "run",
+            lambda *a, **kw: _FakeCompletedProcess(0, "RUNNING\n"),
+        )
+        cb._clear_marker_if_stale(marker)
+        assert marker.exists(), (
+            "sacct=RUNNING is authoritative; mtime fallback must not "
+            "delete a live job's marker"
+        )
+
 
 # === wandb.define_metric ordering in async_runner_main ===
 

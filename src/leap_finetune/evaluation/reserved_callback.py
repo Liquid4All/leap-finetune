@@ -388,17 +388,15 @@ class ReservedEvalCallback(TrainerCallback):
 
             if wandb.run is None:
                 return
-            # Pin benchmark/* to benchmark/step so panels auto-render. Done
-            # before first log because define_metric doesn't rebind keys
-            # already logged. train/global_step + benchmark/step go in the
-            # payload as plain data, NOT via step=result.step: eval lands
-            # after the trainer advanced past result.step, so step= would
+            # Axis-pin benchmark/* to benchmark/step. train/global_step and
+            # benchmark/step are payload fields, NOT step=result.step — the
+            # trainer has already advanced past result.step so step= would
             # be a backwards write wandb drops.
             try:
                 wandb.define_metric("benchmark/step")
                 wandb.define_metric("benchmark/*", step_metric="benchmark/step")
-            except Exception:
-                logger.debug("wandb.define_metric failed; axis-pin skipped")
+            except Exception as e:
+                logger.warning("wandb.define_metric failed; axis-pin skipped (%s)", e)
             payload = {
                 **result.metrics,
                 "train/global_step": result.step,

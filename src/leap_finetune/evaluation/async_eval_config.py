@@ -50,7 +50,9 @@ class ReservedConfig:
 class FailureConfig:
     max_consecutive: int = 3
     max_submit_attempts: int = 3
-    submit_retry_backoff: float = 2.0  # exponential: backoff * 2**(attempt-1)
+    # Seconds between sbatch retries; exponential ``backoff * 2**(attempt-1)``.
+    # ``0.0`` is allowed (immediate burst) but only safe on quiet controllers.
+    submit_retry_backoff: float = 2.0
 
 
 @dataclass
@@ -127,9 +129,7 @@ class AsyncEvalConfig:
         failure = FailureConfig(
             max_consecutive=int(failure_raw.get("max_consecutive", 3)),
             max_submit_attempts=int(failure_raw.get("max_submit_attempts", 3)),
-            submit_retry_backoff=float(
-                failure_raw.get("submit_retry_backoff", 2.0)
-            ),
+            submit_retry_backoff=float(failure_raw.get("submit_retry_backoff", 2.0)),
         )
 
         return cls(

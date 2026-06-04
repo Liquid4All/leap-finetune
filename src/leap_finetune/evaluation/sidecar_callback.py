@@ -148,6 +148,7 @@ class SidecarEvalCallback(TrainerCallback):
         wait_for_completion: bool = False,
     ) -> None:
         marker = self._eval_dir / _MARKER_NAME
+        self._clear_marker_if_stale(marker)
         if marker.exists():
             if self.cfg.on_overlap == "skip":
                 logger.warning(
@@ -246,7 +247,6 @@ class SidecarEvalCallback(TrainerCallback):
             sbatch_extra_args=self.cfg.sbatch.extra_args,
         )
 
-        marker.write_text(str(state.global_step))
         clean_env = _clean_subprocess_env()
 
         max_attempts = max(1, self.cfg.failure.max_submit_attempts)
@@ -262,7 +262,6 @@ class SidecarEvalCallback(TrainerCallback):
                     env=clean_env,
                 )
             except FileNotFoundError as e:
-                marker.unlink(missing_ok=True)
                 raise RuntimeError(
                     "`sbatch` not found on PATH; async_eval mode=sidecar "
                     "requires running under SLURM. Use mode=sync or "
@@ -271,15 +270,18 @@ class SidecarEvalCallback(TrainerCallback):
 
             if result.returncode == 0:
                 logger.info(
-                    "[async_eval/sidecar] submitted step %d "
-                    "(attempt %d/%d): %s",
+                    "[async_eval/sidecar] submitted step %d (attempt %d/%d): %s",
                     state.global_step,
                     attempt,
                     max_attempts,
                     result.stdout.strip(),
                 )
                 m = re.search(r"Submitted batch job (\d+)", result.stdout)
-                return m.group(1) if m else None
+                jobid = m.group(1) if m else ""
+                # Write marker only AFTER successful submit; format is
+                # "<jobid>:<step>" so _clear_marker_if_stale can sacct the job.
+                marker.write_text(f"{jobid}:{state.global_step}")
+                return jobid or None
 
             last_err = (result.stderr or result.stdout).strip()
             if attempt < max_attempts:
@@ -297,11 +299,61 @@ class SidecarEvalCallback(TrainerCallback):
                 if sleep_s > 0:
                     time.sleep(sleep_s)
 
-        marker.unlink(missing_ok=True)
         raise RuntimeError(
-            f"sbatch submission failed after {max_attempts} attempt(s): "
-            f"{last_err}"
+            f"sbatch submission failed after {max_attempts} attempt(s): {last_err}"
         )
+
+    def _clear_marker_if_stale(self, marker: Path) -> None:
+        """Remove an orphan ``.in_flight`` marker whose job is no longer alive.
+
+        The sidecar script's EXIT trap doesn't fire if slurm OOM-kills the
+        step, NODE_FAILs, or the user ``scancel``s with ``--signal=KILL``;
+        without recovery an orphan would block all future evals under
+        ``on_overlap=skip``. We ask ``sacct`` whether the recorded jobid is
+        terminal; missing-sacct falls back to a 6h mtime cutoff.
+        """
+        if not marker.exists():
+            return
+        try:
+            content = marker.read_text().strip()
+        except OSError:
+            return
+
+        jobid = content.split(":", 1)[0] if ":" in content else ""
+        if jobid.isdigit():
+            try:
+                proc = subprocess.run(
+                    ["sacct", "-j", jobid, "-o", "State", "-P", "-n"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    for line in proc.stdout.strip().splitlines():
+                        state = line.strip().split(None, 1)[0]
+                        if state in _SACCT_TERMINAL_STATES:
+                            logger.warning(
+                                "[async_eval/sidecar] clearing stale marker "
+                                "(job %s ended with %s)",
+                                jobid,
+                                state,
+                            )
+                            marker.unlink(missing_ok=True)
+                            return
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass  # sacct unavailable; fall through to mtime check.
+
+        try:
+            age = time.time() - marker.stat().st_mtime
+            if age > 6 * 3600:
+                logger.warning(
+                    "[async_eval/sidecar] clearing stale marker (mtime %.1fh old)",
+                    age / 3600,
+                )
+                marker.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _wait_for_job(
         self,

@@ -634,6 +634,49 @@ class TestStaleMarkerRecovery:
         cb._clear_marker_if_stale(marker)
         assert not marker.exists()
 
+    def test_keeps_marker_when_any_row_active_in_mixed_output(
+        self, tmp_path, monkeypatch
+    ):
+        """sacct returns multiple rows (parent + .batch step); a single-row
+        check would miss the live parent if the step has already finished."""
+        import leap_finetune.evaluation.sidecar_callback as sc
+
+        cb = _make_sidecar_for_submit(tmp_path)
+        eval_dir = tmp_path / "_async_eval"
+        eval_dir.mkdir(exist_ok=True)
+        marker = eval_dir / ".in_flight"
+        marker.write_text("12345:7")
+
+        monkeypatch.setattr(
+            sc.subprocess,
+            "run",
+            lambda *a, **kw: _FakeCompletedProcess(0, "RUNNING\nCOMPLETED\n"),
+        )
+        cb._clear_marker_if_stale(marker)
+        assert marker.exists()
+
+    def test_clears_when_sacct_missing_and_marker_old(self, tmp_path, monkeypatch):
+        """Third branch — sacct unavailable AND mtime > 6h → mtime fallback
+        fires. The sacct-available paths above don't exercise this."""
+        import os
+
+        import leap_finetune.evaluation.sidecar_callback as sc
+
+        cb = _make_sidecar_for_submit(tmp_path)
+        eval_dir = tmp_path / "_async_eval"
+        eval_dir.mkdir(exist_ok=True)
+        marker = eval_dir / ".in_flight"
+        marker.write_text("12345:7")
+        old = marker.stat().st_mtime - 7 * 3600
+        os.utime(marker, (old, old))
+
+        def no_sacct(*a, **kw):
+            raise FileNotFoundError("sacct")
+
+        monkeypatch.setattr(sc.subprocess, "run", no_sacct)
+        cb._clear_marker_if_stale(marker)
+        assert not marker.exists()
+
 
 class _FakeWandb:
     def __init__(self):
@@ -658,6 +701,33 @@ class _FakeWandb:
 
 
 class TestAsyncRunnerWandbAxis:
+    def test_define_metric_enumerates_every_benchmark_key(self, monkeypatch):
+        """Per-key registration vs glob-only: a regression to a single
+        ``define_metric("benchmark/*", ...)`` would pass the ordering
+        test below but silently lose per-key axis binding for keys that
+        were already logged (define_metric on a logged key is a no-op).
+        """
+        import sys
+
+        from leap_finetune.evaluation import async_runner_main as arm
+
+        fw = _FakeWandb()
+        monkeypatch.setitem(sys.modules, "wandb", fw)
+        arm._log_to_wandb(
+            MagicMock(wandb_run_id="run-xyz", wandb_project=None, trigger_step=42),
+            {
+                "benchmark/refcoco/score": 0.7,
+                "benchmark/gsm8k/score": 0.5,
+                "train/loss": 0.1,  # non-benchmark — should NOT be enumerated
+            },
+        )
+        defined_keys = [c[1][0] for c in fw.calls if c[0] == "define_metric"]
+        assert "benchmark/step" in defined_keys
+        assert "benchmark/refcoco/score" in defined_keys
+        assert "benchmark/gsm8k/score" in defined_keys
+        assert "benchmark/*" in defined_keys  # trailing glob safety net
+        assert "train/loss" not in defined_keys
+
     def test_define_metric_before_log(self, monkeypatch):
         """Axis-pin contract: every define_metric must precede the first
         log call. define_metric on a key that's already been logged is a

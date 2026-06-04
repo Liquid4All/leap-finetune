@@ -13,6 +13,10 @@ from leap_finetune.training.utils.worker_setup import (
     setup_training_worker,
 )
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
+from leap_finetune.evaluation import (
+    BenchmarkEvalCallback,
+    create_llm_benchmarks_from_config,
+)
 from leap_finetune.training.utils.logging import (
     finish_tracker,
     is_rank_zero,
@@ -28,6 +32,7 @@ from leap_finetune.training.utils.trainer_mixins import (
 from leap_finetune.training.utils.trainer_lifecycle import (
     run_training_safely,
 )
+from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +71,11 @@ def sft_run(training_config: dict) -> None:
         "leap_run_name_template",
         "model_config",
     }
-    train_config_filtered = {
-        k: v for k, v in train_config.items() if k not in excluded_keys
-    }
+    train_config_filtered, _ = filter_runtime_config_kwargs(
+        train_config,
+        excluded_keys=excluded_keys,
+        config_cls=TrainingArguments,
+    )
 
     tracker = init_tracking_from_config(
         job_name,
@@ -108,6 +115,11 @@ def sft_run(training_config: dict) -> None:
         data_collator=data_collator,
     )
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
+    benchmark_configs = training_config.get("benchmark_configs")
+    if benchmark_configs and benchmark_configs.get("benchmarks"):
+        benchmarks = create_llm_benchmarks_from_config(benchmark_configs, tokenizer)
+        if benchmarks:
+            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
 
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)

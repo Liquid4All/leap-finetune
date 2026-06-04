@@ -19,9 +19,14 @@ class BenchmarkEvalCallback(TrainerCallback):
     and model eval/train toggle.
     """
 
-    def __init__(self, benchmarks: list[Benchmark]):
+    def __init__(
+        self,
+        benchmarks: list[Benchmark],
+        best_metric_config: dict[str, float] | None = None,
+    ):
         super().__init__()
         self.benchmarks = benchmarks
+        self.best_metric_config = best_metric_config or {}
 
     def on_evaluate(
         self,
@@ -99,6 +104,11 @@ class BenchmarkEvalCallback(TrainerCallback):
                 total_elapsed,
                 "=" * 50,
             )
+
+        metrics = kwargs.get("metrics")
+        if isinstance(metrics, dict):
+            metrics.update(all_results)
+        state.log_history.append(all_results.copy())
 
         self._log_to_wandb(all_results)
 

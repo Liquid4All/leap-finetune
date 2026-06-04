@@ -21,3 +21,10 @@ training_config:
 
 peft_config:
   use_peft: false
+
+evals:
+  max_new_tokens: 8
+  benchmarks:
+    - name: "smoke_eval"
+      path: "tiny_eval.jsonl"
+      metric: "short_answer"

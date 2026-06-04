@@ -5,6 +5,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from conftest import (
     assert_checkpoints_exist,
+    assert_eval_callback_logged,
     assert_training_result,
     requires_gpu,
     run_e2e_training,
@@ -72,6 +73,7 @@ class TestDenseSFTLoRA:
         config_path = str(FIXTURES / "e2e_sft_lora.yaml")
         result = run_e2e_training(config_path, e2e_output_dir)
         assert_training_result(result, max_eval_loss=7.0, check_loss_trend=False)
+        assert_eval_callback_logged(result)
 
 
 # === Dense SFT full fine-tune ===
@@ -83,6 +85,7 @@ class TestDenseSFTFull:
         config_path = str(FIXTURES / "e2e_sft_full.yaml")
         result = run_e2e_training(config_path, e2e_output_dir)
         assert_training_result(result)
+        assert_eval_callback_logged(result)
 
         assert_checkpoints_exist(e2e_output_dir)
 
@@ -96,6 +99,7 @@ class TestDenseDPOLoRA:
         config_path = str(FIXTURES / "e2e_dpo_lora.yaml")
         result = run_e2e_training(config_path, e2e_output_dir)
         assert_training_result(result, check_loss_trend=False)
+        assert_eval_callback_logged(result)
 
 
 # === Dense DPO full fine-tune ===
@@ -107,5 +111,6 @@ class TestDenseDPOFull:
         config_path = str(FIXTURES / "e2e_dpo_full.yaml")
         result = run_e2e_training(config_path, e2e_output_dir)
         assert_training_result(result, check_loss_trend=False)
+        assert_eval_callback_logged(result)
 
         assert_checkpoints_exist(e2e_output_dir)

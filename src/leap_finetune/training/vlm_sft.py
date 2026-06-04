@@ -17,6 +17,10 @@ from leap_finetune.training.utils.worker_setup import (
 )
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_loading import load_vlm_model
+from leap_finetune.evaluation import (
+    BenchmarkEvalCallback,
+    create_vlm_benchmarks_from_config,
+)
 from leap_finetune.training.utils.logging import (
     finish_tracker,
     is_rank_zero,
@@ -32,6 +36,7 @@ from leap_finetune.training.utils.trainer_mixins import (
 from leap_finetune.training.utils.trainer_lifecycle import (
     run_training_safely,
 )
+from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 from leap_finetune.training.utils.vlm_optimizer import (
     build_vlm_param_groups,
     log_per_group_lrs,
@@ -112,9 +117,11 @@ def vlm_sft_run(training_config: dict) -> None:
 
     # Filter out non-TrainingArguments parameters
     excluded_keys = VLM_SFT_EXCLUDED_KEYS | {"leap_run_name_template"}
-    train_config_filtered = {
-        k: v for k, v in train_config.items() if k not in excluded_keys
-    }
+    train_config_filtered, _ = filter_runtime_config_kwargs(
+        train_config,
+        excluded_keys=excluded_keys,
+        config_cls=TrainingArguments,
+    )
 
     # Configure experiment tracking
     tracker = init_tracking_from_config(
@@ -181,6 +188,11 @@ def vlm_sft_run(training_config: dict) -> None:
     )
 
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
+    benchmark_configs = training_config.get("benchmark_configs")
+    if benchmark_configs and benchmark_configs.get("benchmarks"):
+        benchmarks = create_vlm_benchmarks_from_config(benchmark_configs, processor)
+        if benchmarks:
+            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
 
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)

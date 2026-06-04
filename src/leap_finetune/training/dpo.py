@@ -13,6 +13,10 @@ from leap_finetune.training.utils.worker_setup import (
     setup_training_worker,
 )
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
+from leap_finetune.evaluation import (
+    BenchmarkEvalCallback,
+    create_llm_benchmarks_from_config,
+)
 from leap_finetune.training.utils.logging import (
     finish_tracker,
     is_rank_zero,
@@ -27,6 +31,13 @@ from leap_finetune.training.utils.trainer_mixins import (
 )
 from leap_finetune.training.utils.trainer_lifecycle import (
     run_training_safely,
+)
+from leap_finetune.training.utils.config_filter import (
+    BASE_RUNTIME_EXCLUDED_KEYS,
+    DISTRIBUTED_RUNTIME_EXCLUDED_KEYS,
+    MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS,
+    MODEL_RUNTIME_EXCLUDED_KEYS,
+    filter_runtime_config_kwargs,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,25 +70,17 @@ def dpo_run(training_config: dict) -> None:
     if resume_from:
         logger.info("Resuming from checkpoint: %s", resume_from)
 
-    excluded_keys = {
-        "training_type",
-        "wandb_logging",
-        "tracker",
-        "trackio_space_id",
-        "leap_run_name_template",
-        "resume_from_checkpoint",
-        "model_config",
-        "chat_template",
-        "chat_template_path",
-        "adapter_path",
-        "reshard_after_forward",
-        "fsdp_cpu_offload",
-        "checkpoint_staging_dir",
-        "manual_sharded_checkpoint_format",
-    }
-    train_config_filtered = {
-        k: v for k, v in train_config.items() if k not in excluded_keys
-    }
+    excluded_keys = (
+        BASE_RUNTIME_EXCLUDED_KEYS
+        | MODEL_RUNTIME_EXCLUDED_KEYS
+        | DISTRIBUTED_RUNTIME_EXCLUDED_KEYS
+        | MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS
+    )
+    train_config_filtered, _ = filter_runtime_config_kwargs(
+        train_config,
+        excluded_keys=excluded_keys,
+        config_cls=DPOConfig,
+    )
 
     tracker = init_tracking_from_config(
         job_name,
@@ -117,6 +120,11 @@ def dpo_run(training_config: dict) -> None:
         processing_class=cast(PreTrainedTokenizerBase, tokenizer),
     )
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
+    benchmark_configs = training_config.get("benchmark_configs")
+    if benchmark_configs and benchmark_configs.get("benchmarks"):
+        benchmarks = create_llm_benchmarks_from_config(benchmark_configs, tokenizer)
+        if benchmarks:
+            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
 
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)

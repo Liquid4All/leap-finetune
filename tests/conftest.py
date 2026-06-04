@@ -164,10 +164,11 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
     """Parse config, override output_dir, run training, return Result."""
     os.environ["OUTPUT_DIR"] = str(output_dir)
     try:
-        from leap_finetune.config.parser import parse_job_config
+        from leap_finetune.config.parser import materialize_job_config, parse_job_config
         from leap_finetune.distribution.ray_trainer import ray_trainer
 
         job_config = parse_job_config(config_path)
+        job_config = materialize_job_config(job_config)
         job_config_dict = job_config.to_dict()
         return ray_trainer(job_config_dict)
     finally:
@@ -240,6 +241,12 @@ def assert_training_result(
         assert math.isfinite(metrics["train_loss"]), (
             f"train_loss is not finite: {metrics['train_loss']}"
         )
+
+
+def assert_eval_callback_logged(result):
+    metrics = result.metrics or {}
+    benchmark_keys = [key for key in metrics if key.startswith("benchmark/")]
+    assert benchmark_keys, f"No benchmark/eval metrics found in result: {metrics}"
 
 
 def assert_checkpoints_exist(output_dir: pathlib.Path):

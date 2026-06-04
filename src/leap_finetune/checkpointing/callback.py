@@ -47,6 +47,17 @@ class LeapCheckpointCallback(TrainerCallback):
             if "loss" in logs:
                 self.loss_history.append(logs["loss"])
 
+    @staticmethod
+    def _latest_benchmark_metrics(state: TrainerState) -> dict:
+        for entry in reversed(state.log_history):
+            if any(key.startswith("benchmark/") for key in entry):
+                return {
+                    key: value
+                    for key, value in entry.items()
+                    if key.startswith("benchmark/")
+                }
+        return {}
+
     def on_save(
         self,
         args: TrainingArguments,
@@ -76,6 +87,7 @@ class LeapCheckpointCallback(TrainerCallback):
 
         # Include loss curve summary for test assertions
         report_metrics = self.metrics.copy()
+        report_metrics.update(self._latest_benchmark_metrics(state))
         if self.loss_history:
             report_metrics["loss_history"] = self.loss_history.copy()
 
@@ -92,6 +104,7 @@ class LeapCheckpointCallback(TrainerCallback):
     ) -> None:
         if self.metrics:
             report_metrics = self.metrics.copy()
+            report_metrics.update(self._latest_benchmark_metrics(state))
             if self.loss_history:
                 report_metrics["loss_history"] = self.loss_history.copy()
             train.report(metrics=report_metrics, checkpoint=None)

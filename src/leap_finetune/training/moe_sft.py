@@ -20,6 +20,10 @@ from leap_finetune.training.utils.worker_setup import (
 )
 from leap_finetune.training.sft import build_sft_data_collator
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
+from leap_finetune.evaluation import (
+    BenchmarkEvalCallback,
+    create_llm_benchmarks_from_config,
+)
 from leap_finetune.training.moe_utils.metrics import MoEMetricsCallback
 from leap_finetune.training.utils.logging import (
     finish_tracker,
@@ -35,6 +39,7 @@ from leap_finetune.training.utils.trainer_mixins import (
     validate_manual_sharded_training_args,
 )
 from leap_finetune.training.utils.trainer_lifecycle import run_training_safely
+from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 from leap_finetune.checkpointing.manual_sharded import (
     build_manual_sharded_export_metadata_from_config,
     save_manual_sharded_checkpoint,
@@ -185,9 +190,11 @@ def moe_sft_run(training_config: dict) -> None:
         {"deepspeed"} if (use_ep or use_fsdp2) else set()
     )
 
-    train_config_filtered = {
-        k: v for k, v in train_config.items() if k not in excluded_keys
-    }
+    train_config_filtered, _ = filter_runtime_config_kwargs(
+        train_config,
+        excluded_keys=excluded_keys,
+        config_cls=TrainingArguments,
+    )
     requested_save_strategy = train_config_filtered.get("save_strategy", "no")
     manual_sharded_checkpoint_format = train_config.get(
         "manual_sharded_checkpoint_format", "hf"
@@ -328,6 +335,11 @@ def moe_sft_run(training_config: dict) -> None:
             manual_sharded=(use_ep or use_fsdp2),
         )
     )
+    benchmark_configs = training_config.get("benchmark_configs")
+    if benchmark_configs and benchmark_configs.get("benchmarks"):
+        benchmarks = create_llm_benchmarks_from_config(benchmark_configs, tokenizer)
+        if benchmarks:
+            trainer.add_callback(BenchmarkEvalCallback(benchmarks))
     trainer = prepare_trainer(trainer)
 
     if dist.is_available() and dist.is_initialized():

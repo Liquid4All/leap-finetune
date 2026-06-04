@@ -293,7 +293,7 @@ class TestSidecarCallbackMarker:
 
         eval_dir = tmp_path / "_async_eval"
         eval_dir.mkdir()
-        (eval_dir / ".in_flight").write_text("999")
+        (eval_dir / ".in_flight.step_42").write_text("999")
 
         cb = SidecarEvalCallback(
             benchmarks=[MagicMock(name="bench1")],  # non-empty so callback proceeds
@@ -506,7 +506,7 @@ class TestSidecarSubmitRetry:
         jobid = cb._submit(_make_model_mock(), MagicMock(global_step=7), MagicMock())
         assert jobid == "999"
         # Marker only written after success; format "jobid:step".
-        assert (tmp_path / "_async_eval" / ".in_flight").read_text() == "999:7"
+        assert (tmp_path / "_async_eval" / ".in_flight.step_7").read_text() == "999:7"
 
     def test_exhausts_attempts_raises_no_marker_left(self, tmp_path, monkeypatch):
         """Bug fix regression: marker must NOT leak after exhausted retries."""
@@ -523,7 +523,7 @@ class TestSidecarSubmitRetry:
 
         with pytest.raises(RuntimeError, match="after 3 attempt"):
             cb._submit(_make_model_mock(), MagicMock(global_step=11), MagicMock())
-        assert not (tmp_path / "_async_eval" / ".in_flight").exists()
+        assert not any((tmp_path / "_async_eval").glob(".in_flight.step_*"))
 
     def test_filenotfound_fails_fast(self, tmp_path, monkeypatch):
         """sbatch missing is a permanent config error; do not retry."""
@@ -582,7 +582,7 @@ class TestStaleMarkerRecovery:
         cb = _make_sidecar_for_submit(tmp_path)
         eval_dir = tmp_path / "_async_eval"
         eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
+        marker = eval_dir / ".in_flight.step_7"
         marker.write_text("12345:7")
 
         monkeypatch.setattr(
@@ -602,7 +602,7 @@ class TestStaleMarkerRecovery:
         cb = _make_sidecar_for_submit(tmp_path)
         eval_dir = tmp_path / "_async_eval"
         eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
+        marker = eval_dir / ".in_flight.step_7"
         marker.write_text("12345:7")
         old = marker.stat().st_mtime - 7 * 3600
         os.utime(marker, (old, old))
@@ -623,7 +623,7 @@ class TestStaleMarkerRecovery:
         cb = _make_sidecar_for_submit(tmp_path)
         eval_dir = tmp_path / "_async_eval"
         eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
+        marker = eval_dir / ".in_flight.step_7"
         marker.write_text("12345:7")
 
         monkeypatch.setattr(
@@ -644,7 +644,7 @@ class TestStaleMarkerRecovery:
         cb = _make_sidecar_for_submit(tmp_path)
         eval_dir = tmp_path / "_async_eval"
         eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
+        marker = eval_dir / ".in_flight.step_7"
         marker.write_text("12345:7")
 
         monkeypatch.setattr(
@@ -665,7 +665,7 @@ class TestStaleMarkerRecovery:
         cb = _make_sidecar_for_submit(tmp_path)
         eval_dir = tmp_path / "_async_eval"
         eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
+        marker = eval_dir / ".in_flight.step_7"
         marker.write_text("12345:7")
         old = marker.stat().st_mtime - 7 * 3600
         os.utime(marker, (old, old))
@@ -698,6 +698,91 @@ class _FakeWandb:
     class Settings:
         def __init__(self, **kw):
             pass
+
+
+class TestSidecarConcurrentMarkers:
+    """``on_overlap=queue`` must support concurrent in-flight sidecars.
+    A single shared marker would let the first sidecar's EXIT trap wipe
+    the in-flight state for the others — Copilot's catch."""
+
+    def test_per_step_markers_dont_conflict(self, tmp_path):
+        """Two concurrent steps each get their own marker file. Removing
+        one (simulating step N's bash trap firing) leaves the others
+        intact so the next ``_fire`` still sees in-flight evals."""
+        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+        from leap_finetune.evaluation.sidecar_callback import (
+            _MARKER_GLOB,
+            SidecarEvalCallback,
+        )
+
+        cb = SidecarEvalCallback(
+            benchmarks=[MagicMock(name="bench1")],
+            cfg=AsyncEvalConfig.from_dict({"mode": "sidecar", "on_overlap": "queue"}),
+            benchmark_configs={"benchmarks": []},
+            output_dir=str(tmp_path),
+            wandb_run_id=None,
+        )
+        eval_dir = cb._eval_dir
+        # Simulate two sidecars in flight.
+        (eval_dir / ".in_flight.step_1000").write_text("111:1000")
+        (eval_dir / ".in_flight.step_2000").write_text("222:2000")
+        # Step 1000's bash trap fires (it finished).
+        (eval_dir / ".in_flight.step_1000").unlink()
+        # Step 2000's marker survives.
+        in_flight = list(eval_dir.glob(_MARKER_GLOB))
+        assert len(in_flight) == 1
+        assert in_flight[0].name == ".in_flight.step_2000"
+
+
+class TestReservedFailureAccounting:
+    """Helper-thread eval failures must increment ``_consecutive_failures``
+    so the docstring's ``failure.max_consecutive`` auto-disable contract
+    actually fires — Copilot's catch."""
+
+    def test_empty_metrics_count_as_failures(self, tmp_path):
+        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+        from leap_finetune.evaluation.reserved_callback import (
+            ReservedEvalCallback,
+            _EvalResult,
+        )
+
+        cb = ReservedEvalCallback(
+            benchmarks=[MagicMock(name="bench1")],
+            cfg=AsyncEvalConfig.from_dict(
+                {"mode": "reserved", "failure": {"max_consecutive": 2}}
+            ),
+            server_url="http://localhost:8100",
+            output_dir=str(tmp_path),
+            eval_gpu_ids="0",
+        )
+
+        cb._account_result(_EvalResult(step=1, metrics={}))
+        assert cb._consecutive_failures == 1
+        assert cb._disabled is False
+
+        cb._account_result(_EvalResult(step=2, metrics={}))
+        assert cb._consecutive_failures == 2
+        assert cb._disabled is True
+
+    def test_success_resets_consecutive_counter(self, tmp_path):
+        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+        from leap_finetune.evaluation.reserved_callback import (
+            ReservedEvalCallback,
+            _EvalResult,
+        )
+
+        cb = ReservedEvalCallback(
+            benchmarks=[MagicMock(name="bench1")],
+            cfg=AsyncEvalConfig.from_dict(
+                {"mode": "reserved", "failure": {"max_consecutive": 3}}
+            ),
+            server_url="http://localhost:8100",
+            output_dir=str(tmp_path),
+            eval_gpu_ids="0",
+        )
+        cb._account_result(_EvalResult(step=1, metrics={}))
+        cb._account_result(_EvalResult(step=2, metrics={"benchmark/x": 0.5}))
+        assert cb._consecutive_failures == 0
 
 
 class TestAsyncRunnerWandbAxis:

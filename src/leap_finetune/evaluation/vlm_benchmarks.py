@@ -102,6 +102,7 @@ class VLMGenerationBenchmark(Benchmark):
         requests: list[GenerateRequest] = []
         ground_truths: list[str] = []
         all_loaded: list = []
+        kept_samples: list = []
         skipped_bad_image = 0
         for sample in samples:
             messages = sample["messages"]
@@ -110,6 +111,7 @@ class VLMGenerationBenchmark(Benchmark):
             except Exception:
                 skipped_bad_image += 1
                 continue
+            kept_samples.append(sample)
             ground_truths.append(_extract_text(messages[-1]["content"]))
             all_loaded.extend(loaded)
             requests.append(
@@ -137,7 +139,9 @@ class VLMGenerationBenchmark(Benchmark):
 
         total_score = 0.0
         count = 0
-        for sample, result, gt in zip(samples, results, ground_truths):
+        # Zip over kept_samples (not samples) so sample↔result↔gt indices align
+        # after the unreadable-image filter above.
+        for sample, result, gt in zip(kept_samples, results, ground_truths):
             try:
                 if callable(self.metric):
                     score = self.metric(result.text, gt, **self.metric_kwargs)
@@ -253,8 +257,17 @@ class VLMLogprobBenchmark(Benchmark):
         requests: list[LogprobRequest] = []
         answer_ids: list[int] = []
         all_loaded: list = []
+        kept_samples: list = []
+        skipped_bad_image = 0
         for sample in samples:
-            prompt, loaded = _prepare_messages(sample["messages"])
+            # Mirror the generation path's image-error handling: skip
+            # unreadable images instead of aborting the whole benchmark.
+            try:
+                prompt, loaded = _prepare_messages(sample["messages"])
+            except Exception:
+                skipped_bad_image += 1
+                continue
+            kept_samples.append(sample)
             all_loaded.extend(loaded)
             requests.append(
                 LogprobRequest(
@@ -265,6 +278,13 @@ class VLMLogprobBenchmark(Benchmark):
             )
             answer_ids.append(int(sample["answer_id"]))
 
+        if skipped_bad_image:
+            logger.warning(
+                "[%s] skipped %d sample(s) with unreadable images",
+                getattr(self, "name", "<benchmark>"),
+                skipped_bad_image,
+            )
+
         try:
             results = backend.logprobs(requests)
         finally:
@@ -272,7 +292,7 @@ class VLMLogprobBenchmark(Benchmark):
 
         total_score = 0.0
         count = 0
-        for sample, result, ans_id in zip(samples, results, answer_ids):
+        for sample, result, ans_id in zip(kept_samples, results, answer_ids):
             try:
                 if not result.logprobs:
                     raise ValueError("backend returned empty logprobs")

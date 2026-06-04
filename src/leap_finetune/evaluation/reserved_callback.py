@@ -289,6 +289,7 @@ class ReservedEvalCallback(TrainerCallback):
                 result = self._output_q.get_nowait()
             except queue.Empty:
                 break
+            self._account_result(result)
             self._log_to_wandb(result)
 
     def on_train_end(
@@ -307,6 +308,7 @@ class ReservedEvalCallback(TrainerCallback):
                 result = self._output_q.get_nowait()
             except queue.Empty:
                 break
+            self._account_result(result)
             self._log_to_wandb(result)
 
         # Send poison pill AFTER any in-flight requests; wait long enough for
@@ -333,6 +335,7 @@ class ReservedEvalCallback(TrainerCallback):
                 result = self._output_q.get_nowait()
             except queue.Empty:
                 break
+            self._account_result(result)
             self._log_to_wandb(result)
 
         if self._server_process is not None and self._server_process.poll() is None:
@@ -379,6 +382,31 @@ class ReservedEvalCallback(TrainerCallback):
                 break
 
         return ckpt_path
+
+    def _account_result(self, result: _EvalResult) -> None:
+        """Track helper-thread eval-cycle success/failure for auto-disable.
+
+        ``_run_loop`` catches exceptions and emits an empty ``metrics``
+        dict; without this accounting, ``_consecutive_failures`` never
+        increments and ``_disabled`` never flips — silently breaking the
+        docstring's ``failure.max_consecutive`` contract.
+        """
+        if not result.metrics:
+            self._consecutive_failures += 1
+            logger.warning(
+                "[async_eval/reserved] eval cycle at step %d returned no "
+                "metrics (%d consecutive)",
+                result.step,
+                self._consecutive_failures,
+            )
+            if self._consecutive_failures >= self.cfg.failure.max_consecutive:
+                self._disabled = True
+                logger.error(
+                    "[async_eval/reserved] disabling after %d consecutive failures",
+                    self._consecutive_failures,
+                )
+            return
+        self._consecutive_failures = 0
 
     def _log_to_wandb(self, result: _EvalResult) -> None:
         if not result.metrics:

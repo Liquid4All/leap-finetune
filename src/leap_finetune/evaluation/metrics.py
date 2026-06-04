@@ -246,15 +246,64 @@ def _extract_mcq_answer(text: str) -> str | None:
 
 
 def _parse_bbox(text: str) -> list[float] | None:
-    """Single-bbox parse — first valid bbox out of the strict multi-bbox parser.
+    """Permissive single-bbox parser for the legacy ``grounding_iou`` metric.
 
-    Refcoco-style GT and predictions are single-bbox; we still parse through
-    ``_parse_bboxes`` so format/range/geometry rules are identical to the
-    GRPO reward and the multi-bbox eval path. Returns ``None`` if no valid
-    bbox is present.
+    Accepts the wider set of formats refcoco-style baselines emit:
+      * prose-embedded JSON (regex-extracted)
+      * bare ``[x,y,x,y]`` and list-of-lists
+      * list-of-dicts with ``bbox`` field
+      * 0-1000 coord space (autoscaled to 0-1)
+      * ``ast.literal_eval`` fallback when ``json.loads`` fails
+
+    ``grounding_iou_f1`` uses ``_parse_bboxes`` directly — it must mirror
+    the GRPO reward's strict rules. Loosening this legacy path is
+    intentional: ``grounding_iou`` scores published checkpoints whose
+    output format predates the cookbook recipe; strict parsing would
+    silently deflate baseline numbers.
     """
-    boxes = _parse_bboxes(text)
-    return boxes[0] if boxes else None
+    if not isinstance(text, str):
+        return None
+
+    text = text.strip()
+    json_match = re.search(r"(\[.*\]|\{.*\})", text, re.DOTALL)
+    if json_match:
+        text = json_match.group(1)
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            data = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return None
+
+    bbox = None
+    if isinstance(data, list) and len(data) > 0:
+        if isinstance(data[0], dict):
+            for item in data:
+                if "bbox" in item:
+                    bbox = item["bbox"]
+                    break
+        elif isinstance(data[0], list) and len(data[0]) == 4:
+            bbox = data[0]
+        elif len(data) == 4 and all(isinstance(x, (int, float)) for x in data):
+            bbox = data
+    elif isinstance(data, dict) and "bbox" in data:
+        bbox = data["bbox"]
+
+    if bbox is None or len(bbox) != 4:
+        return None
+
+    try:
+        bbox = [float(x) for x in bbox]
+    except (ValueError, TypeError):
+        return None
+
+    # 0-1000 coord space (MGrounding native) autoscaled to 0-1.
+    if max(abs(c) for c in bbox) > 1.5:
+        bbox = [c / 1000.0 for c in bbox]
+
+    return bbox
 
 
 def _parse_bboxes(text: str) -> list[list[float]]:

@@ -213,6 +213,13 @@ class TestGroundingIouF1:
 
 
 class TestGroundingIouLegacy:
+    """Pin the permissive behavior of the legacy ``grounding_iou`` metric.
+
+    These formats were accepted before PR B; a previous refactor silently
+    broke them by routing ``_parse_bbox`` through the strict multi-bbox
+    parser. The pin ensures published-baseline scoring stays stable.
+    """
+
     def test_perfect_match_is_one(self):
         from leap_finetune.evaluation.metrics import score_grounding_iou
 
@@ -232,3 +239,70 @@ class TestGroundingIouLegacy:
             iou_threshold=0.5,
         )
         assert s == 0.0
+
+    def test_accepts_bare_4_list(self):
+        """Format ``[x,y,x,y]`` — bare coords, no dict wrapper."""
+        from leap_finetune.evaluation.metrics import score_grounding_iou
+
+        assert score_grounding_iou("[0, 0, 1, 1]", "[0, 0, 1, 1]") == 1.0
+
+    def test_accepts_list_of_lists(self):
+        """Format ``[[x,y,x,y]]`` — single bbox inside outer list."""
+        from leap_finetune.evaluation.metrics import score_grounding_iou
+
+        assert score_grounding_iou("[[0, 0, 1, 1]]", "[[0, 0, 1, 1]]") == 1.0
+
+    def test_accepts_prose_embedded_json(self):
+        """Format ``"The box is [0,0,1,1]"`` — JSON inside a sentence.
+
+        Regex JSON-extraction; the strict parser would reject this.
+        """
+        from leap_finetune.evaluation.metrics import score_grounding_iou
+
+        assert (
+            score_grounding_iou(
+                "Sure! The bbox is [0, 0, 1, 1].",
+                "[0, 0, 1, 1]",
+            )
+            == 1.0
+        )
+
+    def test_accepts_dict_with_bbox(self):
+        """Format ``{"bbox":[x,y,x,y]}`` — single top-level dict."""
+        from leap_finetune.evaluation.metrics import score_grounding_iou
+
+        assert (
+            score_grounding_iou(
+                '{"bbox":[0,0,1,1]}',
+                '{"bbox":[0,0,1,1]}',
+            )
+            == 1.0
+        )
+
+    def test_rescales_0_1000_coords(self):
+        """MGrounding-native 0-1000 coord space → 0-1 autoscale."""
+        from leap_finetune.evaluation.metrics import score_grounding_iou
+
+        # 0-1000 coords representing the full image.
+        assert score_grounding_iou("[0, 0, 1000, 1000]", "[0, 0, 1, 1]") == 1.0
+
+    def test_falls_back_to_ast_literal_eval(self):
+        """Single-quoted JSON (invalid JSON, valid Python literal) still parses."""
+        from leap_finetune.evaluation.metrics import score_grounding_iou
+
+        assert (
+            score_grounding_iou(
+                "[{'bbox':[0,0,1,1]}]",
+                "[{'bbox':[0,0,1,1]}]",
+            )
+            == 1.0
+        )
+
+    def test_below_threshold_is_zero(self):
+        from leap_finetune.evaluation.metrics import score_grounding_iou
+
+        # IoU = (0.5*0.5)/((0.5*0.5) + (1*1) - (0.5*0.5)) = 0.25
+        assert (
+            score_grounding_iou("[0, 0, 0.5, 0.5]", "[0, 0, 1, 1]", iou_threshold=0.5)
+            == 0.0
+        )

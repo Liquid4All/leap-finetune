@@ -15,6 +15,41 @@ import pytest
 pytestmark = pytest.mark.data
 
 
+class TestStrictParser:
+    """Internal contract of ``_parse_bboxes`` (strict, reward-aligned).
+    F1 e2e tests below always use in-range valid coords, so they don't
+    catch a regression where strict checks get relaxed — pin them here.
+    """
+
+    def test_rejects_out_of_range_coords(self):
+        from leap_finetune.evaluation.metrics import _parse_bboxes
+
+        assert _parse_bboxes('[{"label":"x","bbox":[0,0,1,1.5]}]') == []
+        assert _parse_bboxes('[{"label":"x","bbox":[-0.1,0,1,1]}]') == []
+
+    def test_rejects_zero_or_inverted_area(self):
+        from leap_finetune.evaluation.metrics import _parse_bboxes
+
+        assert _parse_bboxes('[{"label":"x","bbox":[0.5,0,0.5,1]}]') == []  # x2==x1
+        assert _parse_bboxes('[{"label":"x","bbox":[1,0,0,1]}]') == []  # x2<x1
+
+
+class TestHungarianMatching:
+    """Hungarian matcher contracts not covered by F1 e2e tests."""
+
+    def test_picks_optimal_assignment_not_greedy(self):
+        """If the matcher silently regresses to greedy, the permuted-match
+        F1 test below would still pass (all-or-nothing). Pin the
+        optimal-vs-greedy contrast directly."""
+        from leap_finetune.evaluation.metrics import _hungarian_match_iou
+
+        # IoUs: A-A'=0.25, A-B'=1.0, B-A'=1.0, B-B'=0.25. Optimal sums to 2.0
+        # via the cross assignment (A→B', B→A').
+        pred = [[0, 0, 1, 1], [0, 0, 0.5, 0.5]]
+        gt = [[0, 0, 0.5, 0.5], [0, 0, 1, 1]]
+        assert sum(_hungarian_match_iou(pred, gt)) == pytest.approx(2.0)
+
+
 class TestGroundingIouF1:
     """Multi-bbox F1 metric — the new contract used by mgrounding_test."""
 

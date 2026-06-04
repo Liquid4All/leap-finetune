@@ -117,6 +117,16 @@ class TestAsyncEvalConfig:
         assert cfg2.failure.max_submit_attempts == 7
         assert cfg2.failure.submit_retry_backoff == 0.5
 
+    def test_sbatch_extra_args_null_does_not_crash(self):
+        """``sbatch: {extra_args: null}`` is common when toggling YAML
+        values — must NOT TypeError into ``list(None)``."""
+        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+
+        cfg = AsyncEvalConfig.from_dict(
+            {"mode": "sidecar", "sbatch": {"extra_args": None}}
+        )
+        assert cfg.sbatch.extra_args == []
+
 
 # === Dispatch helper ===
 
@@ -236,8 +246,11 @@ class TestEvaluateWithBackend:
         result = bench.evaluate_with_backend(backend, samples)
         # First sample: "4" is contained in "the answer is 4" → 1.0
         # Second sample: "6" not in "no idea" → 0.0
+        # BenchmarkResult.metrics["score"] is the SUM (not the average);
+        # average = score / count = 1.0 / 2 = 0.5.
         assert result.count == 2
-        assert result.metrics["score"] == pytest.approx(1.0)
+        assert result.metrics["score"] == pytest.approx(1.0)  # sum of (1.0, 0.0)
+        assert result.metrics["score"] / result.count == pytest.approx(0.5)
 
     def test_llm_logprob_picks_argmax(self):
         from leap_finetune.evaluation.llm_benchmarks import LLMLogprobBenchmark

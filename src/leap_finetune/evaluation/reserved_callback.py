@@ -227,23 +227,25 @@ class ReservedEvalCallback(TrainerCallback):
         env = _clean_subprocess_env()
         env["CUDA_VISIBLE_DEVICES"] = self.eval_gpu_ids
 
-        # Append server stdout+stderr across respawns so failures stay debuggable.
+        # Append server stdout+stderr across respawns so failures stay
+        # debuggable. Close the parent's fd as soon as Popen duplicates it
+        # into the child — otherwise we leak a fd per respawn over the
+        # lifetime of training.
         log_dir = self._eval_dir / "vllm_server"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "server.log"
-        server_log = open(log_path, "ab")
-
         logger.info(
             "[async_eval/reserved] launching vLLM (log=%s): %s",
             log_path,
             " ".join(shlex.quote(c) for c in cmd),
         )
-        self._server_process = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=server_log,
-            stderr=subprocess.STDOUT,
-        )
+        with open(log_path, "ab") as server_log:
+            self._server_process = subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=server_log,
+                stderr=subprocess.STDOUT,
+            )
 
     # === TrainerCallback hooks ===
 

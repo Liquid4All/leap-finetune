@@ -110,7 +110,10 @@ class AsyncEvalConfig:
             partition=sbatch_raw.get("partition"),
             account=sbatch_raw.get("account"),
             time=str(sbatch_time) if sbatch_time else None,
-            extra_args=list(sbatch_raw.get("extra_args", [])),
+            # ``or []`` (not the dict-default) so an explicit ``null`` /
+            # ``~`` in YAML (common when toggling) doesn't TypeError into
+            # ``list(None)``.
+            extra_args=list(sbatch_raw.get("extra_args") or []),
         )
 
         reserved_raw = raw.get("reserved", {}) or {}

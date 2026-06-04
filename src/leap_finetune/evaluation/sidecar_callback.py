@@ -248,35 +248,60 @@ class SidecarEvalCallback(TrainerCallback):
 
         marker.write_text(str(state.global_step))
         clean_env = _clean_subprocess_env()
-        try:
-            result = subprocess.run(
-                ["sbatch", str(submission.script_path)],
-                capture_output=True,
-                text=True,
-                check=False,
-                env=clean_env,
-            )
-        except FileNotFoundError as e:
-            marker.unlink(missing_ok=True)
-            raise RuntimeError(
-                "`sbatch` not found on PATH; async_eval mode=sidecar requires "
-                "running under SLURM. Use mode=sync or mode=reserved instead."
-            ) from e
 
-        if result.returncode != 0:
-            marker.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"sbatch submission failed (exit {result.returncode}): "
-                f"{result.stderr.strip() or result.stdout.strip()}"
-            )
+        max_attempts = max(1, self.cfg.failure.max_submit_attempts)
+        backoff = max(0.0, self.cfg.failure.submit_retry_backoff)
+        last_err: str = ""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = subprocess.run(
+                    ["sbatch", str(submission.script_path)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=clean_env,
+                )
+            except FileNotFoundError as e:
+                marker.unlink(missing_ok=True)
+                raise RuntimeError(
+                    "`sbatch` not found on PATH; async_eval mode=sidecar "
+                    "requires running under SLURM. Use mode=sync or "
+                    "mode=reserved instead."
+                ) from e
 
-        logger.info(
-            "[async_eval/sidecar] submitted step %d: %s",
-            state.global_step,
-            result.stdout.strip(),
+            if result.returncode == 0:
+                logger.info(
+                    "[async_eval/sidecar] submitted step %d "
+                    "(attempt %d/%d): %s",
+                    state.global_step,
+                    attempt,
+                    max_attempts,
+                    result.stdout.strip(),
+                )
+                m = re.search(r"Submitted batch job (\d+)", result.stdout)
+                return m.group(1) if m else None
+
+            last_err = (result.stderr or result.stdout).strip()
+            if attempt < max_attempts:
+                sleep_s = backoff * (2 ** (attempt - 1))
+                logger.warning(
+                    "[async_eval/sidecar] sbatch attempt %d/%d failed at "
+                    "step %d (exit %d): %s — retrying in %.1fs",
+                    attempt,
+                    max_attempts,
+                    state.global_step,
+                    result.returncode,
+                    last_err[:200],
+                    sleep_s,
+                )
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
+
+        marker.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"sbatch submission failed after {max_attempts} attempt(s): "
+            f"{last_err}"
         )
-        m = re.search(r"Submitted batch job (\d+)", result.stdout)
-        return m.group(1) if m else None
 
     def _wait_for_job(
         self,

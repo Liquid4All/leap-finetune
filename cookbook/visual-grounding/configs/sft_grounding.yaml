@@ -1,27 +1,12 @@
-# Visual Grounding SFT on MGrounding-630k for LFM2.5-VL.
+# Visual Grounding SFT — Phase 1 of the cookbook.
 #
-# Phase 1 of the visual-grounding cookbook: teach LFM2.5-VL to emit
-# the native JSON bbox format:
-#
-#   [{"label": "...", "bbox": [x1, y1, x2, y2]}]
-#
-# with normalized [0, 1] coordinates.
-#
-# Source data: Michael4933/MGrounding-630k on HuggingFace. Run the
-# one-time prep script first, which converts MGrounding's custom token
-# format to leap-finetune's `messages` parquet:
-#
-#     python cookbook/visual-grounding/prepare_data.py \
-#         --output ./job_datasets/grounding_sft
-#
-# Async eval: RefCOCO val (canonical single-box IoU) + MIG-Bench
-# heldout (in-distribution grounding). Both populated by:
-#
-#     python cookbook/visual-grounding/prepare_evals.py \
-#         --output ./job_datasets/grounding_evals
+# Trains the base LFM2.5-VL on the 80% SFT split of MGrounding-630k (full
+# mix, including Object_Tracking; multi-image tracking samples are
+# canonicalized into the same [{"label","bbox"}] JSON schema as single-
+# image grounding so the supervision is uniform). Test holdout (10%) is
+# what mgrounding_test evaluates on.
 #
 # Launch:
-#   uv run leap-finetune cookbook/visual-grounding/configs/sft_grounding.yaml
 #   sbatch cookbook/visual-grounding/configs/sft_grounding.sh
 
 project_name: "visual_grounding_sft"
@@ -29,38 +14,30 @@ model_name: "LFM2.5-VL-1.6B"
 training_type: "vlm_sft"
 
 dataset:
-  # ~70% of MGrounding (minus Object_Tracking) — held-out from GRPO entirely.
-  # Written by prepare_data.py with --grpo-fraction 0.3 (default).
-  path: "./job_datasets/grounding-cookbook/data/grounding_sft"
+  path: "./data/grounding_sft"
   type: "vlm_sft"
-  test_size: 0.01                            # tiny held-out for HF Trainer eval_loss
+  test_size: 0.01
 
 training_config:
   extends: "DEFAULT_VLM_SFT"
 
-  # Checkpoints can be large (multi-GB each) — point this at a volume
-  # with plenty of space (NOT the repo dir).
-  output_dir: "./job_datasets/grounding-cookbook/outputs/visual_grounding_sft"
+  output_dir: "./outputs/visual_grounding_sft"
 
-  # --- core optimization ---
-  num_train_epochs: 1                        # one pass over ~1.34M samples
-  per_device_train_batch_size: 4             # raised from 2 — memory freed by image_splitting=false
-  gradient_accumulation_steps: 4             # 4 * 4 * 8 GPUs = effective batch 128 (same as before)
+  num_train_epochs: 1
+  per_device_train_batch_size: 4
+  # 2 nodes × 8 GPUs × per_device 4 × accum 2 → effective batch 128.
+  gradient_accumulation_steps: 2
   learning_rate: 5e-5
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.03
   max_grad_norm: 1.0
 
-  # --- image handling ---
-  do_image_splitting: false                  # don't tile images — biggest speedup;
-                                             # 1 image → ≤256 tokens, not 1K+ tokens
+  do_image_splitting: false
 
-  # --- vision encoder tuning ---
-  vision_encoder_lr_multiplier: 0.1          # 0.1x base LR for vision tower
+  vision_encoder_lr_multiplier: 0.1
 
-  # --- eval + checkpoint schedule ---
   eval_strategy: "steps"
-  eval_steps: 1000                           # was 2000 — denser curves for the cookbook
+  eval_steps: 1000
   eval_on_start: true
   save_strategy: "steps"
   save_steps: 4000
@@ -68,48 +45,33 @@ training_config:
   logging_steps: 25
   logging_first_step: true
 
-  # --- tracking ---
   wandb_logging: true
 
-  # --- memory ---
   bf16: true
   gradient_checkpointing: true
 
-# Synchronous benchmarks (rank-shared, blocks training). Kept here as a
-# safety net — uncomment if you don't want async eval.
-# benchmarks:
-#   max_new_tokens: 256
-#   benchmarks:
-#     - name: "refcoco_val"
-#       path: "./job_datasets/grounding-cookbook/data/grounding_evals/refcoco_val.jsonl"
-#       metric: "grounding_iou"
-#       iou_threshold: 0.5
-
-# Async benchmarks (vLLM sidecar, fires sbatch every eval_steps and
-# back-fills wandb at the originating training step). Recommended for
-# generation-heavy grounding evals — training never pauses.
 benchmarks:
   max_new_tokens: 256
   benchmarks:
-    # Canonical RefCOCO trio — cross-VLM comparable to published numbers.
     - name: "refcoco_val"
-      path: "./job_datasets/grounding-cookbook/data/grounding_evals/refcoco_val.jsonl"
+      path: "./data/grounding_evals/refcoco_val.jsonl"
       metric: "grounding_iou"
       iou_threshold: 0.5
     - name: "refcoco_plus_val"
-      path: "./job_datasets/grounding-cookbook/data/grounding_evals/refcoco_plus_val.jsonl"
+      path: "./data/grounding_evals/refcoco_plus_val.jsonl"
       metric: "grounding_iou"
       iou_threshold: 0.5
     - name: "refcocog_val"
-      path: "./job_datasets/grounding-cookbook/data/grounding_evals/refcocog_val.jsonl"
+      path: "./data/grounding_evals/refcocog_val.jsonl"
       metric: "grounding_iou"
       iou_threshold: 0.5
-    # In-distribution held-out MGrounding slice (10% test split from prepare_data.py).
     - name: "mgrounding_test"
-      path: "./job_datasets/grounding-cookbook/data/grounding_test/test.parquet"
-      metric: "grounding_iou"
-      iou_threshold: 0.5
-      limit: 1000                             # bound per-cycle eval time (multi-image is slower)
+      path: "./data/grounding_test/test.parquet"
+      # Hungarian-matched F1 over IoUs — handles the multi-bbox
+      # Group_Grounding / Object_Tracking samples in the test pool, and
+      # reduces to the single-bbox IoU case naturally.
+      metric: "grounding_iou_f1"
+      limit: 1000
 
 async_eval:
   mode: sidecar
@@ -118,11 +80,9 @@ async_eval:
   gpu_memory_utilization: 0.85
   dtype: bfloat16
   on_overlap: queue
-  sbatch:
-    # Add --exclude lines here if your cluster has known-bad GPUs.
-    extra_args: []
   failure:
     max_consecutive: 3
+    max_submit_attempts: 3
 
 peft_config:
   use_peft: false

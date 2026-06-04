@@ -57,14 +57,18 @@ REPO_ID = "Michael4933/MGrounding-630k"
 # deterministically so a re-run gives identical output.
 _HINT_RNG = random.Random()
 
-# Object_Tracking emits per-frame sequential bboxes — different output shape
-# than our single-shot JSON-list, so it'd pollute SFT signal.
-SKIP_SUBSET = "Object_Tracking"
+TRACKING_SUBSET = "Object_Tracking"
 
 _IMAGE_TAG = re.compile(r"<image>\s*")
 _REF_TAG = re.compile(r"<\|object_ref_start\|>(.+?)<\|object_ref_end\|>", re.DOTALL)
 _BOX_TAG = re.compile(
     r"<\|box_start\|>\(([\d.]+),([\d.]+)\),\(([\d.]+),([\d.]+)\)<\|box_end\|>"
+)
+# Object_Tracking gpt turns are "Image-N:<|box_start|>(...)<|box_end|>" where
+# N is 1-indexed and points back at the input image order. We sort by N so the
+# emitted bbox list is positional with the input images.
+_TRACK_PAIR = re.compile(
+    r"Image-(\d+):\s*<\|box_start\|>\(([\d.]+),([\d.]+)\),\(([\d.]+),([\d.]+)\)<\|box_end\|>"
 )
 # Common patterns for extracting a referring expression from user text
 # when no <|object_ref|> tag is present. Ordered by specificity.
@@ -184,6 +188,28 @@ def _extract_pairs(gpt_text: str, fallback_label: str) -> list[dict]:
     return pairs
 
 
+def _extract_tracking_pairs(
+    gpt_text: str, num_images: int, label: str
+) -> list[dict]:
+    """Object_Tracking: parse 'Image-N:<box>' pairs from the gpt turn, sort by
+    N (1-indexed input image position), and emit our standard
+    [{"label","bbox"}] list. The dataset has two variants — some samples
+    output one bbox per input image (covering all N), others skip the
+    reference image and only emit bboxes for the target frames. We accept
+    both: any subset {1..N} so long as the bboxes are valid and unique.
+    """
+    by_idx: dict[int, list[float]] = {}
+    for m in _TRACK_PAIR.finditer(gpt_text):
+        n = int(m.group(1))
+        if n < 1 or n > num_images or n in by_idx:
+            return []
+        x1, y1, x2, y2 = (float(v) / 1000.0 for v in m.groups()[1:])
+        if not (x2 > x1 and y2 > y1 and all(0.0 <= v <= 1.0 for v in (x1, y1, x2, y2))):
+            return []
+        by_idx[n] = [round(x1, 4), round(y1, 4), round(x2, 4), round(y2, 4)]
+    return [{"label": label, "bbox": by_idx[n]} for n in sorted(by_idx)]
+
+
 def _resolve_image_path(image_ref, dataset_root: Path) -> Path:
     rel = image_ref if isinstance(image_ref, str) else image_ref.get("image", "")
     return (dataset_root / rel).resolve()
@@ -225,8 +251,7 @@ def _convert_one(
         return []
 
     subset = _subset_of(images)
-    if subset == SKIP_SUBSET:
-        return []
+    is_tracking = subset == TRACKING_SUBSET
 
     image_paths = [_resolve_image_path(i, dataset_root) for i in images]
     if not skip_image_check:
@@ -245,7 +270,24 @@ def _convert_one(
         # Strip ref tags but keep inner content, so user text stays readable.
         user_text_clean = _REF_TAG.sub(r"\1", user_text)
         fallback = _user_fallback_label(user_text)
-        pairs = _extract_pairs(g.get("value", ""), fallback)
+        if is_tracking:
+            # Tracking has a few task shapes. Skip the ordering-MCQ pair (no
+            # bboxes in gpt — naturally drops out). For the locate task, two
+            # variants emit "Image-N:<box>" tags and we use the dedicated
+            # parser; a third "find it in the K-th image" variant has plain
+            # <|box_start|> tags and we fall through to the standard parser.
+            # The user prompt never names the object so a fixed label is the
+            # honest signal (the NL-fallback regex finds "locate ... in the
+            # following images" otherwise).
+            gpt_text = g.get("value", "")
+            if "Image-" in gpt_text and _TRACK_PAIR.search(gpt_text):
+                pairs = _extract_tracking_pairs(
+                    gpt_text, len(image_paths_str), "tracked object"
+                )
+            else:
+                pairs = _extract_pairs(gpt_text, "tracked object")
+        else:
+            pairs = _extract_pairs(g.get("value", ""), fallback)
         if not pairs:
             continue
 
@@ -295,13 +337,11 @@ def _download_dataset(cache_dir: Path | None) -> tuple[Path, Path]:
 
 def _ensure_zips_extracted(snapshot_root: Path) -> Path:
     """MGrounding ships per-subset ``<Subset>.zip``; extract each in place
-    if its target directory isn't already populated. Object_Tracking is
-    skipped entirely — we filter it out at conversion time anyway, no
-    point burning ~30 GB extracting it.
+    if its target directory isn't already populated.
 
-    Group_Grounding (and Object_Tracking, were we to extract it) is a
-    multi-volume ZIP (.z01, .z02, .z03, .zip) which Python's stdlib
-    ``zipfile`` cannot read. Use ``7z`` for those.
+    Group_Grounding and Object_Tracking are multi-volume ZIPs (.z01, .z02,
+    .z03, .zip) which Python's stdlib ``zipfile`` cannot read. Use ``7z``
+    for those.
 
     Quirk: the zips were authored against the original author's machine
     layout, so files land under
@@ -313,22 +353,28 @@ def _ensure_zips_extracted(snapshot_root: Path) -> Path:
     import subprocess
     import zipfile
 
-    seven_zip = shutil.which("7z") or shutil.which("7zz") or shutil.which("7za")
+    # Some slurm clusters strip /usr/bin from the job-PATH so shutil.which
+    # misses a 7z that's still installed; fall back to common absolute paths.
+    seven_zip = (
+        shutil.which("7z")
+        or shutil.which("7zz")
+        or shutil.which("7za")
+        or next(
+            (p for p in ("/usr/bin/7z", "/usr/bin/7zz", "/usr/bin/7za") if Path(p).exists()),
+            None,
+        )
+    )
 
     zips = sorted(snapshot_root.glob("*.zip"))
 
     for z in zips:
         subset = z.stem
-        if subset == SKIP_SUBSET:
-            print(f"[prep] skipping {z.name} (filtered at conversion)")
-            continue
         if _find_subset_dir(snapshot_root, subset) is not None:
             print(f"[prep] {subset} already extracted, skipping")
             continue
         is_multipart = any(snapshot_root.glob(f"{subset}.z[0-9][0-9]"))
-        print(
-            f"[prep] extracting {z.name} ({'multipart→' + Path(seven_zip).name if is_multipart else 'zipfile'}) ..."
-        )
+        tool = Path(seven_zip).name if (is_multipart and seven_zip) else "zipfile"
+        print(f"[prep] extracting {z.name} ({tool}) ...")
         if is_multipart:
             if seven_zip is None:
                 raise RuntimeError(

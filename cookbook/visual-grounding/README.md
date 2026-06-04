@@ -9,20 +9,20 @@ and emit bounding boxes in the model's native JSON format:
 
 with normalized `[0, 1]` coordinates.
 
-The recipe runs in two phases:
+Two phases:
 
-| Phase                | Goal                                                                | Dataset                                                                                                              | This file                                |
-| -------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| **1. SFT**           | Teach the JSON bbox format from ~500K supervised examples.          | [Michael4933/MGrounding-630k](https://huggingface.co/datasets/Michael4933/MGrounding-630k) (minus `Object_Tracking`) | `configs/sft_grounding.yaml`             |
-| **2. GRPO** _(next)_ | Refine with a Hungarian-matched IoU-F1 reward — multi-object aware. | Subset of phase 1 data                                                                                               | `configs/grpo_grounding.yaml` _(coming)_ |
+| Phase      | Goal                                                       | This file                     |
+| ---------- | ---------------------------------------------------------- | ----------------------------- |
+| **1. SFT** | Teach the JSON bbox format from MGrounding-630k.           | `configs/sft_grounding.yaml`  |
+| **2. GRPO**| Refine with Hungarian-matched CIoU-F1 reward.              | `configs/grpo_grounding.yaml` |
 
 Both phases use async eval (sidecar mode) so training never pauses for
 benchmark scoring. Eval suite:
 
-- **RefCOCO val** — canonical single-box IoU, comparable to published
-  Qwen2.5-VL / PaliGemma / Molmo numbers.
-- **MIG-Bench** — Migician's official multi-image grounding benchmark
-  (ACL 2025), in-distribution check for MGrounding-trained models.
+- **RefCOCO val / RefCOCO+ val / RefCOCOg val** — canonical single-box
+  IoU, comparable to published Qwen2.5-VL / PaliGemma / Molmo numbers.
+- **mgrounding_test** — 10% held-out slice of MGrounding-630k itself
+  (multi-image, multi-bbox; in-distribution sanity check).
 
 ---
 
@@ -33,66 +33,55 @@ benchmark scoring. Eval suite:
 ```bash
 # From repo root
 uv sync
-huggingface-cli login              # for MGrounding-630k download
+huggingface-cli login              # MGrounding-630k is a HF dataset
 wandb login                        # optional, for live training curves
 ```
 
 ### 1. Build the SFT + GRPO + test parquets (one-time, ~140 GB download)
 
-**Always run as an sbatch job — the head node will not survive the
-extraction.** Compute is CPU-only (no GPU needed):
+CPU-only job — run as `sbatch` because the multi-volume zip extraction
+will swamp a login node:
 
 ```bash
 sbatch cookbook/visual-grounding/configs/prepare_data.sh
 ```
 
-What it does:
+What `prepare_data.py` does:
 
-1. `snapshot_download Michael4933/MGrounding-630k` (~140 GB)
-2. Extracts subset zips. `Group_Grounding` is multi-volume — needs
-   `7z` (`apt install p7zip-full`) since Python's stdlib `zipfile`
-   can't read spanned archives. `Object_Tracking` is downloaded but
-   **not extracted** (we filter it at conversion).
-3. Parses the manifest, walks multi-turn conversations, normalizes
-   coordinates, then **deterministically splits 3-way**:
+1. `snapshot_download Michael4933/MGrounding-630k` (~140 GB).
+2. Extracts subset zips. `Group_Grounding` and `Object_Tracking` are
+   multi-volume — needs `7z` (`apt install p7zip-full`) since Python's
+   stdlib `zipfile` can't read spanned archives.
+3. Walks each conversation, expands `<|box_start|>(x,y),(x,y)<|box_end|>`
+   coords in MGrounding's native 0-1000 space into normalized
+   `[0, 1]` xyxy, and canonicalizes every variant (single-image,
+   group-grounding, multi-image Object_Tracking) into the same
+   `[{"label", "bbox"}]` JSON schema. Multi-image conversations (2-5
+   images / sample) are preserved.
+4. Deterministically shuffles and splits 3-way:
 
-This pulls `Michael4933/MGrounding-630k` from HuggingFace, drops the
-`Object_Tracking` subset, walks each multi-turn conversation extracting
-each (human, gpt) pair with bboxes, converts MGrounding's
-`<|box_start|>(x,y),(x,y)<|box_end|>` 0-1000 coords into normalized
-`[0, 1]` xyxy. Multi-image inputs (2-5 images/sample) are preserved.
-Then **deterministically shuffles and splits into two non-overlapping
-pools**:
+   - `<output>/grounding_sft/train.parquet` — ~72%
+   - `<output>/grounding_grpo/train.parquet` — ~18%
+   - `<output>/grounding_test/test.parquet`  — ~10%
 
-- `<output>/grounding_sft/train.parquet` — 65% (~1.3M output rows)
-- `<output>/grounding_grpo/train.parquet` — 25% (~500K output rows)
-- `<output>/grounding_test/test.parquet` — 10% (~200K output rows)
+   Pairwise disjoint (seeded shuffle). GRPO never sees SFT data, so the
+   model can't memorize during RL fine-tuning. The test pool is held out
+   from both training phases and plugged into the YAML's `benchmarks`
+   block as `mgrounding_test`.
 
-(Counts are higher than MGrounding's 630K input rows because each
-multi-turn conversation expands into one output per qualifying
-turn-pair.)
-
-All three pools are **pairwise disjoint** (seeded shuffle). GRPO
-never sees SFT data, so the model can't memorize during RL fine-tuning.
-The test pool is held out from both training phases and plugged into
-the YAML's `benchmarks` block — it's the in-distribution grounding
-curve in wandb alongside the canonical RefCOCO trio.
-
-All three files share the same single-column `messages` schema —
-leap-finetune's `vlm_grpo` loader auto-extracts `prompt` and
+All three pools share the same single-column `messages` schema —
+leap-finetune's `vlm_sft` and `vlm_grpo` loaders extract `prompt` and
 `solution` from `messages` at load time. **One conversion, three uses.**
 
-### 2. Build async-eval files (RefCOCO trio)
+### 2. Build RefCOCO eval files
 
 ```bash
 sbatch cookbook/visual-grounding/configs/prepare_evals.sh
 ```
 
-Lightweight CPU job (~10 min) that downloads RefCOCO val + RefCOCO+
-val + RefCOCOg val from HuggingFace and emits 500-sample jsonls each.
-
-Writes `refcoco_val.jsonl` and `mig_bench.jsonl` (500 samples each by
-default — enough for fast async eval cycles every `eval_steps=2000`).
+Lightweight CPU job (~10 min). Downloads RefCOCO val + RefCOCO+ val +
+RefCOCOg val from HF and emits one jsonl per benchmark (full val splits
+by default: 3811 + 3805 + 2573 samples; ±1 IoU-point noise floor).
 
 ### 3. Launch SFT
 
@@ -102,28 +91,77 @@ Single-node (8 GPUs):
 sbatch cookbook/visual-grounding/configs/sft_grounding.sh
 ```
 
+Or 2 nodes × 8 GPUs:
+
+```bash
+sbatch cookbook/visual-grounding/configs/sft_grounding_multinode.sh
+```
+
 Or interactively:
 
 ```bash
 uv run leap-finetune cookbook/visual-grounding/configs/sft_grounding.yaml
 ```
 
-Training writes checkpoints to `outputs/visual_grounding_sft/{run}/`.
-Wandb shows:
+Wandb logs:
 
 - `train/loss`
-- `benchmark/refcoco_val/score` — single-box IoU@0.5 on RefCOCO val
-- `benchmark/mig_bench/score` — single-box IoU@0.5 on MIG-Bench
+- `benchmark/refcoco_val/score`, `refcoco_plus_val/score`,
+  `refcocog_val/score` — single-box IoU@0.5.
+- `benchmark/mgrounding_test/score` — Hungarian-matched CIoU-F1
+  (multi-box-aware).
 
-All three curves share the same `train/global_step` X axis — async eval
-results are back-filled to the originating training step.
+All curves share the same `benchmark/step` axis — async eval results
+are back-filled to the originating training step so curves don't get
+clobbered by later training steps.
+
+---
+
+## Phase 2 — GRPO
+
+Refines the SFT checkpoint on the 18% GRPO holdout using the shipped
+`VLMGroundingCIoURecipe`:
+
+- **strict_format reward** (weight 0.1) — the completion must parse as a
+  JSON array of `{"label", "bbox"}` dicts.
+- **ciou_f1 reward** (weight 1.0) — Hungarian-matches predicted boxes
+  against ground truth (matcher uses CIoU so it prefers center-aligned,
+  same-shape pairs), then scores the F1 of the matched CIoUs. F1
+  naturally penalizes false positives (drags precision) and false
+  negatives (drags recall). Reduces to a single CIoU when ground truth
+  has one box.
+
+If you'd rather use plain IoU (no center-distance or aspect-ratio
+penalty), swap `VLMGroundingCIoURecipe` → `VLMGroundingIoURecipe` in
+the YAML.
+
+### 1. Point the GRPO YAML at your SFT checkpoint
+
+Open `configs/grpo_grounding.yaml` and set `model_name` to the SFT
+final checkpoint path:
+
+```yaml
+model_name: "./outputs/visual_grounding_sft/<your-sft-final-checkpoint>"
+```
+
+### 2. Launch
+
+```bash
+sbatch cookbook/visual-grounding/configs/grpo_grounding.sh
+# or multinode:
+sbatch cookbook/visual-grounding/configs/grpo_grounding_multinode.sh
+```
+
+Same four async-eval benchmarks as Phase 1 — wandb shows the RefCOCO
+trio + `mgrounding_test` climbing as GRPO pushes the SFT prior toward
+higher IoU under the strict-format constraint.
 
 ---
 
 ## Data format
 
-The cookbook's `prepare_data.py` emits one row per sample with this
-schema (matches every `vlm_sft` / `vlm_grpo` recipe in leap-finetune):
+`prepare_data.py` emits one row per sample with this schema (matches
+every `vlm_sft` / `vlm_grpo` recipe in leap-finetune):
 
 ```python
 {
@@ -139,64 +177,12 @@ schema (matches every `vlm_sft` / `vlm_grpo` recipe in leap-finetune):
 }
 ```
 
-If you bring your own grounding dataset, match this schema and the
-existing YAML drops in with only `dataset.path` updated. No code
-changes needed for new datasets.
+To swap MGrounding for your own grounding dataset:
 
----
-
-## Customer adaptation
-
-To swap MGrounding for your own dataset, you only need to:
-
-1. Pre-process your data to the `messages` schema above (one
-   parquet row = one conversation; bbox coords normalized 0-1).
+1. Pre-process your data to the `messages` schema above (one parquet
+   row = one conversation; bbox coords normalized to `[0, 1]`).
 2. Point `dataset.path` at your parquet directory in the YAML.
 3. _(Optional)_ Update `benchmarks[*].path` to your eval jsonl.
 
 The reward, metric, callback, async-eval, and slurm wiring all stay
 the same.
-
----
-
-## Phase 2 — GRPO
-
-GRPO trains on the held-out 30% slice the SFT run never saw, using the
-shipped `VLMGroundingCIoURecipe`:
-
-- **strict-format reward** (weight 0.1): the completion must parse as a
-  JSON array of `{"label", "bbox"}` dicts.
-- **ciou_f1 reward** (weight 1.0): Hungarian-matches predicted boxes
-  against ground truth (matcher itself runs on CIoU so it prefers
-  center-aligned + same-shape pairs), then scores the F1 of the
-  matched CIoUs. F1 naturally penalizes false positives (drags
-  precision) and false negatives (drags recall). Degrades to a single
-  CIoU when ground truth has one box; rewards correct abstention on
-  zero-box prompts.
-
-If you'd rather use plain IoU (no center-distance or aspect-ratio
-penalty), swap `VLMGroundingCIoURecipe` → `VLMGroundingIoURecipe` in
-the YAML.
-
-### 1. Point the GRPO YAML at your SFT checkpoint
-
-Open `configs/grpo_grounding.yaml` and replace the placeholder:
-
-```yaml
-model_name: "./job_datasets/grounding-cookbook/outputs/visual_grounding_sft/<RUN_NAME>/checkpoint-<STEP>"
-```
-
-with the actual SFT checkpoint path. The peak RefCOCO checkpoint from
-Phase 1 (typically the `save_steps`-boundary closest to the RefCOCO
-trio's joint maximum) is the right pick.
-
-### 2. Launch
-
-```bash
-sbatch cookbook/visual-grounding/configs/grpo_grounding.sh
-```
-
-Same four async-eval benchmarks as Phase 1 — wandb will show the
-RefCOCO trio + the in-distribution test slice climbing further as
-GRPO pushes the SFT prior toward higher IoU under the strict-format
-constraint.

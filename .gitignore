@@ -26,3 +26,6 @@ scratch/
 
 # Tokenization cache
 .cache/
+
+# wandb local run dirs (offline logs, large + transient)
+wandb/

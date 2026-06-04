@@ -54,13 +54,13 @@ class DatasetLoader:
             p = Path(path)
             if path.endswith((".parquet", ".pq")):
                 console.print(f"[dim]Reading parquet: {path}[/dim]")
-                ds = ray.data.read_parquet(path)
+                ds = _read_parquet_robust(path, ray.data)
             elif p.is_dir() and any(p.glob("*.parquet")):
                 parquet_files = sorted(str(f) for f in p.glob("*.parquet"))
                 console.print(
                     f"[dim]Reading {len(parquet_files)} parquet shards from: {path}[/dim]"
                 )
-                ds = ray.data.read_parquet(parquet_files)
+                ds = _read_parquet_robust(parquet_files, ray.data)
             else:
                 console.print(f"[dim]Reading JSONL: {path}[/dim]")
                 ds = ray.data.read_json(path)
@@ -195,3 +195,32 @@ class DatasetLoader:
         # Split dataset
         split_dataset = dataset.train_test_split(test_size=self.test_size)
         return split_dataset["train"], split_dataset["test"]
+
+
+def _read_parquet_robust(path, ray_data):
+    """Read a parquet path into a Ray Dataset, retrying via pyarrow on flaky reads.
+
+    Some NFS clients intermittently return a truncated read when pyarrow
+    seeks to the parquet footer via Ray's native reader, manifesting as
+    ``Parquet magic bytes not found in footer``. Direct
+    ``pyarrow.parquet.read_table`` on the same path usually succeeds, so we
+    fall back to that and hand the resulting Arrow table to Ray Data via
+    ``from_arrow``. If the fallback also fails, re-raise the original error
+    so the diagnostic points at the real root cause.
+    """
+    try:
+        return ray_data.read_parquet(path)
+    except Exception as first_err:  # pyarrow.lib.ArrowInvalid and friends
+        try:
+            import pyarrow.parquet as pq
+
+            if isinstance(path, (list, tuple)):
+                tables = [pq.read_table(p) for p in path]
+                import pyarrow as pa
+
+                table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+            else:
+                table = pq.read_table(path)
+            return ray_data.from_arrow(table)
+        except Exception:
+            raise first_err

@@ -50,26 +50,26 @@ When `rl_env:` is set, the training loop:
 
 ```yaml
 rl_env:
-  source: "qgallouedec/echo_env"    # HF Hub repo-id OR installed env name
-  base_url: null                    # optional: connect to a running HTTP server
-  docker_image: null                # optional: override the default Docker image
-  env_vars: {}                      # optional: env vars forwarded to the env container
-  wait_timeout: 30.0                # seconds to wait for container startup
-  skip_install: false               # true → use GenericEnvClient (no package install)
-  trust_remote_code: true           # skip interactive confirmation (default true)
-  max_turns: 1                      # only 1 supported in the default adapter
-  reset_kwargs: {}                  # kwargs forwarded to env.reset() each episode
-  action_key: "message"             # dict key for env.step({action_key: text})
+  source: "qgallouedec/echo_env" # HF Hub repo-id OR installed env name
+  base_url: null # optional: connect to a running HTTP server
+  docker_image: null # optional: override the default Docker image
+  env_vars: {} # optional: env vars forwarded to the env container
+  wait_timeout: 30.0 # seconds to wait for container startup
+  skip_install: false # true → use GenericEnvClient (no package install)
+  trust_remote_code: true # skip interactive confirmation (default true)
+  max_turns: 1 # only 1 supported in the default adapter
+  reset_kwargs: {} # kwargs forwarded to env.reset() each episode
+  action_key: "message" # dict key for env.step({action_key: text})
 ```
 
 ## Picking a source
 
-| Situation | What to set |
-|-----------|-------------|
+| Situation                                                                      | What to set                                                            |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
 | Env is published as an HF Space and you want to talk to it directly over HTTPS | `source`, `base_url: "https://<space>.hf.space"`, `skip_install: true` |
-| Env is published on the Hub and you want auto-install + auto-run | `source: "org/env-name"` (needs Docker) |
-| You're running the env locally via `docker run -p 8001:8001 ...` | `base_url: "http://localhost:8001"` |
-| You have a custom Docker image | `docker_image: "my-env:latest"` |
+| Env is published on the Hub and you want auto-install + auto-run               | `source: "org/env-name"` (needs Docker)                                |
+| You're running the env locally via `docker run -p 8001:8001 ...`               | `base_url: "http://localhost:8001"`                                    |
+| You have a custom Docker image                                                 | `docker_image: "my-env:latest"`                                        |
 
 **On Modal**, prefer the hosted-Space path — Modal's training
 container doesn't have Docker-in-Docker, so auto-install from Hub

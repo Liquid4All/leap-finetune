@@ -83,7 +83,12 @@ def init_tracker(
             if run_id:
                 init_kwargs["id"] = run_id
             if tracker == "wandb":
-                init_kwargs["settings"] = wandb.Settings(_disable_stats=False)
+                # init_timeout=300: 90s default times out on compute nodes
+                # with slow outbound HTTPS to the wandb endpoint
+                # (wandb.errors.errors.CommError after the default 90s).
+                init_kwargs["settings"] = wandb.Settings(
+                    _disable_stats=False, init_timeout=300
+                )
             if space_id:
                 init_kwargs["space_id"] = space_id
 
@@ -172,9 +177,14 @@ def setup_training_environment() -> None:
     if "WANDB_API_KEY" not in os.environ and "WANDB_MODE" not in os.environ:
         os.environ["WANDB_MODE"] = "offline"
 
-    # Use per-process cache directories to avoid permission errors with multiple Ray workers
+    # Per-process cache dir to avoid permission clashes between Ray workers.
+    # Honor a caller-provided TRITON_CACHE_DIR/TMPDIR as the base (nodes with a
+    # full or unwritable /tmp can redirect it); fall back to /tmp otherwise.
     pid = os.getpid()
-    cache = f"/tmp/triton_cache_{pid}"
+    cache_base = (
+        os.environ.get("TRITON_CACHE_DIR") or os.environ.get("TMPDIR") or "/tmp"
+    )
+    cache = os.path.join(cache_base, f"triton_cache_{pid}")
     os.makedirs(cache, exist_ok=True)
     os.environ["TRITON_CACHE_DIR"] = cache
 

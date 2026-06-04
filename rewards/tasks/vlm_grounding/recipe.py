@@ -89,6 +89,11 @@ def _validate_bbox(bbox) -> list[float] | None:
     if not all(_is_finite(v) for v in bbox):
         return None
     coords = [float(v) for v in bbox]
+    # Coords must be in the [0, 1] normalized range the model is trained on.
+    # Without this check an out-of-range box (e.g. coords > 1.0) gets small
+    # partial IoU credit from any accidental overlap with the GT.
+    if any(c < 0.0 or c > 1.0 for c in coords):
+        return None
     x1, y1, x2, y2 = coords
     if not (x2 > x1 and y2 > y1):
         return None

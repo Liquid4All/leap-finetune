@@ -745,6 +745,77 @@ class TestStaleMarkerRecovery:
             "delete a live job's marker"
         )
 
+    @pytest.mark.parametrize(
+        "sacct_state",
+        ["BOOT_FAIL", "DEADLINE", "REVOKED", "SPECIAL_EXIT", "MYSTERY_STATE"],
+    )
+    def test_clears_on_unenumerated_terminal_states(
+        self, tmp_path, monkeypatch, sacct_state
+    ):
+        """Slurm terminal states beyond {COMPLETED,FAILED,CANCELLED,...} and
+        unknown future states must still clear the marker. Default-to-cleared
+        avoids stranding the marker forever when slurm reports something
+        we don't explicitly enumerate."""
+        import leap_finetune.evaluation.sidecar_callback as sc
+
+        cb = _make_sidecar_for_submit(tmp_path)
+        eval_dir = tmp_path / "_async_eval"
+        eval_dir.mkdir(exist_ok=True)
+        marker = eval_dir / ".in_flight"
+        marker.write_text("12345:7")
+
+        monkeypatch.setattr(
+            sc.subprocess,
+            "run",
+            lambda *a, **kw: _FakeCompletedProcess(0, f"{sacct_state}\n"),
+        )
+        cb._clear_marker_if_stale(marker)
+        assert not marker.exists(), (
+            f"sacct={sacct_state} is non-active; marker must be cleared "
+            "even though it's not in the enumerated terminal set"
+        )
+
+    def test_keeps_marker_when_any_row_active_in_mixed_output(
+        self, tmp_path, monkeypatch
+    ):
+        """sacct often returns multiple rows (parent + .batch step). If ANY
+        row reports an active state, the job is alive — keep the marker
+        even if a sibling row shows a non-active state."""
+        import leap_finetune.evaluation.sidecar_callback as sc
+
+        cb = _make_sidecar_for_submit(tmp_path)
+        eval_dir = tmp_path / "_async_eval"
+        eval_dir.mkdir(exist_ok=True)
+        marker = eval_dir / ".in_flight"
+        marker.write_text("12345:7")
+
+        monkeypatch.setattr(
+            sc.subprocess,
+            "run",
+            lambda *a, **kw: _FakeCompletedProcess(0, "RUNNING\nCOMPLETED\n"),
+        )
+        cb._clear_marker_if_stale(marker)
+        assert marker.exists()
+
+    def test_strips_slurm_state_suffix(self, tmp_path, monkeypatch):
+        """sacct uses a trailing ``+`` to flag non-canonical states; the
+        parser must strip it before classifying."""
+        import leap_finetune.evaluation.sidecar_callback as sc
+
+        cb = _make_sidecar_for_submit(tmp_path)
+        eval_dir = tmp_path / "_async_eval"
+        eval_dir.mkdir(exist_ok=True)
+        marker = eval_dir / ".in_flight"
+        marker.write_text("12345:7")
+
+        monkeypatch.setattr(
+            sc.subprocess,
+            "run",
+            lambda *a, **kw: _FakeCompletedProcess(0, "RUNNING+\n"),
+        )
+        cb._clear_marker_if_stale(marker)
+        assert marker.exists(), "trailing '+' must not defeat active-state matching"
+
 
 # === wandb.define_metric ordering in async_runner_main ===
 

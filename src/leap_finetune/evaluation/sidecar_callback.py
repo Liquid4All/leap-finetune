@@ -29,6 +29,30 @@ logger = logging.getLogger(__name__)
 
 _MARKER_NAME = ".in_flight"
 _STAGING_KEEP = 10
+
+# Allowlist of slurm states where the job is still running. Anything
+# outside (including states we don't recognize) is treated as terminal
+# so the marker doesn't get stranded forever — slurm's terminal set is
+# larger than the obvious one (BOOT_FAIL, DEADLINE, REVOKED,
+# SPECIAL_EXIT, ...) and may grow across versions.
+_SACCT_ACTIVE_STATES = frozenset(
+    {
+        "PENDING",
+        "RUNNING",
+        "SUSPENDED",
+        "COMPLETING",
+        "CONFIGURING",
+        "RESIZING",
+        "SIGNALING",
+        "STAGE_OUT",
+        "REQUEUED",
+        "REQUEUE_FED",
+        "REQUEUE_HOLD",
+        "RESV_DEL_HOLD",
+    }
+)
+# Terminal-state set for _wait_for_job's substring exit check (sacct
+# emits e.g. "CANCELLED by 12345" so we match on substring).
 _SACCT_TERMINAL_STATES = frozenset(
     {
         "COMPLETED",
@@ -38,6 +62,10 @@ _SACCT_TERMINAL_STATES = frozenset(
         "OUT_OF_MEMORY",
         "NODE_FAIL",
         "PREEMPTED",
+        "BOOT_FAIL",
+        "DEADLINE",
+        "REVOKED",
+        "SPECIAL_EXIT",
     }
 )
 
@@ -333,23 +361,26 @@ class SidecarEvalCallback(TrainerCallback):
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass  # sacct unavailable; fall through to mtime check.
             if proc is not None and proc.returncode == 0 and proc.stdout.strip():
-                # sacct gave a definitive answer. Clear only on terminal state;
-                # if the job is in ANY non-terminal state (PENDING, RUNNING,
-                # COMPLETING, ...) we must keep the marker — falling through
-                # to the mtime cutoff here would delete a live sidecar's
-                # marker and the next _fire would submit a duplicate.
+                # sacct gave a definitive answer. Use an allowlist of ACTIVE
+                # states — anything else (recognized-terminal or unknown) is
+                # safe to clear. The terminal set is larger than the obvious
+                # one and grows across slurm versions; default-to-cleared
+                # avoids stranding markers on BOOT_FAIL / DEADLINE / REVOKED
+                # / SPECIAL_EXIT / future states we don't enumerate.
+                states_seen: list[str] = []
                 for line in proc.stdout.strip().splitlines():
-                    state = line.strip().split(None, 1)[0]
-                    if state in _SACCT_TERMINAL_STATES:
-                        logger.warning(
-                            "[async_eval/sidecar] clearing stale marker "
-                            "(job %s ended with %s)",
-                            jobid,
-                            state,
-                        )
-                        marker.unlink(missing_ok=True)
-                        return
-                return  # sacct says alive; keep the marker.
+                    state = line.strip().split(None, 1)[0].rstrip("+").upper()
+                    states_seen.append(state)
+                    if state in _SACCT_ACTIVE_STATES:
+                        return  # at least one row alive; keep marker.
+                logger.warning(
+                    "[async_eval/sidecar] clearing stale marker "
+                    "(job %s no longer active; sacct states: %s)",
+                    jobid,
+                    ",".join(states_seen),
+                )
+                marker.unlink(missing_ok=True)
+                return
 
         try:
             age = time.time() - marker.stat().st_mtime

@@ -8,7 +8,14 @@ from leap_finetune.evaluation.vlm_benchmarks import (
 
 logger = logging.getLogger(__name__)
 
-GENERATION_METRICS = {"grounding_iou", "short_answer", "mcq_gen", "bleu", "rouge_l"}
+GENERATION_METRICS = {
+    "grounding_iou",
+    "grounding_iou_f1",
+    "short_answer",
+    "mcq_gen",
+    "bleu",
+    "rouge_l",
+}
 LOGPROB_METRICS = {"logprob_zero_shot"}
 
 # Keys consumed by the factory — not forwarded to benchmark constructors

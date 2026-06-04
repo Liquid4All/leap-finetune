@@ -49,6 +49,8 @@ class ReservedConfig:
 @dataclass
 class FailureConfig:
     max_consecutive: int = 3
+    max_submit_attempts: int = 3
+    submit_retry_backoff: float = 2.0  # exponential: backoff * 2**(attempt-1)
 
 
 @dataclass
@@ -124,6 +126,10 @@ class AsyncEvalConfig:
         failure_raw = raw.get("failure", {}) or {}
         failure = FailureConfig(
             max_consecutive=int(failure_raw.get("max_consecutive", 3)),
+            max_submit_attempts=int(failure_raw.get("max_submit_attempts", 3)),
+            submit_retry_backoff=float(
+                failure_raw.get("submit_retry_backoff", 2.0)
+            ),
         )
 
         return cls(
@@ -160,6 +166,8 @@ class AsyncEvalConfig:
             },
             "failure": {
                 "max_consecutive": self.failure.max_consecutive,
+                "max_submit_attempts": self.failure.max_submit_attempts,
+                "submit_retry_backoff": self.failure.submit_retry_backoff,
             },
             "on_overlap": self.on_overlap,
         }

@@ -111,13 +111,18 @@ def _log_to_wandb(args: argparse.Namespace, results: dict[str, float]) -> None:
             init_kwargs["project"] = args.wandb_project
 
         wandb.init(**init_kwargs)
-        # Pin the benchmark/* x-axis to benchmark/step so wandb panels auto-render
-        # without user config. Scoped — training-loss panels untouched.
+        # Pin every benchmark key to benchmark/step before first log —
+        # define_metric called AFTER a key is logged does not rebind it.
+        # The trailing benchmark/* glob covers keys we didn't enumerate;
+        # wandb requires globs to be suffix-only (benchmark/*/* is rejected).
         try:
             wandb.define_metric("benchmark/step")
+            for key in sorted(results.keys() if results else ()):
+                if key.startswith("benchmark/"):
+                    wandb.define_metric(key, step_metric="benchmark/step")
             wandb.define_metric("benchmark/*", step_metric="benchmark/step")
         except Exception:
-            logger.debug("wandb.define_metric not available; skipping axis pin")
+            logger.debug("wandb.define_metric failed; axis-pin skipped")
         if not results:
             logger.info("no benchmark results to log")
         else:

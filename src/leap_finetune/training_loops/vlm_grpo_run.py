@@ -463,7 +463,9 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         if not isinstance(ids, torch.Tensor) or not isinstance(spatial, torch.Tensor):
             return None  # text-only batch
 
-        proc = self.processing_class
+        # Use getattr so tests can construct an instance via __new__ without
+        # going through __init__/processing_class wiring.
+        proc = getattr(self, "processing_class", None)
         image_token_id = getattr(proc, "image_token_id", None)
         if image_token_id is None:
             image_token_id = getattr(

@@ -33,7 +33,7 @@ class TestAsyncEvalConfig:
         assert cfg.mode == "sidecar"
         assert cfg.vllm_gpus == 1
         assert cfg.tensor_parallel_size == 1
-        assert cfg.sbatch.time == "00:30:00"
+        assert cfg.sbatch.time is None  # no default cap; inherits partition default
         assert cfg.on_overlap == "skip"
 
     def test_reserved_defaults(self):
@@ -313,10 +313,11 @@ class TestSidecarCallbackMarker:
         ):
             with patch.object(cb, "_submit", side_effect=RuntimeError("boom")):
                 state = MagicMock()
+                control = MagicMock(should_evaluate=True)
                 state.global_step = 1
-                cb.on_evaluate(MagicMock(), state, MagicMock(), model=MagicMock())
+                cb.on_step_end(MagicMock(), state, control, model=MagicMock())
                 state.global_step = 2
-                cb.on_evaluate(MagicMock(), state, MagicMock(), model=MagicMock())
+                cb.on_step_end(MagicMock(), state, control, model=MagicMock())
 
         assert cb._disabled
 

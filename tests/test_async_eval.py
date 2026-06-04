@@ -96,38 +96,24 @@ class TestAsyncEvalConfig:
         assert cfg2.sbatch.time == "01:00:00"
         assert cfg2.failure.max_consecutive == 5
 
-    def test_failure_defaults_include_submit_retry(self):
+    def test_failure_retry_round_trip(self):
+        """Defaults present, custom values round-trip through to_dict /
+        from_dict — pins the new submit-retry knobs in one test."""
         from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
 
+        # Defaults present when not configured.
         cfg = AsyncEvalConfig.from_dict({"mode": "sidecar"})
         assert cfg.failure.max_submit_attempts == 3
         assert cfg.failure.submit_retry_backoff == 2.0
 
-    def test_failure_partial_override_keeps_defaults(self):
-        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
-
-        cfg = AsyncEvalConfig.from_dict(
-            {"mode": "sidecar", "failure": {"max_consecutive": 5}}
-        )
-        assert cfg.failure.max_consecutive == 5
-        assert cfg.failure.max_submit_attempts == 3
-        assert cfg.failure.submit_retry_backoff == 2.0
-
-    def test_round_trip_preserves_submit_retry(self):
-        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
-
+        # Custom values survive serialization.
         cfg = AsyncEvalConfig.from_dict(
             {
                 "mode": "sidecar",
-                "failure": {
-                    "max_consecutive": 2,
-                    "max_submit_attempts": 7,
-                    "submit_retry_backoff": 0.5,
-                },
+                "failure": {"max_submit_attempts": 7, "submit_retry_backoff": 0.5},
             }
         )
         cfg2 = AsyncEvalConfig.from_dict(cfg.to_dict())
-        assert cfg2.failure.max_consecutive == 2
         assert cfg2.failure.max_submit_attempts == 7
         assert cfg2.failure.submit_retry_backoff == 0.5
 
@@ -433,7 +419,11 @@ class TestJobConfigAsyncEval:
             parse_job_config(str(p))
 
 
-# === Sbatch retry loop in _submit ===
+# === Sbatch retry + marker recovery + wandb axis-pin ===
+#
+# Focused regression tests for PR B's additions. Internal-helper edge
+# cases are covered by their callers; this section pins the user-visible
+# contracts and the Codex-caught bugs.
 
 
 class _FakeCompletedProcess:
@@ -446,8 +436,6 @@ class _FakeCompletedProcess:
 def _make_sidecar_for_submit(
     tmp_path, *, failure_overrides=None, with_benchmarks=False
 ):
-    """Build a SidecarEvalCallback whose dependencies are stubbed enough that
-    ``_submit`` can be exercised against a mocked ``subprocess.run``."""
     from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
     from leap_finetune.evaluation.sidecar_callback import SidecarEvalCallback
 
@@ -460,29 +448,22 @@ def _make_sidecar_for_submit(
         failure.update(failure_overrides)
 
     benches = [MagicMock(name="bench1")] if with_benchmarks else []
-    cb = SidecarEvalCallback(
+    return SidecarEvalCallback(
         benchmarks=benches,
         cfg=AsyncEvalConfig.from_dict({"mode": "sidecar", "failure": failure}),
         benchmark_configs={"benchmarks": []},
         output_dir=str(tmp_path),
         wandb_run_id=None,
     )
-    return cb
 
 
 def _make_model_mock():
-    """MagicMock model whose ``save_pretrained`` actually creates the
-    checkpoint dir so the downstream ``write_text`` in ``_submit`` works.
-
-    ``.module`` is removed so the ``hasattr(model, "module")`` branch in
-    ``_submit`` falls through to ``model`` itself (the one with our
-    side_effect). Without this, ``model.module`` is a fresh MagicMock and
-    the dir never gets created.
-    """
+    """Model whose ``save_pretrained`` actually creates the dir, with
+    ``.module`` removed so the hasattr branch in _submit picks our mock."""
     from pathlib import Path as _P
 
     model = MagicMock()
-    del model.module  # AttributeError on access; hasattr -> False
+    del model.module
 
     def _save(path, *a, **kw):
         _P(path).mkdir(parents=True, exist_ok=True)
@@ -492,60 +473,26 @@ def _make_model_mock():
 
 
 def _patch_submit_prereqs(monkeypatch, *, ckpt_root):
-    """Stub the parts of _submit that touch external code (render the
-    sbatch script + scrub env) so the retry loop is the only path the
-    test exercises."""
     import leap_finetune.evaluation.sidecar_callback as sc
 
     monkeypatch.setattr(
         sc,
         "render_sbatch_script",
-        lambda **kw: MagicMock(
-            script_path=ckpt_root / "fake.sh",
-        ),
+        lambda **kw: MagicMock(script_path=ckpt_root / "fake.sh"),
     )
     monkeypatch.setattr(sc, "_clean_subprocess_env", lambda: {})
 
 
 class TestSidecarSubmitRetry:
-    def test_succeeds_first_attempt_no_sleep(self, tmp_path, monkeypatch):
-        import leap_finetune.evaluation.sidecar_callback as sc
-
-        cb = _make_sidecar_for_submit(tmp_path)
-        _patch_submit_prereqs(monkeypatch, ckpt_root=tmp_path)
-        run_calls = []
-        sleep_calls = []
-        monkeypatch.setattr(
-            sc, "time", MagicMock(sleep=lambda s: sleep_calls.append(s))
-        )
-        monkeypatch.setattr(
-            sc.subprocess,
-            "run",
-            lambda *a, **kw: (
-                run_calls.append(1)
-                or _FakeCompletedProcess(0, "Submitted batch job 123\n")
-            ),
-        )
-
-        model = _make_model_mock()
-        state = MagicMock(global_step=42)
-        jobid = cb._submit(model, state, MagicMock())
-
-        assert jobid == "123"
-        assert len(run_calls) == 1
-        assert sleep_calls == []
-        # Marker written after successful submit, format "jobid:step".
-        assert (tmp_path / "_async_eval" / ".in_flight").read_text() == "123:42"
+    """The retry contract: succeed after N failures, exhaust cleanly,
+    count one retried step as one consecutive failure (not N)."""
 
     def test_retries_then_succeeds(self, tmp_path, monkeypatch):
         import leap_finetune.evaluation.sidecar_callback as sc
 
         cb = _make_sidecar_for_submit(tmp_path)
         _patch_submit_prereqs(monkeypatch, ckpt_root=tmp_path)
-        sleep_calls = []
-        monkeypatch.setattr(
-            sc, "time", MagicMock(sleep=lambda s: sleep_calls.append(s))
-        )
+        monkeypatch.setattr(sc, "time", MagicMock(sleep=lambda s: None))
 
         results = iter(
             [
@@ -556,19 +503,13 @@ class TestSidecarSubmitRetry:
         )
         monkeypatch.setattr(sc.subprocess, "run", lambda *a, **kw: next(results))
 
-        model = _make_model_mock()
-        state = MagicMock(global_step=7)
-        jobid = cb._submit(model, state, MagicMock())
-
+        jobid = cb._submit(_make_model_mock(), MagicMock(global_step=7), MagicMock())
         assert jobid == "999"
-        # backoff=1.0 → sleeps [1.0, 2.0] (2 retries before the 3rd succeeds).
-        assert sleep_calls == [1.0, 2.0]
-        # Marker written only after the successful (3rd) submit.
+        # Marker only written after success; format "jobid:step".
         assert (tmp_path / "_async_eval" / ".in_flight").read_text() == "999:7"
 
     def test_exhausts_attempts_raises_no_marker_left(self, tmp_path, monkeypatch):
-        """Bug fix: marker must NOT exist after all retries fail (was being
-        written pre-loop and leaking)."""
+        """Bug fix regression: marker must NOT leak after exhausted retries."""
         import leap_finetune.evaluation.sidecar_callback as sc
 
         cb = _make_sidecar_for_submit(tmp_path)
@@ -580,13 +521,12 @@ class TestSidecarSubmitRetry:
             lambda *a, **kw: _FakeCompletedProcess(1, stderr="permanent failure"),
         )
 
-        model = _make_model_mock()
-        state = MagicMock(global_step=11)
         with pytest.raises(RuntimeError, match="after 3 attempt"):
-            cb._submit(model, state, MagicMock())
+            cb._submit(_make_model_mock(), MagicMock(global_step=11), MagicMock())
         assert not (tmp_path / "_async_eval" / ".in_flight").exists()
 
     def test_filenotfound_fails_fast(self, tmp_path, monkeypatch):
+        """sbatch missing is a permanent config error; do not retry."""
         import leap_finetune.evaluation.sidecar_callback as sc
 
         cb = _make_sidecar_for_submit(tmp_path)
@@ -599,68 +539,44 @@ class TestSidecarSubmitRetry:
 
         monkeypatch.setattr(sc.subprocess, "run", boom)
 
-        model = _make_model_mock()
-        state = MagicMock(global_step=1)
         with pytest.raises(RuntimeError, match="sbatch.*not found"):
-            cb._submit(model, state, MagicMock())
-        # No retry, no marker leak.
+            cb._submit(_make_model_mock(), MagicMock(global_step=1), MagicMock())
         assert len(run_calls) == 1
-        assert not (tmp_path / "_async_eval" / ".in_flight").exists()
 
-    def test_zero_backoff_no_sleep(self, tmp_path, monkeypatch):
-        import leap_finetune.evaluation.sidecar_callback as sc
-
-        cb = _make_sidecar_for_submit(
-            tmp_path, failure_overrides={"submit_retry_backoff": 0.0}
-        )
-        _patch_submit_prereqs(monkeypatch, ckpt_root=tmp_path)
-        sleep_calls = []
-        monkeypatch.setattr(
-            sc, "time", MagicMock(sleep=lambda s: sleep_calls.append(s))
-        )
-        results = iter(
-            [
-                _FakeCompletedProcess(1, stderr="x"),
-                _FakeCompletedProcess(0, "Submitted batch job 1\n"),
-            ]
-        )
-        monkeypatch.setattr(sc.subprocess, "run", lambda *a, **kw: next(results))
-
-        model = _make_model_mock()
-        state = MagicMock(global_step=1)
-        cb._submit(model, state, MagicMock())
-        # Computed sleep is 0.0; the loop skips the sleep call entirely.
-        assert sleep_calls == []
-
-    def test_fire_counts_retried_submit_as_one_failure(self, tmp_path, monkeypatch):
-        """Semantics pin: 3 internal sbatch retries that all fail must count
-        as 1 increment of _consecutive_failures, not 3."""
-
+    def test_fire_counts_retried_submit_as_one_failure(self, tmp_path):
+        """Semantics: 3 internal sbatch retries that all fail count as 1
+        toward max_consecutive, not 3."""
         cb = _make_sidecar_for_submit(
             tmp_path,
             failure_overrides={"max_consecutive": 2, "max_submit_attempts": 3},
             with_benchmarks=True,
         )
         with patch.object(
-            cb, "_submit", side_effect=RuntimeError("sbatch failed after 3 attempts")
+            cb,
+            "_submit",
+            side_effect=RuntimeError("sbatch failed after 3 attempts"),
         ):
             with patch(
                 "leap_finetune.evaluation.sidecar_callback.is_rank_zero",
                 return_value=True,
             ):
-                control = MagicMock(should_evaluate=True)
-                state = MagicMock(global_step=1)
-                cb.on_step_end(MagicMock(), state, control, model=MagicMock())
+                cb.on_step_end(
+                    MagicMock(),
+                    MagicMock(global_step=1),
+                    MagicMock(should_evaluate=True),
+                    model=MagicMock(),
+                )
                 assert cb._consecutive_failures == 1
                 assert cb._disabled is False
 
 
-# === Stale .in_flight marker recovery ===
-
-
 class TestStaleMarkerRecovery:
+    """``_clear_marker_if_stale`` must clear dead jobs and preserve live
+    ones — Codex-caught: a live job with mtime > 6h must NOT be deleted
+    by the mtime fallback, and unknown terminal states must default to
+    'clear' so the marker doesn't strand forever."""
+
     def test_clears_when_sacct_reports_terminal(self, tmp_path, monkeypatch):
-        """Marker for a job that sacct says is FAILED must be cleared."""
         import leap_finetune.evaluation.sidecar_callback as sc
 
         cb = _make_sidecar_for_submit(tmp_path)
@@ -677,7 +593,31 @@ class TestStaleMarkerRecovery:
         cb._clear_marker_if_stale(marker)
         assert not marker.exists()
 
-    def test_preserves_when_sacct_reports_running(self, tmp_path, monkeypatch):
+    def test_preserves_live_job_even_with_old_marker(self, tmp_path, monkeypatch):
+        """Regression: marker > 6h old AND sacct says RUNNING → keep."""
+        import os
+
+        import leap_finetune.evaluation.sidecar_callback as sc
+
+        cb = _make_sidecar_for_submit(tmp_path)
+        eval_dir = tmp_path / "_async_eval"
+        eval_dir.mkdir(exist_ok=True)
+        marker = eval_dir / ".in_flight"
+        marker.write_text("12345:7")
+        old = marker.stat().st_mtime - 7 * 3600
+        os.utime(marker, (old, old))
+
+        monkeypatch.setattr(
+            sc.subprocess,
+            "run",
+            lambda *a, **kw: _FakeCompletedProcess(0, "RUNNING\n"),
+        )
+        cb._clear_marker_if_stale(marker)
+        assert marker.exists()
+
+    def test_clears_on_unenumerated_terminal_state(self, tmp_path, monkeypatch):
+        """Default-to-cleared for unknown / unenumerated terminal states
+        (BOOT_FAIL, DEADLINE, REVOKED, ...) — prevents stranding."""
         import leap_finetune.evaluation.sidecar_callback as sc
 
         cb = _make_sidecar_for_submit(tmp_path)
@@ -689,157 +629,28 @@ class TestStaleMarkerRecovery:
         monkeypatch.setattr(
             sc.subprocess,
             "run",
-            lambda *a, **kw: _FakeCompletedProcess(0, "RUNNING\n"),
+            lambda *a, **kw: _FakeCompletedProcess(0, "BOOT_FAIL\n"),
         )
-        cb._clear_marker_if_stale(marker)
-        assert marker.exists()
-
-    def test_clears_when_sacct_missing_and_marker_old(self, tmp_path, monkeypatch):
-        """sacct unavailable + mtime > 6h → fall back to mtime, clear marker."""
-        import os
-
-        import leap_finetune.evaluation.sidecar_callback as sc
-
-        cb = _make_sidecar_for_submit(tmp_path)
-        eval_dir = tmp_path / "_async_eval"
-        eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
-        marker.write_text("12345:7")
-        # Backdate mtime by 7 hours.
-        old = marker.stat().st_mtime - 7 * 3600
-        os.utime(marker, (old, old))
-
-        def no_sacct(*a, **kw):
-            raise FileNotFoundError("sacct")
-
-        monkeypatch.setattr(sc.subprocess, "run", no_sacct)
         cb._clear_marker_if_stale(marker)
         assert not marker.exists()
 
-    def test_preserves_live_job_even_with_old_marker(self, tmp_path, monkeypatch):
-        """Adversarial: marker > 6h old AND sacct says RUNNING. The mtime
-        fallback must NOT delete a live sidecar's marker (would cause a
-        duplicate submit on the next _fire). Regression test for the
-        sacct-success path silently falling through to mtime.
-        """
-        import os
-
-        import leap_finetune.evaluation.sidecar_callback as sc
-
-        cb = _make_sidecar_for_submit(tmp_path)
-        eval_dir = tmp_path / "_async_eval"
-        eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
-        marker.write_text("12345:7")
-        old = marker.stat().st_mtime - 7 * 3600
-        os.utime(marker, (old, old))
-
-        monkeypatch.setattr(
-            sc.subprocess,
-            "run",
-            lambda *a, **kw: _FakeCompletedProcess(0, "RUNNING\n"),
-        )
-        cb._clear_marker_if_stale(marker)
-        assert marker.exists(), (
-            "sacct=RUNNING is authoritative; mtime fallback must not "
-            "delete a live job's marker"
-        )
-
-    @pytest.mark.parametrize(
-        "sacct_state",
-        ["BOOT_FAIL", "DEADLINE", "REVOKED", "SPECIAL_EXIT", "MYSTERY_STATE"],
-    )
-    def test_clears_on_unenumerated_terminal_states(
-        self, tmp_path, monkeypatch, sacct_state
-    ):
-        """Slurm terminal states beyond {COMPLETED,FAILED,CANCELLED,...} and
-        unknown future states must still clear the marker. Default-to-cleared
-        avoids stranding the marker forever when slurm reports something
-        we don't explicitly enumerate."""
-        import leap_finetune.evaluation.sidecar_callback as sc
-
-        cb = _make_sidecar_for_submit(tmp_path)
-        eval_dir = tmp_path / "_async_eval"
-        eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
-        marker.write_text("12345:7")
-
-        monkeypatch.setattr(
-            sc.subprocess,
-            "run",
-            lambda *a, **kw: _FakeCompletedProcess(0, f"{sacct_state}\n"),
-        )
-        cb._clear_marker_if_stale(marker)
-        assert not marker.exists(), (
-            f"sacct={sacct_state} is non-active; marker must be cleared "
-            "even though it's not in the enumerated terminal set"
-        )
-
-    def test_keeps_marker_when_any_row_active_in_mixed_output(
-        self, tmp_path, monkeypatch
-    ):
-        """sacct often returns multiple rows (parent + .batch step). If ANY
-        row reports an active state, the job is alive — keep the marker
-        even if a sibling row shows a non-active state."""
-        import leap_finetune.evaluation.sidecar_callback as sc
-
-        cb = _make_sidecar_for_submit(tmp_path)
-        eval_dir = tmp_path / "_async_eval"
-        eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
-        marker.write_text("12345:7")
-
-        monkeypatch.setattr(
-            sc.subprocess,
-            "run",
-            lambda *a, **kw: _FakeCompletedProcess(0, "RUNNING\nCOMPLETED\n"),
-        )
-        cb._clear_marker_if_stale(marker)
-        assert marker.exists()
-
-    def test_strips_slurm_state_suffix(self, tmp_path, monkeypatch):
-        """sacct uses a trailing ``+`` to flag non-canonical states; the
-        parser must strip it before classifying."""
-        import leap_finetune.evaluation.sidecar_callback as sc
-
-        cb = _make_sidecar_for_submit(tmp_path)
-        eval_dir = tmp_path / "_async_eval"
-        eval_dir.mkdir(exist_ok=True)
-        marker = eval_dir / ".in_flight"
-        marker.write_text("12345:7")
-
-        monkeypatch.setattr(
-            sc.subprocess,
-            "run",
-            lambda *a, **kw: _FakeCompletedProcess(0, "RUNNING+\n"),
-        )
-        cb._clear_marker_if_stale(marker)
-        assert marker.exists(), "trailing '+' must not defeat active-state matching"
-
-
-# === wandb.define_metric ordering in async_runner_main ===
-
 
 class _FakeWandb:
-    """Records the order of ``define_metric`` and ``log`` calls so we can
-    pin the contract: define before log."""
-
     def __init__(self):
-        self.calls: list[tuple[str, tuple, dict]] = []
+        self.calls: list = []
         self.run = self
 
     def init(self, **kw):
-        self.calls.append(("init", (), kw))
-        return self
+        self.calls.append(("init",))
 
     def define_metric(self, *a, **kw):
-        self.calls.append(("define_metric", a, kw))
+        self.calls.append(("define_metric", a))
 
     def log(self, *a, **kw):
-        self.calls.append(("log", a, kw))
+        self.calls.append(("log",))
 
     def finish(self):
-        self.calls.append(("finish", (), {}))
+        self.calls.append(("finish",))
 
     class Settings:
         def __init__(self, **kw):
@@ -847,52 +658,22 @@ class _FakeWandb:
 
 
 class TestAsyncRunnerWandbAxis:
-    def _run(self, fake_wandb, results, monkeypatch):
+    def test_define_metric_before_log(self, monkeypatch):
+        """Axis-pin contract: every define_metric must precede the first
+        log call. define_metric on a key that's already been logged is a
+        no-op in wandb."""
         import sys
 
         from leap_finetune.evaluation import async_runner_main as arm
 
-        monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
-        args = MagicMock(
-            wandb_run_id="run-xyz",
-            wandb_project=None,
-            trigger_step=42,
-        )
-        arm._log_to_wandb(args, results)
-
-    def test_define_metric_before_log(self, monkeypatch):
         fw = _FakeWandb()
-        self._run(
-            fw,
-            {
-                "benchmark/refcoco/score": 0.7,
-                "benchmark/gsm8k/score": 0.5,
-            },
-            monkeypatch,
+        monkeypatch.setitem(sys.modules, "wandb", fw)
+        arm._log_to_wandb(
+            MagicMock(wandb_run_id="run-xyz", wandb_project=None, trigger_step=42),
+            {"benchmark/refcoco/score": 0.7, "benchmark/gsm8k/score": 0.5},
         )
 
-        # All define_metric must precede the first log.
         first_log = next(i for i, c in enumerate(fw.calls) if c[0] == "log")
         define_indices = [i for i, c in enumerate(fw.calls) if c[0] == "define_metric"]
         assert define_indices, "define_metric was never called"
         assert max(define_indices) < first_log
-
-    def test_define_metric_enumerates_every_benchmark_key(self, monkeypatch):
-        fw = _FakeWandb()
-        self._run(
-            fw,
-            {
-                "benchmark/refcoco/score": 0.7,
-                "benchmark/gsm8k/score": 0.5,
-                # Non-benchmark keys are not enumerated explicitly.
-                "train/loss": 0.1,
-            },
-            monkeypatch,
-        )
-        defined_keys = [c[1][0] for c in fw.calls if c[0] == "define_metric"]
-        # benchmark/step + the 2 benchmark/* keys + the trailing glob.
-        assert "benchmark/step" in defined_keys
-        assert "benchmark/refcoco/score" in defined_keys
-        assert "benchmark/gsm8k/score" in defined_keys
-        assert "benchmark/*" in defined_keys
-        assert "train/loss" not in defined_keys

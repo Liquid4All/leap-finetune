@@ -123,10 +123,10 @@ def ray_dataset_to_hf(ray_ds) -> Dataset | None:
             elif isinstance(batch, pa.RecordBatch):
                 tables.append(pa.Table.from_batches([batch]))
             else:
-                tables.append(pa.Table.from_pylist(list(batch)))
-    elif hasattr(ray_ds, "iter_rows"):
-        rows = list(ray_ds.iter_rows())
-        return Dataset.from_list(rows) if rows else Dataset.from_dict({})
+                raise TypeError(
+                    "Expected pyarrow batches from Ray dataset shard, "
+                    f"got {type(batch).__name__}"
+                )
     else:
         raise TypeError(f"Unsupported Ray dataset shard type: {type(ray_ds).__name__}")
 

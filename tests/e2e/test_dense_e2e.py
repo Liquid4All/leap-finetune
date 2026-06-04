@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pyarrow as pa
 import pytest
 from torch.utils.data.distributed import DistributedSampler
 
@@ -25,8 +26,9 @@ class _RayShard:
     def __init__(self, rows):
         self._rows = rows
 
-    def iter_rows(self):
-        yield from self._rows
+    def iter_batches(self, *, batch_format="pyarrow"):
+        assert batch_format == "pyarrow"
+        yield pa.Table.from_pylist(self._rows)
 
 
 def _sample_id_collator(rows):

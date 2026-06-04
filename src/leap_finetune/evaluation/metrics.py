@@ -255,15 +255,29 @@ def _parse_bbox(text: str) -> list[float] | None:
       * 0-1000 coord space (autoscaled to 0-1)
       * ``ast.literal_eval`` fallback when ``json.loads`` fails
 
-    ``grounding_iou_f1`` uses ``_parse_bboxes`` directly — it must mirror
+    Returns ``None`` on ANY malformed input — never raises. Hardening
+    matters: ``Benchmark.evaluate`` excludes per-sample failures from
+    the count, so a parser exception would silently drop the sample
+    instead of scoring it as 0 — inflating the mean.
+
+    ``grounding_iou_f1`` uses ``_parse_bboxes`` directly: it must mirror
     the GRPO reward's strict rules. Loosening this legacy path is
-    intentional: ``grounding_iou`` scores published checkpoints whose
-    output format predates the cookbook recipe; strict parsing would
-    silently deflate baseline numbers.
+    intentional — ``grounding_iou`` scores published checkpoints whose
+    output predates the cookbook recipe; strict parsing would silently
+    deflate baseline numbers.
     """
     if not isinstance(text, str):
         return None
+    try:
+        return _parse_bbox_unchecked(text)
+    except Exception:
+        # Any malformed input we didn't anticipate (TypeError on len() of an
+        # int-shaped "bbox", recursion depth on pathological JSON, ...) maps
+        # to "no valid bbox" rather than letting the exception escape.
+        return None
 
+
+def _parse_bbox_unchecked(text: str) -> list[float] | None:
     text = text.strip()
     json_match = re.search(r"(\[.*\]|\{.*\})", text, re.DOTALL)
     if json_match:
@@ -281,7 +295,7 @@ def _parse_bbox(text: str) -> list[float] | None:
     if isinstance(data, list) and len(data) > 0:
         if isinstance(data[0], dict):
             for item in data:
-                if "bbox" in item:
+                if isinstance(item, dict) and "bbox" in item:
                     bbox = item["bbox"]
                     break
         elif isinstance(data[0], list) and len(data[0]) == 4:
@@ -291,13 +305,18 @@ def _parse_bbox(text: str) -> list[float] | None:
     elif isinstance(data, dict) and "bbox" in data:
         bbox = data["bbox"]
 
-    if bbox is None or len(bbox) != 4:
+    # isinstance check covers cases where bbox came from {"bbox": <non-list>}
+    # — without this, ``len(bbox)`` raises TypeError on int/float/dict values
+    # and the failure inflates the running mean.
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
         return None
 
     try:
         bbox = [float(x) for x in bbox]
     except (ValueError, TypeError):
         return None
+    if any(not math.isfinite(c) for c in bbox):
+        return None  # NaN/Inf would poison _compute_iou downstream.
 
     # 0-1000 coord space (MGrounding native) autoscaled to 0-1.
     if max(abs(c) for c in bbox) > 1.5:

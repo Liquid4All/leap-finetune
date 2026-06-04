@@ -244,6 +244,7 @@ def ray_trainer(job_config: dict) -> None:
         "train_config": training_config,
         "peft_config": job_config["peft_config"],
         "model_config": job_config.get("model_config"),
+        "benchmark_configs": job_config.get("benchmark_configs"),
         "rewards": rewards_cfg,
         "rl_env": job_config.get("rl_env"),
         "grpo_rollout": job_config.get("grpo_rollout"),

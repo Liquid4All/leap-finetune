@@ -111,10 +111,27 @@ def ray_dataset_to_hf(ray_ds) -> Dataset | None:
     if ray_ds is None:
         return None
 
-    arrow_refs = ray_ds.to_arrow_refs()
-    if not arrow_refs:
+    tables = []
+    if hasattr(ray_ds, "to_arrow_refs"):
+        arrow_refs = ray_ds.to_arrow_refs()
+        if arrow_refs:
+            tables = ray.get(arrow_refs)
+    elif hasattr(ray_ds, "iter_batches"):
+        for batch in ray_ds.iter_batches(batch_format="pyarrow"):
+            if isinstance(batch, pa.Table):
+                tables.append(batch)
+            elif isinstance(batch, pa.RecordBatch):
+                tables.append(pa.Table.from_batches([batch]))
+            else:
+                tables.append(pa.Table.from_pylist(list(batch)))
+    elif hasattr(ray_ds, "iter_rows"):
+        rows = list(ray_ds.iter_rows())
+        return Dataset.from_list(rows) if rows else Dataset.from_dict({})
+    else:
+        raise TypeError(f"Unsupported Ray dataset shard type: {type(ray_ds).__name__}")
+
+    if not tables:
         return Dataset.from_dict({})
-    tables = ray.get(arrow_refs)
     return Dataset(pa.concat_tables(tables))
 
 

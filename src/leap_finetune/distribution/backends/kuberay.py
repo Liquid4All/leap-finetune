@@ -86,7 +86,9 @@ def check_and_handle_kuberay(
             config_dict = yaml.safe_load(f) or {}
 
     try:
-        kuberay_cfg = config_dict.get("kuberay") if isinstance(config_dict, dict) else None
+        kuberay_cfg = (
+            config_dict.get("kuberay") if isinstance(config_dict, dict) else None
+        )
         if not kuberay_cfg:
             return False
 

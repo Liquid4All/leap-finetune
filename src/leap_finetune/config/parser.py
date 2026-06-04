@@ -151,7 +151,9 @@ def generate_run_name(
 ) -> str:
     safe_model_name = model_name.split("/")[-1]
     dataset_name_full = dataset_path.strip("/").split("/")[-1]
-    dataset_name = dataset_name_full[:10] if len(dataset_name_full) > 10 else dataset_name_full
+    dataset_name = (
+        dataset_name_full[:10] if len(dataset_name_full) > 10 else dataset_name_full
+    )
     limit_str = str(dataset_limit) if dataset_limit else "all"
 
     if learning_rate:
@@ -224,7 +226,9 @@ def _build_dataset_loader(
         )
 
     dataset_path_env = os.getenv("DATASET_PATH")
-    effective_train_path = dataset_path_env or dataset_cfg.train_path or dataset_cfg.path
+    effective_train_path = (
+        dataset_path_env or dataset_cfg.train_path or dataset_cfg.path
+    )
     if not effective_train_path:
         raise ValueError("dataset.path or dataset.train_path is required")
 
@@ -242,7 +246,12 @@ def _build_dataset_loader(
         val_split = "train"
 
     test_size = dataset_cfg.test_size
-    if ds_type in ("grpo", "vlm_grpo") and test_size is None and val_path is None and val_split is None:
+    if (
+        ds_type in ("grpo", "vlm_grpo")
+        and test_size is None
+        and val_path is None
+        and val_split is None
+    ):
         test_size = 0.01
 
     return DatasetLoader(
@@ -305,7 +314,11 @@ def _build_peft_defaults(peft_dict: dict[str, Any] | None):
     peft_dict.pop("use_peft", None)
 
     if not base_peft_name:
-        peft_config = _ResolvedConfigValue(PEFT_DEFAULTS["DEFAULT_LORA"]) if use_peft is True else None
+        peft_config = (
+            _ResolvedConfigValue(PEFT_DEFAULTS["DEFAULT_LORA"])
+            if use_peft is True
+            else None
+        )
         return peft_config, use_peft
 
     if base_peft_name not in PEFT_DEFAULTS:
@@ -345,7 +358,11 @@ def _resolve_output_dir(
     if resume_from == "latest":
         project_path = pathlib.Path(base_project_dir).resolve()
         run_dirs = (
-            [d for d in project_path.iterdir() if d.is_dir() and (d / "latest").exists()]
+            [
+                d
+                for d in project_path.iterdir()
+                if d.is_dir() and (d / "latest").exists()
+            ]
             if project_path.exists()
             else []
         )
@@ -410,7 +427,11 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
         base_dir=config_dir,
     )
 
-    peft_dict = job_config.peft_config.model_dump(exclude_none=True) if job_config.peft_config else None
+    peft_dict = (
+        job_config.peft_config.model_dump(exclude_none=True)
+        if job_config.peft_config
+        else None
+    )
     peft_config, use_peft = _build_peft_defaults(peft_dict)
     project_name = job_config.resolved_job_name
 
@@ -481,7 +502,9 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
         peft_config=peft_config,
         benchmark_configs=benchmark_configs,
         model_config=job_config.model_overrides,
-        ray_config=job_config.ray.model_dump(exclude_none=True) if job_config.ray else None,
+        ray_config=job_config.ray.model_dump(exclude_none=True)
+        if job_config.ray
+        else None,
         rewards=rewards_cfg,
         rl_env=rl_env_cfg,
         grpo_rollout=grpo_rollout_cfg,
@@ -494,7 +517,9 @@ def normalized_job_config_dict(
     *,
     base_dir: pathlib.Path | None = None,
 ) -> dict[str, Any]:
-    base_dir = (base_dir or pathlib.Path(job_config.config_dir or pathlib.Path.cwd())).resolve()
+    base_dir = (
+        base_dir or pathlib.Path(job_config.config_dir or pathlib.Path.cwd())
+    ).resolve()
     payload = job_config.model_dump(
         by_alias=True,
         exclude_none=True,
@@ -523,7 +548,9 @@ def normalized_job_config_dict(
             )
 
     if "rewards" in payload:
-        payload["rewards"] = _resolve_reward_paths_to_absolute(payload["rewards"], base_dir)
+        payload["rewards"] = _resolve_reward_paths_to_absolute(
+            payload["rewards"], base_dir
+        )
     payload["config_dir"] = str(base_dir)
     return payload
 
@@ -582,8 +609,13 @@ def print_job_config_summary(job_config: ResolvedJobConfig) -> None:
     table.add_row("Project", job_config.job_name)
     table.add_row("Model", job_config.model_name)
     table.add_row("Training Type", job_config.training_type)
-    table.add_row("Dataset", job_config.dataset.dataset_path if job_config.dataset else "None")
-    table.add_row("Dataset Type", job_config.dataset.dataset_type if job_config.dataset else "None")
+    table.add_row(
+        "Dataset", job_config.dataset.dataset_path if job_config.dataset else "None"
+    )
+    table.add_row(
+        "Dataset Type",
+        job_config.dataset.dataset_type if job_config.dataset else "None",
+    )
     table.add_row("Output Dir", str(config_value.get("output_dir", "")))
     if peft_value is not None:
         table.add_row("PEFT", peft_value.__class__.__name__)

@@ -46,7 +46,9 @@ class TestExampleSmoke:
             ("moe_dpo_config_path", "moe_dpo"),
         ],
     )
-    def test_example_parses_and_materializes(self, request, fixture_name, expected_type):
+    def test_example_parses_and_materializes(
+        self, request, fixture_name, expected_type
+    ):
         config_path = request.getfixturevalue(fixture_name)
         parsed = parse_job_config(config_path)
         materialized = materialize_job_config(parsed)
@@ -160,7 +162,9 @@ class TestFocusedValidation:
             ],
         }
 
-        parsed_new = parse_job_config(write_config({**base, "evals": eval_suite}, tmp_path))
+        parsed_new = parse_job_config(
+            write_config({**base, "evals": eval_suite}, tmp_path)
+        )
         parsed_old = parse_job_config(
             write_config({**base, "benchmarks": eval_suite}, tmp_path)
         )

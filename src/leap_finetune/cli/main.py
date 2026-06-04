@@ -1,6 +1,5 @@
 import argparse
 import pathlib
-import subprocess
 import sys
 
 import yaml
@@ -88,7 +87,9 @@ def check_and_handle_slurm(
     *,
     config_dict: dict | None = None,
 ) -> bool:
-    from leap_finetune.distribution.backends.slurm import check_and_handle_slurm as _impl
+    from leap_finetune.distribution.backends.slurm import (
+        check_and_handle_slurm as _impl,
+    )
 
     return _impl(config_path_arg, config_dict=config_dict)
 

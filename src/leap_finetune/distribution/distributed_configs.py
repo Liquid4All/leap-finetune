@@ -98,9 +98,7 @@ def resolve_fsdp_cpu_offload(train_config: dict, default: bool = False) -> bool:
     return default
 
 
-def strip_distributed_training_config(
-    train_config: dict, *, num_workers: int
-) -> dict:
+def strip_distributed_training_config(train_config: dict, *, num_workers: int) -> dict:
     """Drop distributed strategy config for effective single-worker runs."""
     if num_workers != 1:
         return train_config

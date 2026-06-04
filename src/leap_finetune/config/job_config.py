@@ -51,7 +51,9 @@ class DatasetConfig(BaseModel):
             raise ValueError(
                 f"dataset.test_size must be between 0 and 1 (exclusive), got {self.test_size}"
             )
-        if self.test_size is not None and (self.val_path is not None or self.val_split is not None):
+        if self.test_size is not None and (
+            self.val_path is not None or self.val_split is not None
+        ):
             raise ValueError(
                 "dataset.test_size cannot be combined with dataset.val_path or dataset.val_split"
             )

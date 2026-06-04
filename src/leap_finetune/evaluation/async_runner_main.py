@@ -111,18 +111,18 @@ def _log_to_wandb(args: argparse.Namespace, results: dict[str, float]) -> None:
             init_kwargs["project"] = args.wandb_project
 
         wandb.init(**init_kwargs)
-        # Pin every benchmark key to benchmark/step before first log —
-        # define_metric called AFTER a key is logged does not rebind it.
-        # The trailing benchmark/* glob covers keys we didn't enumerate;
-        # wandb requires globs to be suffix-only (benchmark/*/* is rejected).
+        # Pin every benchmark key to benchmark/step BEFORE first log;
+        # define_metric called after a key is logged doesn't rebind it.
+        # The trailing benchmark/* glob covers keys we didn't enumerate
+        # (wandb only accepts suffix globs — benchmark/*/* is rejected).
         try:
             wandb.define_metric("benchmark/step")
             for key in sorted(results.keys() if results else ()):
                 if key.startswith("benchmark/"):
                     wandb.define_metric(key, step_metric="benchmark/step")
             wandb.define_metric("benchmark/*", step_metric="benchmark/step")
-        except Exception:
-            logger.debug("wandb.define_metric failed; axis-pin skipped")
+        except Exception as e:
+            logger.warning("wandb.define_metric failed; axis-pin skipped (%s)", e)
         if not results:
             logger.info("no benchmark results to log")
         else:

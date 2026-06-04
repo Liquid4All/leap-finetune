@@ -37,17 +37,34 @@ class TestStrictParser:
 class TestHungarianMatching:
     """Hungarian matcher contracts not covered by F1 e2e tests."""
 
-    def test_picks_optimal_assignment_not_greedy(self):
-        """If the matcher silently regresses to greedy, the permuted-match
-        F1 test below would still pass (all-or-nothing). Pin the
-        optimal-vs-greedy contrast directly."""
-        from leap_finetune.evaluation.metrics import _hungarian_match_iou
+    def test_picks_optimal_assignment_not_greedy(self, monkeypatch):
+        """When scipy is available, the matcher must pick the OPTIMAL
+        assignment, not greedy. Pin this on an adversarial sim matrix
+        that strictly distinguishes the two algorithms.
 
-        # IoUs: A-A'=0.25, A-B'=1.0, B-A'=1.0, B-B'=0.25. Optimal sums to 2.0
-        # via the cross assignment (A→B', B→A').
-        pred = [[0, 0, 1, 1], [0, 0, 0.5, 0.5]]
-        gt = [[0, 0, 0.5, 0.5], [0, 0, 1, 1]]
-        assert sum(_hungarian_match_iou(pred, gt)) == pytest.approx(2.0)
+        Matrix ``[[1.0, 0.9], [0.9, 0.1]]``:
+          * Greedy: picks (0,0)=1.0 → forced to (1,1)=0.1 → sum 1.1
+          * Optimal: cross-assigns (0,1)+(1,0) = 0.9+0.9 = 1.8
+
+        The 2D IoU geometry can't reproduce this matrix from real
+        bboxes (triangle-inequality-ish constraints), so we mock
+        ``_compute_iou`` to inject it directly. The test is skipped
+        if scipy is not installed — in that environment the greedy
+        fallback IS the implementation, and the optimal-vs-greedy
+        contract doesn't apply.
+        """
+        pytest.importorskip("scipy")
+
+        from leap_finetune.evaluation import metrics
+
+        sim_values = iter([1.0, 0.9, 0.9, 0.1])  # row-major: (0,0),(0,1),(1,0),(1,1)
+        monkeypatch.setattr(metrics, "_compute_iou", lambda a, b: next(sim_values))
+
+        pred = [[0, 0, 1, 1], [0, 0, 1, 1]]  # values irrelevant; mock intercepts
+        gt = [[0, 0, 1, 1], [0, 0, 1, 1]]
+        ious = metrics._hungarian_match_iou(pred, gt)
+        # Greedy would give 1.1; scipy gives 1.8.
+        assert sum(ious) == pytest.approx(1.8)
 
 
 class TestGroundingIouF1:

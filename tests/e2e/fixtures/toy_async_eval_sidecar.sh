@@ -28,4 +28,7 @@ export TMPDIR="${HOME}/tmp"
 export TRITON_CACHE_DIR="${HOME}/.triton_cache"
 mkdir -p "$TMPDIR" "$TRITON_CACHE_DIR" logs/async_eval_toy
 
-uv run leap-finetune tests/fixtures/toy_async_eval_sidecar.yaml
+# --no-sync: use the already-activated .venv instead of re-resolving deps.
+# Avoids transient resolver failures from upstream wheel index churn
+# (e.g. rocm wheels being yanked) inside a job.
+uv run --no-sync leap-finetune tests/fixtures/toy_async_eval_sidecar.yaml

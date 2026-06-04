@@ -713,6 +713,50 @@ class _FakeWandb:
             pass
 
 
+class TestSidecarSweepCountsDeadSidecars:
+    """When the bash trap doesn't fire (slurmstepd OOM, NODE_FAIL,
+    scancel --signal=KILL), sidecars leave orphan markers. The sweep
+    must count each cleared orphan toward ``_consecutive_failures``
+    so auto-disable can fire — Codex catch."""
+
+    def test_dead_sidecars_disable_callback(self, tmp_path, monkeypatch):
+        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+        from leap_finetune.evaluation.sidecar_callback import SidecarEvalCallback
+        import leap_finetune.evaluation.sidecar_callback as sc
+
+        cb = SidecarEvalCallback(
+            benchmarks=[MagicMock(name="bench1")],
+            cfg=AsyncEvalConfig.from_dict(
+                {"mode": "sidecar", "failure": {"max_consecutive": 2}}
+            ),
+            benchmark_configs={"benchmarks": []},
+            output_dir=str(tmp_path),
+            wandb_run_id=None,
+        )
+
+        # Drop 3 orphan markers (3 sidecars submitted, none had their
+        # bash trap fire because slurmstepd killed them).
+        eval_dir = cb._eval_dir
+        for step, jobid in [(100, 111), (200, 222), (300, 333)]:
+            (eval_dir / f".in_flight.step_{step}").write_text(f"{jobid}:{step}")
+
+        # sacct says all jobs are FAILED (terminal, non-active).
+        monkeypatch.setattr(
+            sc.subprocess,
+            "run",
+            lambda *a, **kw: type(
+                "P", (), {"returncode": 0, "stdout": "FAILED\n", "stderr": ""}
+            )(),
+        )
+
+        cb._sweep_stale_markers()
+        # Three dead sidecars cleared → counter >= max_consecutive (2) → disabled.
+        assert cb._consecutive_failures == 3
+        assert cb._disabled is True
+        # All three orphan markers should be gone.
+        assert not list(eval_dir.glob(".in_flight.step_*"))
+
+
 class TestSidecarConcurrentMarkers:
     """``on_overlap=queue`` must support concurrent in-flight sidecars.
     A single shared marker would let the first sidecar's EXIT trap wipe

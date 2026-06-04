@@ -181,7 +181,14 @@ class SidecarEvalCallback(TrainerCallback):
         args: TrainingArguments,
         wait_for_completion: bool = False,
     ) -> None:
+        # Sweep first; it both clears orphan markers AND counts those clears
+        # toward _consecutive_failures (each cleared orphan = a sidecar that
+        # died without its bash trap firing). If sweep tripped auto-disable,
+        # bail before submitting another.
         self._sweep_stale_markers()
+        if self._disabled:
+            return
+
         in_flight = sorted(self._eval_dir.glob(_MARKER_GLOB))
         if in_flight:
             if self.cfg.on_overlap == "skip":
@@ -200,7 +207,12 @@ class SidecarEvalCallback(TrainerCallback):
 
         try:
             jobid = self._submit(model, state, args)
-            self._consecutive_failures = 0
+            # NOTE: do NOT reset _consecutive_failures here. The counter is
+            # shared with sweep-detected sidecar deaths; a successful submit
+            # followed by N dead sidecars would otherwise keep wiping the
+            # running count and auto-disable could never fire. Reset only
+            # happens in _sweep_stale_markers when zero markers remain
+            # (clean idle state).
             if wait_for_completion and jobid:
                 self._wait_for_job(jobid, state.global_step)
         except Exception:
@@ -345,15 +357,34 @@ class SidecarEvalCallback(TrainerCallback):
 
     def _sweep_stale_markers(self) -> None:
         """Sweep ALL per-step in-flight markers and clear ones whose
-        sbatch job is no longer alive. Called at the top of ``_fire``
-        so a dead orphan never blocks the next eval under
-        ``on_overlap=skip`` and the queue-mode "in-flight count" is
-        accurate.
+        sbatch job is no longer alive. Each cleared orphan = a sidecar
+        that died without its bash trap firing (slurmstepd OOM,
+        NODE_FAIL, scancel --signal=KILL, ...) and counts toward
+        auto-disable. The counter is never reset by the sweep — sidecar
+        mode has no positive feedback signal (the bash trap removing a
+        marker isn't observable to us), so any reset would risk wiping
+        unprocessed submission failures.
         """
+        cleared = 0
         for marker in self._eval_dir.glob(_MARKER_GLOB):
-            self._clear_marker_if_stale(marker)
+            if self._clear_marker_if_stale(marker):
+                cleared += 1
+        if cleared > 0:
+            self._consecutive_failures += cleared
+            logger.warning(
+                "[async_eval/sidecar] sweep cleared %d dead sidecar(s) (%d "
+                "consecutive failures)",
+                cleared,
+                self._consecutive_failures,
+            )
+            if self._consecutive_failures >= self.cfg.failure.max_consecutive:
+                self._disabled = True
+                logger.error(
+                    "[async_eval/sidecar] disabling after %d consecutive failures",
+                    self._consecutive_failures,
+                )
 
-    def _clear_marker_if_stale(self, marker: Path) -> None:
+    def _clear_marker_if_stale(self, marker: Path) -> bool:
         """Remove a single orphan marker whose job is no longer alive.
 
         The sidecar script's EXIT trap doesn't fire if slurm OOM-kills the
@@ -361,13 +392,16 @@ class SidecarEvalCallback(TrainerCallback):
         without recovery an orphan would block all future evals under
         ``on_overlap=skip``. We ask ``sacct`` whether the recorded jobid is
         terminal; missing-sacct falls back to a 6h mtime cutoff.
+
+        Returns ``True`` iff the marker was cleared — caller uses this to
+        count dead sidecars toward auto-disable.
         """
         if not marker.exists():
-            return
+            return False
         try:
             content = marker.read_text().strip()
         except OSError:
-            return
+            return False
 
         jobid = content.split(":", 1)[0] if ":" in content else ""
         if jobid.isdigit():
@@ -394,7 +428,7 @@ class SidecarEvalCallback(TrainerCallback):
                     state = line.strip().split(None, 1)[0].rstrip("+").upper()
                     states_seen.append(state)
                     if state in _SACCT_ACTIVE_STATES:
-                        return  # at least one row alive; keep marker.
+                        return False  # at least one row alive; keep marker.
                 logger.warning(
                     "[async_eval/sidecar] clearing stale marker %s "
                     "(job %s no longer active; sacct states: %s)",
@@ -403,7 +437,7 @@ class SidecarEvalCallback(TrainerCallback):
                     ",".join(states_seen),
                 )
                 marker.unlink(missing_ok=True)
-                return
+                return True
 
         try:
             age = time.time() - marker.stat().st_mtime
@@ -414,8 +448,10 @@ class SidecarEvalCallback(TrainerCallback):
                     age / 3600,
                 )
                 marker.unlink(missing_ok=True)
+                return True
         except OSError:
             pass
+        return False
 
     def _wait_for_job(
         self,

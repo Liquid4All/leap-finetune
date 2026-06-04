@@ -82,7 +82,10 @@ def render_sbatch_script(
         runner_args += ["--wandb-project", wandb_project]
 
     runner_cmd = (
-        "uv run python -m leap_finetune.evaluation.async_runner_main \\\n    "
+        # --no-sync: reuse the parent's resolved venv. Re-resolution in a
+        # sidecar can fail if an upstream index has churned (e.g. vllm rocm
+        # wheels yanked) since the parent locked.
+        "uv run --no-sync python -m leap_finetune.evaluation.async_runner_main \\\n    "
         + " \\\n    ".join(shlex.quote(a) for a in runner_args)
     )
 

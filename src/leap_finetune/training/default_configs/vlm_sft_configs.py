@@ -1,58 +1,25 @@
 from leap_finetune import SFT_OUTPUT_PATH
-
-########################
-#   DEEPSPEED CONFIGS   #
-########################
-
-
-DEEPSPEED_CONFIG = {
-    "zero_optimization": {
-        "stage": 2,
-        "overlap_comm": True,
-    },
-    "train_batch_size": "auto",
-    "train_micro_batch_size_per_gpu": "auto",
-    "gradient_clipping": "auto",
-    "gradient_accumulation_steps": "auto",
-    # No "optimizer" block — VLMTrainer.create_optimizer() builds per-component LR
-    # param groups that DeepSpeed's FusedAdam would silently discard.
-    # torch.optim.AdamW(fused=True) provides the same CUDA-fused kernel.
-    "bf16": {"enabled": "auto"},
-    "activation_checkpointing": {
-        "partition_activations": False,
-        "cpu_checkpointing": False,
-        "contiguous_memory_optimization": False,
-        "number_checkpoints": None,
-        "synchronize_checkpoint_boundary": False,
-        "profile": False,
-    },
-}
+from leap_finetune.distribution.distributed_configs import DEEPSPEED_ZERO2_CONFIG
+from leap_finetune.training.utils.config_filter import (
+    BASE_RUNTIME_EXCLUDED_KEYS,
+    DISTRIBUTED_RUNTIME_EXCLUDED_KEYS,
+    MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS,
+    MODEL_RUNTIME_EXCLUDED_KEYS,
+    VLM_RUNTIME_EXCLUDED_KEYS,
+)
 
 
 ########################
 #     SFT CONFIGS      #
 ########################
 
-VLM_SFT_EXCLUDED_KEYS = {
-    "training_type",
-    "wandb_logging",
-    "tracker",
-    "trackio_space_id",
-    "max_image_tokens",
-    "do_image_splitting",
-    "lr_multipliers",
-    "vision_encoder_lr_multiplier",
-    "resume_from_checkpoint",
-    "model_config",
-    "chat_template",
-    "chat_template_path",
-    "adapter_path",
-    "leap_run_name_template",
-    "reshard_after_forward",
-    "fsdp_cpu_offload",
-    "checkpoint_staging_dir",
-    "manual_sharded_checkpoint_format",
-}
+VLM_SFT_EXCLUDED_KEYS = (
+    BASE_RUNTIME_EXCLUDED_KEYS
+    | MODEL_RUNTIME_EXCLUDED_KEYS
+    | DISTRIBUTED_RUNTIME_EXCLUDED_KEYS
+    | MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS
+    | VLM_RUNTIME_EXCLUDED_KEYS
+)
 
 # Per-component LR multipliers (applied to base learning_rate).
 # Vision encoder trains at a lower LR to preserve pretrained features.
@@ -84,5 +51,7 @@ DEFAULT_VLM_SFT = {
     "remove_unused_columns": False,  # preserve pixel_values, spatial_shapes, pixel_attention_mask
     "dataloader_drop_last": True,  # avoid batch size mismatches in DDP
     "lr_multipliers": DEFAULT_LR_MULTIPLIERS,
-    "deepspeed": DEEPSPEED_CONFIG,
+    # No optimizer block here: VLMTrainer.create_optimizer() builds per-component
+    # param groups that DeepSpeed's optimizer integration would discard.
+    "deepspeed": DEEPSPEED_ZERO2_CONFIG,
 }

@@ -1,7 +1,11 @@
 import os
 import pathlib
 import shlex
+import subprocess
+import sys
 from typing import Any
+
+import yaml
 
 from leap_finetune import LEAP_FINETUNE_DIR
 
@@ -18,6 +22,77 @@ _PASSTHROUGH_ENV_VARS = (
     "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE",
     "LEAP_SOCKET_IFNAME",
 )
+
+
+def check_and_handle_slurm(
+    config_path_arg: str | None = None,
+    *,
+    config_dict: dict | None = None,
+) -> bool:
+    if os.environ.get("LEAP_FINETUNE_FROM_SLURM") == "1":
+        return False
+
+    config_path = None
+    if config_dict is None:
+        if not config_path_arg:
+            return False
+
+        from leap_finetune.config.parser import resolve_config_path
+
+        try:
+            config_path = resolve_config_path(config_path_arg)
+        except FileNotFoundError:
+            return False
+
+        with open(config_path) as f:
+            config_dict = yaml.safe_load(f) or {}
+
+        if not isinstance(config_dict, dict):
+            raise ValueError(f"Config must be a YAML mapping: {config_path}")
+
+    slurm_config = config_dict.get("slurm") if isinstance(config_dict, dict) else None
+    if not slurm_config:
+        return False
+
+    if config_path is None:
+        job_name = (
+            config_dict.get("project_name")
+            or config_dict.get("job_name")
+            or "leap_finetune"
+        )
+        output_dir = pathlib.Path.cwd() / "slurms"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        config_path = output_dir / f"{job_name}.yaml"
+        config_path.write_text(yaml.safe_dump(config_dict, sort_keys=False))
+        script_path = generate_slurm_script(
+            config_path, config_dict, output_dir, auto_submit=False
+        )
+        print(
+            f"Config contains SLURM settings - generated submission artifacts: {script_path}"
+        )
+    else:
+        output_dir = config_path.parent / "slurms"
+        script_path = output_dir / f"{config_path.stem}.sh"
+        if script_path.exists():
+            print(
+                f"Config contains SLURM settings - using existing script: {script_path}"
+            )
+        else:
+            print("Config contains SLURM settings - generating SLURM script...")
+            script_path = generate_slurm_script(
+                config_path, config_dict, output_dir, auto_submit=False
+            )
+
+    print("Submitting SLURM job...")
+    result = subprocess.run(
+        ["sbatch", str(script_path)], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"Failed to submit job: {result.stderr}")
+        sys.exit(1)
+
+    print(f"SLURM job submitted: {result.stdout.strip()}")
+    return True
 
 
 def _default_judge_gpus(config_dict: dict[str, Any]) -> int:

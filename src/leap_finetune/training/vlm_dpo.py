@@ -1,6 +1,5 @@
 import logging
 import math
-import inspect
 from copy import deepcopy
 
 import numpy as np
@@ -40,6 +39,14 @@ from leap_finetune.training.utils.worker_setup import (
     get_ray_train_eval_datasets,
     init_tracking_from_config,
     setup_training_worker,
+)
+from leap_finetune.training.utils.config_filter import (
+    BASE_RUNTIME_EXCLUDED_KEYS,
+    DISTRIBUTED_RUNTIME_EXCLUDED_KEYS,
+    MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS,
+    MODEL_RUNTIME_EXCLUDED_KEYS,
+    VLM_RUNTIME_EXCLUDED_KEYS,
+    filter_runtime_config_kwargs,
 )
 
 logger = logging.getLogger(__name__)
@@ -152,30 +159,19 @@ def vlm_dpo_run(training_config: dict) -> None:
     if "lr_multipliers" in train_config:
         lr_multipliers.update(train_config["lr_multipliers"])
 
-    excluded_keys = {
-        "training_type",
-        "wandb_logging",
-        "tracker",
-        "trackio_space_id",
-        "leap_run_name_template",
-        "resume_from_checkpoint",
-        "max_image_tokens",
-        "do_image_splitting",
-        "freeze_vision_encoder",
-        "optimizer_type",
-        "lr_multipliers",
-        "adapter_path",
-        "model_config",
-        "chat_template",
-        "chat_template_path",
-        "reshard_after_forward",
-        "fsdp_cpu_offload",
-        "checkpoint_staging_dir",
-        "manual_sharded_checkpoint_format",
-    }
-    train_config_filtered = {
-        k: v for k, v in train_config.items() if k not in excluded_keys
-    }
+    excluded_keys = (
+        BASE_RUNTIME_EXCLUDED_KEYS
+        | MODEL_RUNTIME_EXCLUDED_KEYS
+        | DISTRIBUTED_RUNTIME_EXCLUDED_KEYS
+        | MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS
+        | VLM_RUNTIME_EXCLUDED_KEYS
+        | {"freeze_vision_encoder", "optimizer_type"}
+    )
+    train_config_filtered, unsupported = filter_runtime_config_kwargs(
+        train_config,
+        excluded_keys=excluded_keys,
+        config_cls=DPOConfig,
+    )
     if train_config_filtered.get("precompute_ref_log_probs"):
         logger.info(
             "Disabling precompute_ref_log_probs for VLM-DPO; TRL precomputes "
@@ -207,11 +203,8 @@ def vlm_dpo_run(training_config: dict) -> None:
     }
     if "per_device_eval_batch_size" not in config_kwargs:
         config_kwargs["per_device_eval_batch_size"] = train_batch_size
-    valid_dpo_args = set(inspect.signature(DPOConfig.__init__).parameters) - {"self"}
-    unsupported = sorted(k for k in config_kwargs if k not in valid_dpo_args)
     if unsupported:
         logger.info("Dropping unsupported DPOConfig keys: %s", unsupported)
-        config_kwargs = {k: v for k, v in config_kwargs.items() if k in valid_dpo_args}
     training_args = DPOConfig(**config_kwargs)
 
     model, processor = load_vlm_model(

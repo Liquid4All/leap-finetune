@@ -134,26 +134,27 @@ def _load_json(path: str, limit: int | None) -> list[dict]:
 
 def _load_parquet(path: str, limit: int | None) -> list[dict]:
     import glob
-    import pandas as pd
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
 
     p = Path(path)
     if p.is_dir():
         files = sorted(glob.glob(str(p / "*.parquet")))
-        df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+        table = ds.dataset(files, format="parquet").to_table()
     else:
-        df = pd.read_parquet(path)
+        table = pq.read_table(path)
     if limit:
-        df = df.head(limit)
-    return df.to_dict("records")
+        table = table.slice(0, limit)
+    return table.to_pylist()
 
 
 def _load_csv(path: str, limit: int | None) -> list[dict]:
-    import pandas as pd
+    import pyarrow.csv as csv
 
-    df = pd.read_csv(path)
+    table = csv.read_csv(path)
     if limit:
-        df = df.head(limit)
-    return df.to_dict("records")
+        table = table.slice(0, limit)
+    return table.to_pylist()
 
 
 _FORMAT_LOADERS: dict[str, callable] = {

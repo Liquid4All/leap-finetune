@@ -1,4 +1,13 @@
 from leap_finetune import GRPO_OUTPUT_PATH
+from leap_finetune.distribution.distributed_configs import (
+    DEEPSPEED_ZERO2_CONFIG,
+    MOE_DEEPSPEED_ZERO0_CONFIG,
+)
+from leap_finetune.training.utils.config_filter import (
+    BASE_RUNTIME_EXCLUDED_KEYS,
+    MODEL_RUNTIME_EXCLUDED_KEYS,
+    VLM_RUNTIME_EXCLUDED_KEYS,
+)
 
 # === GRPO config hygiene ===
 #
@@ -11,74 +20,11 @@ from leap_finetune import GRPO_OUTPUT_PATH
 
 # Keys that exist in our YAML but are NOT GRPOConfig fields. Stripped in
 # grpo_run.py / vlm_grpo_run.py before building GRPOConfig(**filtered).
-GRPO_EXCLUDED_KEYS = {
-    "training_type",
-    "wandb_logging",
-    "tracker",
-    "trackio_space_id",
-    "resume_from_checkpoint",
-    "adapter_path",
-    "leap_run_name_template",
-    "chat_template_path",
-}
+GRPO_EXCLUDED_KEYS = BASE_RUNTIME_EXCLUDED_KEYS | MODEL_RUNTIME_EXCLUDED_KEYS
 
 # VLM GRPO adds the per-component LR knobs that are consumed by
 # LFMVLMGRPOTrainer.create_optimizer() and must not be forwarded to GRPOConfig.
-VLM_GRPO_EXCLUDED_KEYS = GRPO_EXCLUDED_KEYS | {
-    "max_image_tokens",
-    "do_image_splitting",
-    "lr_multipliers",
-    "vision_encoder_lr_multiplier",
-}
-
-
-# === DeepSpeed configs ===
-
-
-# ZeRO-2 is sufficient for the policy model since GRPO with beta=0 doesn't
-# load a separate reference model. Matches DPO/SFT.
-DEEPSPEED_CONFIG = {
-    "zero_optimization": {
-        "stage": 2,
-        "overlap_comm": True,
-    },
-    "train_batch_size": "auto",
-    "train_micro_batch_size_per_gpu": "auto",
-    "gradient_clipping": "auto",
-    "gradient_accumulation_steps": "auto",
-    "bf16": {"enabled": "auto"},
-    "activation_checkpointing": {
-        "partition_activations": False,
-        "cpu_checkpointing": False,
-        "contiguous_memory_optimization": False,
-        "number_checkpoints": None,
-        "synchronize_checkpoint_boundary": False,
-        "profile": False,
-    },
-}
-
-
-# ZeRO-0 for MoE: same rationale as MOE_DPO/MOE_SFT (FSDP handles sharding
-# in the full fine-tune case; DeepSpeed is just used as the backend).
-MOE_DEEPSPEED_CONFIG = {
-    "zero_optimization": {
-        "stage": 0,
-        "overlap_comm": True,
-    },
-    "train_batch_size": "auto",
-    "train_micro_batch_size_per_gpu": "auto",
-    "gradient_clipping": "auto",
-    "gradient_accumulation_steps": "auto",
-    "bf16": {"enabled": "auto"},
-    "activation_checkpointing": {
-        "partition_activations": False,
-        "cpu_checkpointing": False,
-        "contiguous_memory_optimization": False,
-        "number_checkpoints": None,
-        "synchronize_checkpoint_boundary": False,
-        "profile": False,
-    },
-}
+VLM_GRPO_EXCLUDED_KEYS = GRPO_EXCLUDED_KEYS | VLM_RUNTIME_EXCLUDED_KEYS
 
 
 ########################
@@ -125,7 +71,7 @@ DEFAULT_GRPO = {
     "vllm_enable_sleep_mode": True,
     "vllm_importance_sampling_correction": True,  # TRL v1 default; keep
     # --- DeepSpeed ZeRO-2 backend ---
-    "deepspeed": DEEPSPEED_CONFIG,
+    "deepspeed": DEEPSPEED_ZERO2_CONFIG,
 }
 
 
@@ -159,5 +105,5 @@ MOE_GRPO = {
     "bf16": True,
     # Distributed strategy applied automatically in grpo_run.py based on
     # PEFT presence (DeepSpeed for LoRA, FSDP for full fine-tune).
-    "deepspeed": MOE_DEEPSPEED_CONFIG,
+    "deepspeed": MOE_DEEPSPEED_ZERO0_CONFIG,
 }

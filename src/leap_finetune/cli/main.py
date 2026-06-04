@@ -6,55 +6,12 @@ import sys
 import yaml
 
 
-def check_and_handle_slurm(config_path_arg: str | None) -> bool:
-    if not config_path_arg:
-        return False
-
-    import os
-
-    if os.environ.get("LEAP_FINETUNE_FROM_SLURM") == "1":
-        return False
-
-    from leap_finetune.config.parser import resolve_config_path
-
-    try:
-        config_path = resolve_config_path(config_path_arg)
-    except FileNotFoundError:
-        return False
-
+def _load_config_dict(config_path: pathlib.Path) -> dict:
     with open(config_path) as f:
         config_dict = yaml.safe_load(f) or {}
-
     if not isinstance(config_dict, dict):
         raise ValueError(f"Config must be a YAML mapping: {config_path}")
-
-    slurm_config = config_dict.get("slurm")
-    if not slurm_config:
-        return False
-
-    from leap_finetune.distribution.backends.slurm import generate_slurm_script
-
-    output_dir = config_path.parent / "slurms"
-    script_path = output_dir / f"{config_path.stem}.sh"
-
-    if script_path.exists():
-        print(f"Config contains SLURM settings - using existing script: {script_path}")
-    else:
-        print("Config contains SLURM settings - generating SLURM script...")
-        script_path = generate_slurm_script(
-            config_path, config_dict, output_dir, auto_submit=False
-        )
-
-    print("Submitting SLURM job...")
-    result = subprocess.run(
-        ["sbatch", str(script_path)], capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        print(f"Failed to submit job: {result.stderr}")
-        sys.exit(1)
-
-    print(f"SLURM job submitted: {result.stdout.strip()}")
-    return True
+    return config_dict
 
 
 def _parse_cli_args():
@@ -102,8 +59,7 @@ def _generate_slurm_script(config_path_arg: str | None, output_dir_arg: str | No
         sys.exit(1)
 
     config_path = resolve_config_path(config_path_arg)
-    with open(config_path) as f:
-        config_dict = yaml.safe_load(f) or {}
+    config_dict = _load_config_dict(config_path)
 
     if output_dir_arg:
         output_dir = pathlib.Path(output_dir_arg)
@@ -127,28 +83,54 @@ def _assert_local_cuda_available() -> None:
         sys.exit(1)
 
 
-def run_config(config_path: str | pathlib.Path) -> None:
-    """Launch a training job from a YAML config path.
+def check_and_handle_slurm(
+    config_path_arg: str | None = None,
+    *,
+    config_dict: dict | None = None,
+) -> bool:
+    from leap_finetune.distribution.backends.slurm import check_and_handle_slurm as _impl
+
+    return _impl(config_path_arg, config_dict=config_dict)
+
+
+def run_config(config_path) -> None:
+    """Launch a training job from a YAML config path or typed JobConfig.
 
     This is the programmatic equivalent of `leap-finetune <config>`. It keeps
     the same backend dispatch behavior: configs with `slurm`, `kuberay`, or
     `modal` sections submit remotely; other configs launch local Ray training.
     """
-    config_path_arg = str(config_path)
+    from leap_finetune.config import JobConfig
+    from leap_finetune.config.parser import (
+        materialize_job_config,
+        normalized_job_config_dict,
+        parse_job_config,
+        print_job_config_summary,
+    )
+
+    parsed_job = None
+    config_dict = None
+    config_path_arg = None
+    if isinstance(config_path, JobConfig):
+        parsed_job = config_path
+        config_dict = normalized_job_config_dict(parsed_job)
+    else:
+        config_path_arg = str(config_path)
+
     # === Remote backend dispatch ===
     # Keep this path light: Slurm/Modal submission should not import torch, Ray,
     # PEFT, or datasets unless we are actually launching local training.
-    if check_and_handle_slurm(config_path_arg):
+    if check_and_handle_slurm(config_path_arg, config_dict=config_dict):
         return
 
     from leap_finetune.distribution.backends.kuberay import check_and_handle_kuberay
 
-    if check_and_handle_kuberay(config_path_arg):
+    if check_and_handle_kuberay(config_path_arg, config_dict=config_dict):
         return
 
     from leap_finetune.distribution.backends.modal import check_and_handle_modal
 
-    if check_and_handle_modal(config_path_arg):
+    if check_and_handle_modal(config_path_arg, config_dict=config_dict):
         return
 
     _assert_local_cuda_available()
@@ -157,17 +139,15 @@ def run_config(config_path: str | pathlib.Path) -> None:
     from leap_finetune.data_loading.dataset_loader import DatasetLoader
     from leap_finetune.distribution.ray_trainer import ray_trainer
     from leap_finetune.training.utils.logging import setup_training_environment
-    from leap_finetune.config.parser import (
-        parse_job_config,
-        print_job_config_summary,
-    )
 
     setup_training_environment()
 
     print("Launching leap-finetune")
 
     try:
-        job_config = parse_job_config(config_path_arg)
+        if parsed_job is None:
+            parsed_job = parse_job_config(config_path_arg)
+        job_config = materialize_job_config(parsed_job)
         print_job_config_summary(job_config)
 
         if isinstance(job_config.dataset, DatasetLoader):

@@ -27,6 +27,7 @@ dependencies = [
     "trackio>=0.3",
     "typer>=0.20.0",
     "kubernetes>=34.0.0",
+    "pydantic>=2.0",
     "bitsandbytes>=0.48.0; sys_platform == 'linux'",
 ]
 

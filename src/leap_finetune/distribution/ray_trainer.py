@@ -15,6 +15,9 @@ from leap_finetune.checkpointing.model_loading import _resolve_model_id, load_to
 from leap_finetune.data_loading.dataset_loader import DatasetLoader
 from leap_finetune.data_loading.ray_data_utils import create_ray_datasets
 from leap_finetune.distribution.data_sharding import ExpertParallelDataConfig
+from leap_finetune.distribution.distributed_configs import (
+    strip_distributed_training_config,
+)
 from leap_finetune.distribution.ray_runtime import (
     build_scaling_config,
     get_ray_env_vars,
@@ -183,6 +186,11 @@ def ray_trainer(job_config: dict) -> None:
     )
     if num_workers < 1:
         raise ValueError("No GPU workers available for Ray training")
+
+    training_config = strip_distributed_training_config(
+        training_config,
+        num_workers=num_workers,
+    )
 
     train_loop = TRAINING_LOOPS.get(training_type)
     if train_loop is None:

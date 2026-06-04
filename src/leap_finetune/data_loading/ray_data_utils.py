@@ -6,7 +6,9 @@ import shutil
 import uuid
 from pathlib import Path
 
+import ray
 import ray.data
+import pyarrow as pa
 from datasets import Dataset
 from rich.console import Console
 
@@ -109,10 +111,11 @@ def ray_dataset_to_hf(ray_ds) -> Dataset | None:
     if ray_ds is None:
         return None
 
-    rows = list(ray_ds.iter_rows())
-    if not rows:
+    arrow_refs = ray_ds.to_arrow_refs()
+    if not arrow_refs:
         return Dataset.from_dict({})
-    return Dataset.from_list(rows)
+    tables = ray.get(arrow_refs)
+    return Dataset(pa.concat_tables(tables))
 
 
 # === Dataset Pipeline ===

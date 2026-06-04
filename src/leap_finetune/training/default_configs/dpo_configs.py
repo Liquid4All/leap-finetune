@@ -1,51 +1,8 @@
 from leap_finetune import DPO_OUTPUT_PATH
-
-
-########################
-#   DEEPSPEED CONFIGS   #
-########################
-
-
-DEEPSPEED_CONFIG = {
-    "zero_optimization": {
-        "stage": 2,
-        "overlap_comm": True,
-    },
-    "train_batch_size": "auto",
-    "train_micro_batch_size_per_gpu": "auto",
-    "gradient_clipping": "auto",
-    "gradient_accumulation_steps": "auto",
-    "bf16": {"enabled": "auto"},
-    "activation_checkpointing": {
-        "partition_activations": False,
-        "cpu_checkpointing": False,
-        "contiguous_memory_optimization": False,
-        "number_checkpoints": None,
-        "synchronize_checkpoint_boundary": False,
-        "profile": False,
-    },
-}
-
-
-MOE_DEEPSPEED_CONFIG = {
-    "zero_optimization": {
-        "stage": 0,
-        "overlap_comm": True,
-    },
-    "train_batch_size": "auto",
-    "train_micro_batch_size_per_gpu": "auto",
-    "gradient_clipping": "auto",
-    "gradient_accumulation_steps": "auto",
-    "bf16": {"enabled": "auto"},
-    "activation_checkpointing": {
-        "partition_activations": False,
-        "cpu_checkpointing": False,
-        "contiguous_memory_optimization": False,
-        "number_checkpoints": None,
-        "synchronize_checkpoint_boundary": False,
-        "profile": False,
-    },
-}
+from leap_finetune.distribution.distributed_configs import (
+    DEEPSPEED_ZERO2_CONFIG,
+    MOE_DEEPSPEED_ZERO0_CONFIG,
+)
 
 
 ########################
@@ -67,7 +24,7 @@ DEFAULT_DPO = {
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "ddp_find_unused_parameters": False,
-    "deepspeed": DEEPSPEED_CONFIG,
+    "deepspeed": DEEPSPEED_ZERO2_CONFIG,
     "chat_template": None,
     "chat_template_path": None,
     "manual_sharded_checkpoint_format": "hf",
@@ -125,7 +82,7 @@ MOE_DPO = {
     # Distributed strategy will be set automatically:
     # - With PEFT: uses MOE_DEEPSPEED_CONFIG
     # - Without PEFT: uses FSDP_CONFIG
-    "deepspeed": MOE_DEEPSPEED_CONFIG,
+    "deepspeed": MOE_DEEPSPEED_ZERO0_CONFIG,
     "chat_template": None,
     "chat_template_path": None,
     "manual_sharded_checkpoint_format": "hf",

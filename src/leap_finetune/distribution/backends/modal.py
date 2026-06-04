@@ -8,25 +8,39 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _HF_SECRET_NAME = "huggingface-secret"
 
 
-def check_and_handle_modal(config_path_arg: str) -> bool:
-    if not config_path_arg:
-        return False
-
-    try:
-        from leap_finetune.config.parser import resolve_config_path
-
-        config_path = resolve_config_path(config_path_arg)
-    except Exception:
-        return False
-
-    try:
-        with open(config_path) as f:
-            config_dict = yaml.safe_load(f)
-
-        modal_cfg = config_dict.get("modal")
-        if not modal_cfg:
+def check_and_handle_modal(
+    config_path_arg: str | None = None,
+    *,
+    config_dict: dict | None = None,
+) -> bool:
+    if config_dict is None:
+        if not config_path_arg:
             return False
 
+        try:
+            from leap_finetune.config.parser import resolve_config_path
+
+            config_path = resolve_config_path(config_path_arg)
+        except Exception:
+            return False
+
+        try:
+            with open(config_path) as f:
+                config_dict = yaml.safe_load(f)
+        except SystemExit:
+            raise
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            print(f"\nError submitting Modal job: {e}")
+            sys.exit(1)
+
+    modal_cfg = config_dict.get("modal") if isinstance(config_dict, dict) else None
+    if not modal_cfg:
+        return False
+
+    try:
         print("Config contains Modal settings - submitting Modal job...\n")
         _preflight_checks(config_dict, modal_cfg)
         _print_config_summary(config_dict, modal_cfg)

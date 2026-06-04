@@ -1,9 +1,11 @@
 import copy
 import logging
 
+import ray
 import ray.data
 import torch
 from datasets import Dataset, Features, Sequence, Value
+import pyarrow as pa
 from rich.console import Console
 from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from trl.data_utils import pack_dataset
@@ -350,16 +352,11 @@ def tokenize_dpo_dataset(
         },
     )
 
-    # Materialize with proper Arrow types
-    rows = list(ds.iter_rows())
-    features = Features(
-        {
-            "prompt_ids": Sequence(Value("int64")),
-            "chosen_ids": Sequence(Value("int64")),
-            "rejected_ids": Sequence(Value("int64")),
-        }
-    )
-    hf_ds = Dataset.from_list(rows, features=features)
-    console.print(f"[dim]Tokenized {len(hf_ds):,} DPO rows[/dim]")
+    arrow_refs = ds.to_arrow_refs()
+    if not arrow_refs:
+        return ds
 
-    return ray.data.from_arrow(hf_ds.data.table)
+    tables = ray.get(arrow_refs)
+    row_count = sum(table.num_rows for table in tables)
+    console.print(f"[dim]Tokenized {row_count:,} DPO rows[/dim]")
+    return ray.data.from_arrow(pa.concat_tables(tables))

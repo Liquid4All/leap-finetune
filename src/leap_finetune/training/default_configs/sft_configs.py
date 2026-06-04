@@ -1,13 +1,19 @@
 from leap_finetune import SFT_OUTPUT_PATH
+from leap_finetune.distribution.distributed_configs import (
+    DEEPSPEED_ZERO2_WITH_OPTIMIZER_CONFIG,
+    MOE_DEEPSPEED_ZERO0_CONFIG,
+)
+from leap_finetune.training.utils.config_filter import (
+    BASE_RUNTIME_EXCLUDED_KEYS,
+    DISTRIBUTED_RUNTIME_EXCLUDED_KEYS,
+    MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS,
+    MODEL_RUNTIME_EXCLUDED_KEYS,
+)
 
 # Keys that do not belong in TrainingArguments.
 # Some of these are still consumed by preprocessing/collation (for example
 # assistant/completion-only loss masking) and must not be dropped upstream.
 SFT_EXCLUDED_KEYS = {
-    "training_type",
-    "wandb_logging",
-    "tracker",
-    "trackio_space_id",
     "packing",
     "max_length",
     "drop_overlength",
@@ -20,80 +26,12 @@ SFT_EXCLUDED_KEYS = {
     "dataset_num_proc",
     "completion_only_loss",
     "assistant_only_loss",
-    "chat_template",
-    "chat_template_path",
-    "adapter_path",
-    "reshard_after_forward",
-    "fsdp_cpu_offload",
-    "resume_from_checkpoint",
-    "checkpoint_staging_dir",
-    "manual_sharded_checkpoint_format",
-}
-
-
-########################
-#   DEEPSPEED CONFIGS   #
-########################
-
-
-DEEPSPEED_CONFIG = {
-    "zero_optimization": {
-        "stage": 2,
-        "overlap_comm": True,
-    },
-    "train_batch_size": "auto",
-    "train_micro_batch_size_per_gpu": "auto",
-    "gradient_clipping": "auto",
-    "gradient_accumulation_steps": "auto",
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": "auto",  # Uses learning_rate from training config
-            "betas": "auto",  # DEFAULT: (0.9, 0.999)
-            "eps": "auto",  # DEFAULT: 1e-8
-            "weight_decay": "auto",  # DEFAULT: 0.01
-        },
-    },
-    "bf16": {"enabled": "auto"},
-    "activation_checkpointing": {
-        "partition_activations": False,
-        "cpu_checkpointing": False,
-        "contiguous_memory_optimization": False,
-        "number_checkpoints": None,
-        "synchronize_checkpoint_boundary": False,
-        "profile": False,
-    },
-}
-
-
-MOE_DEEPSPEED_CONFIG = {
-    "zero_optimization": {
-        "stage": 0,
-        "overlap_comm": True,
-    },
-    "train_batch_size": "auto",
-    "train_micro_batch_size_per_gpu": "auto",
-    "gradient_clipping": "auto",
-    "gradient_accumulation_steps": "auto",
-    "optimizer": {
-        "type": "AdamW",
-        "params": {
-            "lr": "auto",  # Uses learning_rate from training config
-            "betas": "auto",  # DEFAULT: (0.9, 0.999)
-            "eps": "auto",  # DEFAULT: 1e-8
-            "weight_decay": "auto",  # DEFAULT: 0.01
-        },
-    },
-    "fp16": {"enabled": "auto"},
-    "activation_checkpointing": {
-        "partition_activations": False,
-        "cpu_checkpointing": False,
-        "contiguous_memory_optimization": False,
-        "number_checkpoints": None,
-        "synchronize_checkpoint_boundary": False,
-        "profile": False,
-    },
-}
+} | (
+    BASE_RUNTIME_EXCLUDED_KEYS
+    | MODEL_RUNTIME_EXCLUDED_KEYS
+    | DISTRIBUTED_RUNTIME_EXCLUDED_KEYS
+    | MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS
+)
 
 
 ########################
@@ -114,7 +52,7 @@ DEFAULT_SFT = {
     "save_strategy": "epoch",
     "eval_strategy": "epoch",
     "ddp_find_unused_parameters": False,
-    "deepspeed": DEEPSPEED_CONFIG,
+    "deepspeed": DEEPSPEED_ZERO2_WITH_OPTIMIZER_CONFIG,
 }
 
 
@@ -142,5 +80,5 @@ MOE_SFT = {
     # Distributed strategy will be set automatically:
     # - With PEFT: uses MOE_DEEPSPEED_CONFIG
     # - Without PEFT: uses FSDP_CONFIG
-    "deepspeed": MOE_DEEPSPEED_CONFIG,
+    "deepspeed": MOE_DEEPSPEED_ZERO0_CONFIG,
 }

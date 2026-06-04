@@ -6,23 +6,14 @@ from datetime import datetime
 from peft import LoraConfig, PeftModel, get_peft_model
 from transformers import AutoTokenizer, PreTrainedModel, ProcessorMixin
 
-from leap_finetune.training.default_configs import PeftConfig
-
 logger = logging.getLogger(__name__)
 
 
 def apply_peft_to_model(
-    model: PreTrainedModel, peft_config: PeftConfig | LoraConfig
+    model: PreTrainedModel, peft_config: LoraConfig
 ) -> PreTrainedModel:
     logger.info("Applying fresh LoRA adapter")
-
-    # Handle enum, _CustomPeftConfig, and direct LoraConfig
-    if hasattr(peft_config, "value"):
-        config = peft_config.value
-    else:
-        config = peft_config
-
-    peft_model = get_peft_model(model, config)
+    peft_model = get_peft_model(model, peft_config)
     peft_model.print_trainable_parameters()
 
     return peft_model

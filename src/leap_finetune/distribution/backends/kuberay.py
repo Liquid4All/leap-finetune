@@ -66,22 +66,27 @@ def _build_submission_config(config_dict: dict, kuberay_cfg: dict) -> tuple[dict
     return submission_config, output_dir
 
 
-def check_and_handle_kuberay(config_path_arg: str) -> bool:
-    if not config_path_arg:
-        return False
+def check_and_handle_kuberay(
+    config_path_arg: str | None = None,
+    *,
+    config_dict: dict | None = None,
+) -> bool:
+    if config_dict is None:
+        if not config_path_arg:
+            return False
 
-    try:
-        from leap_finetune.config.parser import resolve_config_path
+        try:
+            from leap_finetune.config.parser import resolve_config_path
 
-        config_path = resolve_config_path(config_path_arg)
-    except (FileNotFoundError, Exception):
-        return False
+            config_path = resolve_config_path(config_path_arg)
+        except (FileNotFoundError, Exception):
+            return False
 
-    try:
         with open(config_path) as f:
             config_dict = yaml.safe_load(f) or {}
 
-        kuberay_cfg = config_dict.get("kuberay")
+    try:
+        kuberay_cfg = config_dict.get("kuberay") if isinstance(config_dict, dict) else None
         if not kuberay_cfg:
             return False
 

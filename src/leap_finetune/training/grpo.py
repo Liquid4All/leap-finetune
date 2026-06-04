@@ -30,6 +30,7 @@ from leap_finetune.training.utils.worker_setup import (
     init_tracking_from_config,
     setup_training_worker,
 )
+from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +61,12 @@ def grpo_run(training_config: dict) -> None:
     if resume_from:
         logger.info("Resuming from checkpoint: %s", resume_from)
 
-    excluded_keys = GRPO_EXCLUDED_KEYS | {"leap_run_name_template"}
-    train_config_filtered = {
-        k: v for k, v in train_config.items() if k not in excluded_keys
-    }
+    excluded_keys = GRPO_EXCLUDED_KEYS
+    train_config_filtered, _ = filter_runtime_config_kwargs(
+        train_config,
+        excluded_keys=excluded_keys,
+        config_cls=GRPOConfig,
+    )
 
     tracker = init_tracking_from_config(
         job_name,

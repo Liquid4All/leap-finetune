@@ -1,15 +1,25 @@
+from __future__ import annotations
+
 import logging
 import os
 import pathlib
 from datetime import datetime
+from typing import Any
 
 import yaml
+from peft import LoraConfig
+from pydantic import ValidationError
 
-from leap_finetune.data_loading.dataset_loader import DatasetLoader
-from leap_finetune.training.default_configs import PeftConfig, TrainingConfig
-from leap_finetune.config.job_config import JobConfig
 from leap_finetune import LEAP_FINETUNE_DIR
 from leap_finetune.checkpointing.model_info import is_moe_model_from_name
+from leap_finetune.config.job_config import (
+    DatasetConfig,
+    JobConfig,
+    ResolvedJobConfig,
+    _ResolvedConfigValue,
+)
+from leap_finetune.data_loading.dataset_loader import DatasetLoader
+from leap_finetune.training.default_configs import PEFT_DEFAULTS, TRAINING_DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -33,27 +43,21 @@ DATASET_TYPE_ALIASES = {
 VALID_DATASET_TYPES = {"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo"}
 
 
-def resolve_config_path(config_input: str) -> pathlib.Path:
+def resolve_config_path(config_input: str | pathlib.Path) -> pathlib.Path:
     input_path = pathlib.Path(config_input)
-
-    # === Candidate names ===
-    candidates = [config_input]
+    candidates = [str(input_path)]
     if not input_path.suffix:
-        candidates.append(f"{config_input}.yaml")
+        candidates.append(f"{input_path}.yaml")
 
     for candidate in candidates:
         candidate_path = pathlib.Path(candidate)
-
-        # === Explicit path ===
         if candidate_path.exists():
             return candidate_path.resolve()
 
-        # === Local job config ===
         local_job_config = pathlib.Path.cwd() / "job_configs" / candidate
         if local_job_config.exists():
             return local_job_config.resolve()
 
-        # === Repo job config ===
         repo_job_config = LEAP_FINETUNE_DIR / "job_configs" / candidate
         if repo_job_config.exists():
             return repo_job_config.resolve()
@@ -75,17 +79,18 @@ def _resolve_local_path(value: str | None, *, base_dir: pathlib.Path) -> str | N
     return value
 
 
-def _load_yaml_config(path_obj: pathlib.Path) -> dict:
+def _load_yaml_config(path_obj: pathlib.Path) -> dict[str, Any]:
     with open(path_obj) as f:
         config_dict = yaml.safe_load(f) or {}
-
     if not isinstance(config_dict, dict):
         raise ValueError(f"Config must be a YAML mapping: {path_obj}")
     return config_dict
 
 
-def _resolve_reward_paths_to_absolute(rewards_cfg, config_dir: pathlib.Path):
-    """Resolve local reward specs before Ray workers enter sandbox dirs."""
+def _resolve_reward_paths_to_absolute(
+    rewards_cfg: list[Any] | dict[str, Any] | None,
+    config_dir: pathlib.Path,
+):
     config_dir = config_dir.resolve()
     cwd = pathlib.Path.cwd().resolve()
     rewards_dir = _REWARDS_DIR.resolve()
@@ -116,7 +121,7 @@ def _resolve_reward_paths_to_absolute(rewards_cfg, config_dir: pathlib.Path):
     if isinstance(rewards_cfg, dict):
         out = dict(rewards_cfg)
         for key in ("funcs", "rewards"):
-            if key in out:
+            if key in out and isinstance(out[key], list):
                 out[key] = [
                     _abs(spec) if isinstance(spec, str) else spec for spec in out[key]
                 ]
@@ -146,9 +151,7 @@ def generate_run_name(
 ) -> str:
     safe_model_name = model_name.split("/")[-1]
     dataset_name_full = dataset_path.strip("/").split("/")[-1]
-    dataset_name = (
-        dataset_name_full[:10] if len(dataset_name_full) > 10 else dataset_name_full
-    )
+    dataset_name = dataset_name_full[:10] if len(dataset_name_full) > 10 else dataset_name_full
     limit_str = str(dataset_limit) if dataset_limit else "all"
 
     if learning_rate:
@@ -177,79 +180,24 @@ def generate_run_name(
     return name
 
 
-def _parse_dataset_loader(
-    ds_config: dict,
-    *,
-    config_dir: pathlib.Path,
-    model_name: str,
-) -> DatasetLoader:
-    ds_type = DATASET_TYPE_ALIASES.get(ds_config.get("type"), ds_config.get("type"))
-    if ds_type not in VALID_DATASET_TYPES:
-        raise ValueError(
-            f"Invalid dataset type: '{ds_type}'. Must be one of: {sorted(VALID_DATASET_TYPES)}"
+def parse_job_config(config_input: str | pathlib.Path) -> JobConfig:
+    path_obj = resolve_config_path(config_input)
+    config_dict = _load_yaml_config(path_obj)
+    try:
+        return JobConfig.model_validate(
+            {
+                **config_dict,
+                "config_dir": str(path_obj.parent.resolve()),
+            }
         )
-
-    shared_path = ds_config.get("path")
-    train_path = ds_config.get("train_path")
-    if shared_path and train_path:
-        raise ValueError("Use either dataset.path or dataset.train_path, not both")
-
-    dataset_path_env = os.getenv("DATASET_PATH")
-    effective_train_path = dataset_path_env or train_path or shared_path
-    if not effective_train_path:
-        raise ValueError("dataset.path or dataset.train_path is required")
-
-    effective_train_path = _resolve_local_path(
-        effective_train_path,
-        base_dir=pathlib.Path.cwd() if dataset_path_env else config_dir,
-    )
-
-    val_path = _resolve_local_path(
-        ds_config.get("val_path"),
-        base_dir=config_dir,
-    )
-    shared_subset = ds_config.get("subset")
-    train_subset = ds_config.get("train_subset", shared_subset)
-    val_subset = ds_config.get("val_subset", shared_subset)
-    train_split = ds_config.get("train_split", ds_config.get("split", "train"))
-    val_split = ds_config.get("val_split")
-    if val_path and val_split is None:
-        val_split = "train"
-
-    test_size = ds_config.get("test_size")
-    if test_size is not None and (val_path is not None or val_split is not None):
-        raise ValueError(
-            "dataset.test_size cannot be combined with dataset.val_path or dataset.val_split"
-        )
-    if (
-        ds_type in ("grpo", "vlm_grpo")
-        and test_size is None
-        and val_path is None
-        and val_split is None
-    ):
-        test_size = 0.01
-
-    return DatasetLoader(
-        dataset_path=effective_train_path,
-        dataset_type=ds_type,
-        model_name=model_name,
-        limit=ds_config.get("limit"),
-        split=train_split,
-        test_size=test_size,
-        subset=train_subset,
-        val_dataset_path=val_path,
-        val_split=val_split,
-        val_subset=val_subset,
-        image_root=ds_config.get("image_root"),
-        cache_dataset=ds_config.get("cache_dataset", False),
-        hf_streaming_batch_size=ds_config.get("hf_streaming_batch_size", 10000),
-    )
+    except ValidationError as e:
+        raise ValueError(f"Invalid config: {e}") from e
 
 
 def _resolve_training_type(
     raw_training_type: str,
     model_name: str,
-    train_config_dict: dict,
+    train_config_dict: dict[str, Any],
 ) -> str:
     if raw_training_type not in ("sft", "dpo"):
         return raw_training_type
@@ -260,28 +208,79 @@ def _resolve_training_type(
     uses_moe_config = isinstance(base_config, str) and base_config.startswith("MOE_")
     if uses_moe_config or "moe_training" in train_config_dict:
         return f"moe_{raw_training_type}"
-
     return raw_training_type
 
 
-def _build_training_config(train_config_dict: dict, training_type: str):
-    _require_known_training_type(training_type)
+def _build_dataset_loader(
+    dataset_cfg: DatasetConfig,
+    *,
+    config_dir: pathlib.Path,
+    model_name: str,
+) -> DatasetLoader:
+    ds_type = DATASET_TYPE_ALIASES.get(dataset_cfg.type, dataset_cfg.type)
+    if ds_type not in VALID_DATASET_TYPES:
+        raise ValueError(
+            f"Invalid dataset type: '{ds_type}'. Must be one of: {sorted(VALID_DATASET_TYPES)}"
+        )
 
+    dataset_path_env = os.getenv("DATASET_PATH")
+    effective_train_path = dataset_path_env or dataset_cfg.train_path or dataset_cfg.path
+    if not effective_train_path:
+        raise ValueError("dataset.path or dataset.train_path is required")
+
+    effective_train_path = _resolve_local_path(
+        effective_train_path,
+        base_dir=pathlib.Path.cwd() if dataset_path_env else config_dir,
+    )
+    val_path = _resolve_local_path(dataset_cfg.val_path, base_dir=config_dir)
+    shared_subset = dataset_cfg.subset
+    train_subset = dataset_cfg.train_subset or shared_subset
+    val_subset = dataset_cfg.val_subset or shared_subset
+    train_split = dataset_cfg.train_split or dataset_cfg.split
+    val_split = dataset_cfg.val_split
+    if val_path and val_split is None:
+        val_split = "train"
+
+    test_size = dataset_cfg.test_size
+    if ds_type in ("grpo", "vlm_grpo") and test_size is None and val_path is None and val_split is None:
+        test_size = 0.01
+
+    return DatasetLoader(
+        dataset_path=effective_train_path,
+        dataset_type=ds_type,
+        model_name=model_name,
+        limit=dataset_cfg.limit,
+        split=train_split,
+        test_size=test_size,
+        subset=train_subset,
+        val_dataset_path=val_path,
+        val_split=val_split,
+        val_subset=val_subset,
+        image_root=dataset_cfg.image_root,
+        cache_dataset=dataset_cfg.cache_dataset,
+        hf_streaming_batch_size=dataset_cfg.hf_streaming_batch_size,
+    )
+
+
+def _build_training_defaults(
+    train_config_dict: dict[str, Any],
+    training_type: str,
+):
+    _require_known_training_type(training_type)
     train_config_dict = train_config_dict.copy()
     base_config_name = train_config_dict.pop("extends", None) or train_config_dict.pop(
         "base", None
     )
-    base_config_map = {member.name: member for member in TrainingConfig}
 
     if base_config_name:
-        if base_config_name not in base_config_map:
-            available = list(base_config_map.keys())
+        if base_config_name not in TRAINING_DEFAULTS:
+            available = list(TRAINING_DEFAULTS.keys())
             raise ValueError(
                 f"Unknown base config: {base_config_name}. Available: {available}"
             )
-        base_train_config = base_config_map[base_config_name]
+        base_train_config = TRAINING_DEFAULTS[base_config_name]
     else:
-        base_train_config = base_config_map[TRAINING_TYPE_TO_CONFIG[training_type]]
+        base_train_config = TRAINING_DEFAULTS[TRAINING_TYPE_TO_CONFIG[training_type]]
 
     for float_key in ("learning_rate", "weight_decay"):
         if float_key in train_config_dict and isinstance(
@@ -289,10 +288,14 @@ def _build_training_config(train_config_dict: dict, training_type: str):
         ):
             train_config_dict[float_key] = float(train_config_dict[float_key])
 
-    return base_train_config.override(**train_config_dict), train_config_dict
+    resolved_train_config = base_train_config.copy()
+    resolved_train_config.update(
+        {k: v for k, v in train_config_dict.items() if v is not None}
+    )
+    return _ResolvedConfigValue(resolved_train_config), train_config_dict
 
 
-def _build_peft_config(peft_dict: dict | None):
+def _build_peft_defaults(peft_dict: dict[str, Any] | None):
     peft_dict = peft_dict.copy() if peft_dict else {}
     use_peft = peft_dict.get("use_peft")
     if use_peft is False:
@@ -302,21 +305,18 @@ def _build_peft_config(peft_dict: dict | None):
     peft_dict.pop("use_peft", None)
 
     if not base_peft_name:
-        peft_config = PeftConfig.DEFAULT_LORA if use_peft is True else None
+        peft_config = _ResolvedConfigValue(PEFT_DEFAULTS["DEFAULT_LORA"]) if use_peft is True else None
         return peft_config, use_peft
 
-    base_peft_map = {member.name: member for member in PeftConfig}
-    if base_peft_name not in base_peft_map:
-        available = list(base_peft_map.keys())
+    if base_peft_name not in PEFT_DEFAULTS:
+        available = list(PEFT_DEFAULTS.keys())
         raise ValueError(
             f"Unknown base PEFT config: {base_peft_name}. Available: {available}"
         )
 
-    base_config_value = base_peft_map[base_peft_name].value
+    base_config_value = PEFT_DEFAULTS[base_peft_name]
     if base_config_value is None:
         return None, use_peft
-
-    from peft import LoraConfig
 
     base_dict = (
         base_config_value.to_dict()
@@ -324,24 +324,12 @@ def _build_peft_config(peft_dict: dict | None):
         else dict(base_config_value)
     )
     base_dict.update({k: v for k, v in peft_dict.items() if v is not None})
-    peft_config_obj = LoraConfig(**base_dict)
-
-    class _CustomPeftConfig:
-        def __init__(self, value):
-            self.value = value
-
-    return _CustomPeftConfig(peft_config_obj), use_peft
-
-
-def _resolve_project_name(config_dict: dict) -> str:
-    return (
-        config_dict.get("project_name") or config_dict.get("job_name") or "default_job"
-    )
+    return _ResolvedConfigValue(LoraConfig(**base_dict)), use_peft
 
 
 def _resolve_output_dir(
     *,
-    final_train_values: dict,
+    final_train_values: dict[str, Any],
     project_name: str,
     run_name: str,
 ) -> pathlib.Path:
@@ -357,11 +345,7 @@ def _resolve_output_dir(
     if resume_from == "latest":
         project_path = pathlib.Path(base_project_dir).resolve()
         run_dirs = (
-            [
-                d
-                for d in project_path.iterdir()
-                if d.is_dir() and (d / "latest").exists()
-            ]
+            [d for d in project_path.iterdir() if d.is_dir() and (d / "latest").exists()]
             if project_path.exists()
             else []
         )
@@ -396,26 +380,23 @@ def _create_output_dir(
         return fallback_dir
 
 
-def parse_job_config(config_input: str) -> JobConfig:
-    path_obj = resolve_config_path(config_input)
-    config_dir = path_obj.parent
-    config_dict = _load_yaml_config(path_obj)
+def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
+    config_dir = pathlib.Path(job_config.config_dir or pathlib.Path.cwd()).resolve()
+    model_name = job_config.model_name
 
-    model_name = config_dict.get("model_name", "LFM2-1.2B")
-    ds_config = config_dict.get("dataset", {})
-    dataset = _parse_dataset_loader(
-        ds_config,
+    dataset = _build_dataset_loader(
+        job_config.dataset,
         config_dir=config_dir,
         model_name=model_name,
     )
 
-    train_config_dict = config_dict.get("training_config", {})
+    train_config_dict = job_config.training_config.model_dump(exclude_none=True)
     training_type = _resolve_training_type(
-        config_dict.get("training_type", "sft"),
+        job_config.training_type,
         model_name,
         train_config_dict,
     )
-    final_training_config, train_config_overrides = _build_training_config(
+    final_training_config, train_config_overrides = _build_training_defaults(
         train_config_dict,
         training_type,
     )
@@ -429,14 +410,15 @@ def parse_job_config(config_input: str) -> JobConfig:
         base_dir=config_dir,
     )
 
-    peft_config, use_peft = _build_peft_config(config_dict.get("peft_config"))
-    project_name = _resolve_project_name(config_dict)
+    peft_dict = job_config.peft_config.model_dump(exclude_none=True) if job_config.peft_config else None
+    peft_config, use_peft = _build_peft_defaults(peft_dict)
+    project_name = job_config.resolved_job_name
 
     run_name = generate_run_name(
         model_name=model_name,
         training_type=training_type,
         dataset_path=dataset.dataset_path,
-        dataset_limit=ds_config.get("limit"),
+        dataset_limit=job_config.dataset.limit,
         learning_rate=final_train_values.get("learning_rate"),
         warmup_ratio=final_train_values.get("warmup_ratio"),
         use_peft=use_peft is not False and peft_config is not None,
@@ -453,7 +435,6 @@ def parse_job_config(config_input: str) -> JobConfig:
         project_name=project_name,
         run_name=run_name,
     )
-
     final_train_values["output_dir"] = str(final_output_dir)
     final_train_values["leap_run_name_template"] = run_name
     if not dataset.has_eval_dataset():
@@ -465,24 +446,24 @@ def parse_job_config(config_input: str) -> JobConfig:
             )
         final_train_values["eval_strategy"] = "no"
 
-    model_config = config_dict.get("model_config")
-    benchmark_configs = config_dict.get("benchmarks")
-    rewards_cfg = config_dict.get("rewards")
-    if rewards_cfg is not None:
-        rewards_cfg = _resolve_reward_paths_to_absolute(rewards_cfg, config_dir)
-    rl_env_cfg = config_dict.get("rl_env")
-    grpo_rollout_cfg = config_dict.get("grpo_rollout")
-
-    if training_type not in ("grpo", "vlm_grpo"):
-        for key, value in (
-            ("rewards", rewards_cfg),
-            ("rl_env", rl_env_cfg),
-            ("grpo_rollout", grpo_rollout_cfg),
-        ):
-            if value is not None:
-                raise ValueError(
-                    f"Config key `{key}` is only valid for training_type in "
-                    f"('grpo', 'vlm_grpo'); got training_type={training_type!r}."
+    rewards_cfg = _resolve_reward_paths_to_absolute(job_config.rewards, config_dir)
+    rl_env_cfg = job_config.rl_env
+    grpo_rollout_cfg = job_config.grpo_rollout
+    benchmark_configs = None
+    if job_config.evals:
+        benchmark_configs = job_config.evals.model_dump(exclude_none=True)
+        if isinstance(benchmark_configs.get("image_root"), str):
+            benchmark_configs["image_root"] = _resolve_local_path(
+                benchmark_configs["image_root"],
+                base_dir=config_dir,
+            )
+        for bench in benchmark_configs.get("benchmarks", []):
+            if isinstance(bench.get("path"), str):
+                bench["path"] = _resolve_local_path(bench["path"], base_dir=config_dir)
+            if isinstance(bench.get("image_root"), str):
+                bench["image_root"] = _resolve_local_path(
+                    bench["image_root"],
+                    base_dir=config_dir,
                 )
 
     _validate_parallelism_config(
@@ -491,7 +472,7 @@ def parse_job_config(config_input: str) -> JobConfig:
         model_name,
     )
 
-    return JobConfig(
+    return ResolvedJobConfig(
         job_name=project_name,
         model_name=model_name,
         training_type=training_type,
@@ -499,17 +480,56 @@ def parse_job_config(config_input: str) -> JobConfig:
         training_config=final_training_config,
         peft_config=peft_config,
         benchmark_configs=benchmark_configs,
-        model_config=model_config,
-        ray_config=config_dict.get("ray"),
+        model_config=job_config.model_overrides,
+        ray_config=job_config.ray.model_dump(exclude_none=True) if job_config.ray else None,
         rewards=rewards_cfg,
         rl_env=rl_env_cfg,
         grpo_rollout=grpo_rollout_cfg,
-        config_dir=str(config_dir.resolve()),
+        config_dir=str(config_dir),
     )
 
 
+def normalized_job_config_dict(
+    job_config: JobConfig,
+    *,
+    base_dir: pathlib.Path | None = None,
+) -> dict[str, Any]:
+    base_dir = (base_dir or pathlib.Path(job_config.config_dir or pathlib.Path.cwd())).resolve()
+    payload = job_config.model_dump(
+        by_alias=True,
+        exclude_none=True,
+    )
+    dataset_cfg = payload.get("dataset", {})
+    for key in ("path", "train_path", "val_path", "image_root"):
+        if isinstance(dataset_cfg.get(key), str):
+            dataset_cfg[key] = _resolve_local_path(dataset_cfg[key], base_dir=base_dir)
+
+    train_cfg = payload.get("training_config", {})
+    for key in ("chat_template_path", "adapter_path"):
+        if isinstance(train_cfg.get(key), str):
+            train_cfg[key] = _resolve_local_path(train_cfg[key], base_dir=base_dir)
+
+    benchmark_cfg = payload.get("evals", {})
+    if isinstance(benchmark_cfg.get("image_root"), str):
+        benchmark_cfg["image_root"] = _resolve_local_path(
+            benchmark_cfg["image_root"], base_dir=base_dir
+        )
+    for bench in benchmark_cfg.get("benchmarks", []):
+        if isinstance(bench.get("path"), str):
+            bench["path"] = _resolve_local_path(bench["path"], base_dir=base_dir)
+        if isinstance(bench.get("image_root"), str):
+            bench["image_root"] = _resolve_local_path(
+                bench["image_root"], base_dir=base_dir
+            )
+
+    if "rewards" in payload:
+        payload["rewards"] = _resolve_reward_paths_to_absolute(payload["rewards"], base_dir)
+    payload["config_dir"] = str(base_dir)
+    return payload
+
+
 def _validate_parallelism_config(
-    training_config: dict,
+    training_config: dict[str, Any],
     training_type: str,
     model_name: str,
 ) -> None:
@@ -547,7 +567,7 @@ def _validate_parallelism_config(
         raise ValueError(f"expert_parallel_size must be a power of 2, got {ep_size}")
 
 
-def print_job_config_summary(job_config: JobConfig) -> None:
+def print_job_config_summary(job_config: ResolvedJobConfig) -> None:
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
@@ -559,65 +579,26 @@ def print_job_config_summary(job_config: JobConfig) -> None:
     table.add_column("Property", style="bold cyan", min_width=18)
     table.add_column("Value", style="green")
 
+    table.add_row("Project", job_config.job_name)
     table.add_row("Model", job_config.model_name)
-    table.add_row("Job Name", job_config.job_name)
-    table.add_row("Training Type", job_config.training_type.upper())
-    table.add_row("Output Directory", str(config_value.get("output_dir")))
+    table.add_row("Training Type", job_config.training_type)
+    table.add_row("Dataset", job_config.dataset.dataset_path if job_config.dataset else "None")
+    table.add_row("Dataset Type", job_config.dataset.dataset_type if job_config.dataset else "None")
+    table.add_row("Output Dir", str(config_value.get("output_dir", "")))
+    if peft_value is not None:
+        table.add_row("PEFT", peft_value.__class__.__name__)
+    else:
+        table.add_row("PEFT", "disabled")
 
-    learning_rate = config_value.get("learning_rate")
-    if learning_rate is not None:
-        table.add_row("Learning Rate", f"{learning_rate:.2e}")
+    for key in (
+        "num_train_epochs",
+        "per_device_train_batch_size",
+        "learning_rate",
+        "gradient_accumulation_steps",
+        "eval_strategy",
+        "save_strategy",
+    ):
+        if key in config_value:
+            table.add_row(key, str(config_value[key]))
 
-    batch_size = config_value.get("per_device_train_batch_size")
-    if batch_size is not None:
-        table.add_row("Batch Size", f"{batch_size}")
-
-    num_epochs = config_value.get("num_train_epochs")
-    if num_epochs is not None:
-        table.add_row("Epochs", f"{num_epochs}")
-
-    warmup_ratio = config_value.get("warmup_ratio")
-    warmup_steps = config_value.get("warmup_steps")
-    if warmup_ratio is not None:
-        table.add_row("Warmup Ratio", f"{warmup_ratio:.2f}")
-    elif warmup_steps is not None:
-        table.add_row("Warmup Steps", f"{warmup_steps}")
-
-    save_strategy = config_value.get("save_strategy", "no")
-    if save_strategy != "no":
-        table.add_row("Save Strategy", save_strategy)
-
-    eval_strategy = config_value.get("eval_strategy", "no")
-    if eval_strategy != "no":
-        table.add_row("Eval Strategy", eval_strategy)
-
-    peft_details = ""
-    if peft_value and hasattr(peft_value, "r") and hasattr(peft_value, "lora_alpha"):
-        peft_details = f" (r={peft_value.r}, alpha={peft_value.lora_alpha})"
-    table.add_row("PEFT", f"Enabled{peft_details}" if peft_value else "Disabled")
-
-    dataset = job_config.dataset
-    if isinstance(dataset, DatasetLoader):
-        table.add_row("Dataset Path", dataset.dataset_path)
-        if dataset.val_dataset_path:
-            table.add_row("Validation Path", dataset.val_dataset_path)
-        elif dataset.val_split:
-            table.add_row("Validation Split", dataset.val_split)
-        elif dataset.test_size is None:
-            table.add_row("Validation", "Disabled")
-        else:
-            table.add_row("Validation Split", f"Random ({dataset.test_size:.2f})")
-        if dataset.limit:
-            table.add_row("Dataset Limit", f"{dataset.limit:,}")
-    elif isinstance(dataset, tuple):
-        table.add_row("Train Samples", f"{len(dataset[0]):,}")
-        table.add_row("Test Samples", f"{len(dataset[1]):,}")
-
-    Console().print(
-        Panel(
-            table,
-            title="[bold blue]Training Configuration[/bold blue]",
-            border_style="blue",
-            padding=(1, 2),
-        )
-    )
+    Console().print(Panel(table, title="Leap Job Config", border_style="blue"))

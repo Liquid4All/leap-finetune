@@ -1,14 +1,42 @@
-from leap_finetune.config.job_config import JobConfig
+from leap_finetune.config.job_config import (
+    BenchmarkConfig,
+    BenchmarkSuiteConfig,
+    DatasetConfig,
+    EvalConfig,
+    EvalSuiteConfig,
+    JobConfig,
+    KubeRayConfig,
+    ModalConfig,
+    PeftConfig,
+    RayConfig,
+    SlurmConfig,
+    TrainingConfig,
+)
 from leap_finetune.config.parser import (
     generate_run_name,
+    materialize_job_config,
     parse_job_config,
     print_job_config_summary,
+    normalized_job_config_dict,
     resolve_config_path,
 )
 
 __all__ = [
+    "BenchmarkConfig",
+    "BenchmarkSuiteConfig",
+    "DatasetConfig",
+    "EvalConfig",
+    "EvalSuiteConfig",
     "JobConfig",
+    "KubeRayConfig",
+    "ModalConfig",
+    "PeftConfig",
+    "RayConfig",
+    "SlurmConfig",
+    "TrainingConfig",
     "generate_run_name",
+    "materialize_job_config",
+    "normalized_job_config_dict",
     "parse_job_config",
     "print_job_config_summary",
     "resolve_config_path",

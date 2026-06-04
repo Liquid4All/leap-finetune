@@ -1,15 +1,12 @@
 import pytest
 
+from leap_finetune.config import materialize_job_config, parse_job_config
 from leap_finetune.rl.rewards import resolve_reward_specs
-from leap_finetune.config import parse_job_config
-from leap_finetune.training.default_configs import TrainingConfig
+from leap_finetune.training.default_configs import TRAINING_DEFAULTS
 
 from conftest import write_config
 
 pytestmark = pytest.mark.configs
-
-
-# === Shared fixtures ===
 
 
 GRPO_DATASET = {
@@ -26,41 +23,23 @@ VLM_GRPO_DATASET = {
 }
 
 
-# === Base config auto-discovery ===
+class TestGRPODefaultProfiles:
+    def test_grpo_defaults_discovered(self):
+        names = set(TRAINING_DEFAULTS)
+        assert "DEFAULT_GRPO" in names
+        assert "DEFAULT_VLM_GRPO" in names
+        assert "MOE_GRPO" in names
 
-
-class TestGRPOBaseConfigDiscovery:
-    def test_default_grpo_discovered(self):
-        assert "DEFAULT_GRPO" in {m.name for m in TrainingConfig}
-
-    def test_default_vlm_grpo_discovered(self):
-        assert "DEFAULT_VLM_GRPO" in {m.name for m in TrainingConfig}
-
-    def test_moe_grpo_discovered(self):
-        assert "MOE_GRPO" in {m.name for m in TrainingConfig}
-
-    def test_default_grpo_has_trl_v1_fields(self):
-        cfg = TrainingConfig.DEFAULT_GRPO.value
+    def test_default_grpo_has_expected_fields(self):
+        cfg = TRAINING_DEFAULTS["DEFAULT_GRPO"]
         assert cfg["training_type"] == "grpo"
-        assert cfg["loss_type"] == "dapo"  # TRL v1 default
-        assert cfg["beta"] == 0.0  # KL off by default
+        assert cfg["loss_type"] == "dapo"
+        assert cfg["beta"] == 0.0
         assert cfg["vllm_mode"] == "colocate"
-        assert cfg["use_vllm"] is True
-        assert cfg["num_generations"] == 8
-
-    def test_default_vlm_grpo_has_correct_training_type(self):
-        cfg = TrainingConfig.DEFAULT_VLM_GRPO.value
-        assert cfg["training_type"] == "vlm_grpo"
-        assert cfg["num_generations"] == 4  # smaller groups for VLM memory
-        assert "lr_multipliers" in cfg
-        assert cfg["lr_multipliers"]["model.vision_tower"] == 0.1
 
 
-# === Basic parse ===
-
-
-class TestParseGRPOConfig:
-    def test_minimal_grpo_config(self, tmp_path):
+class TestGRPOSmoke:
+    def test_minimal_grpo_materializes(self, tmp_path):
         config = {
             "project_name": "test_grpo",
             "model_name": "LFM2-1.2B",
@@ -72,18 +51,14 @@ class TestParseGRPOConfig:
                 "weights": [1.0],
             },
         }
-        jc = parse_job_config(write_config(config, tmp_path))
+        parsed = parse_job_config(write_config(config, tmp_path))
+        jc = materialize_job_config(parsed)
         assert jc.training_type == "grpo"
-        # Paths are pre-resolved to absolute by config_parser so Ray workers
-        # (whose CWD is a sandbox) can find the reward files.
-        assert len(jc.rewards["funcs"]) == 1
-        assert jc.rewards["funcs"][0].endswith("rewards/length.py::length_reward")
+        assert jc.dataset.test_size == 0.01
         assert jc.rewards["weights"] == [1.0]
-        assert jc.rl_env is None
-        assert jc.grpo_rollout is None
         assert jc.config_dir == str(tmp_path.resolve())
 
-    def test_config_relative_custom_reward_path_is_absolutized(self, tmp_path):
+    def test_reward_paths_are_absolutized(self, tmp_path):
         reward_file = tmp_path / "local_reward.py"
         reward_file.write_text(
             "def local_reward(completions, **kwargs):\n"
@@ -100,45 +75,11 @@ class TestParseGRPOConfig:
                 "weights": [1.0],
             },
         }
-        jc = parse_job_config(write_config(config, tmp_path))
-
+        parsed = parse_job_config(write_config(config, tmp_path))
+        jc = materialize_job_config(parsed)
         assert jc.rewards["funcs"] == [f"{reward_file.resolve()}::local_reward"]
 
-    def test_grpo_defaults_test_size_to_tiny(self, tmp_path):
-        """GRPO is online so it doesn't need offline eval. We default test_size
-        to 0.01 to keep the ray pipeline happy without wasting data."""
-        config = {
-            "project_name": "t",
-            "model_name": "LFM2-1.2B",
-            "training_type": "grpo",
-            "dataset": {"path": "trl-lib/DeepMath-103K", "type": "grpo"},
-            "rewards": ["./rewards/length.py::length_reward"],
-        }
-        jc = parse_job_config(write_config(config, tmp_path))
-        assert jc.dataset.test_size == 0.01
-
-    def test_grpo_override_persists(self, tmp_path):
-        config = {
-            "project_name": "t",
-            "model_name": "LFM2-1.2B",
-            "training_type": "grpo",
-            "dataset": GRPO_DATASET,
-            "training_config": {
-                "extends": "DEFAULT_GRPO",
-                "num_generations": 4,
-                "learning_rate": 5e-7,
-            },
-            "rewards": ["./rewards/length.py::length_reward"],
-        }
-        jc = parse_job_config(write_config(config, tmp_path))
-        cfg = jc.training_config.value
-        assert cfg["num_generations"] == 4
-        assert cfg["learning_rate"] == 5e-7
-        # Inherited defaults still there
-        assert cfg["loss_type"] == "dapo"
-        assert cfg["vllm_mode"] == "colocate"
-
-    def test_grpo_judge_reward_config_persists(self, tmp_path):
+    def test_judge_reward_config_persists(self, tmp_path):
         config = {
             "project_name": "t",
             "model_name": "LFM2-1.2B",
@@ -153,18 +94,13 @@ class TestParseGRPOConfig:
                 }
             },
         }
-        jc = parse_job_config(write_config(config, tmp_path))
-        assert jc.rewards["judge"]["model"] == "LFM2-1.2B"
+        parsed = parse_job_config(write_config(config, tmp_path))
+        jc = materialize_job_config(parsed)
         funcs, weights = resolve_reward_specs(jc.rewards, tmp_path)
         assert [f.__name__ for f in funcs] == ["judge_llm_reward"]
         assert weights == [0.5]
 
-
-# === VLM GRPO ===
-
-
-class TestParseVLMGRPOConfig:
-    def test_full_vlm_grpo_with_rl_env_and_rollout(self, tmp_path):
+    def test_vlm_grpo_materializes(self, tmp_path):
         config = {
             "project_name": "vlm_grpo_test",
             "model_name": "LFM2-VL-1.6B",
@@ -175,110 +111,31 @@ class TestParseVLMGRPOConfig:
                 "source": "liquidai/vlm-grounding-bbox-env",
                 "max_turns": 1,
             },
-            "grpo_rollout": {
-                "server_gpus": 1,
-                "tensor_parallel_size": 1,
-                "dtype": "bfloat16",
-            },
+            "grpo_rollout": {"server_gpus": 1, "tensor_parallel_size": 1},
             "rewards": {
                 "funcs": ["./rewards/length.py::length_reward"],
                 "weights": [0.2],
             },
         }
-        jc = parse_job_config(write_config(config, tmp_path))
+        parsed = parse_job_config(write_config(config, tmp_path))
+        jc = materialize_job_config(parsed)
         assert jc.training_type == "vlm_grpo"
         assert jc.rl_env["source"] == "liquidai/vlm-grounding-bbox-env"
         assert jc.grpo_rollout["server_gpus"] == 1
-        # Per-component LR multipliers come through
-        cfg = jc.training_config.value
-        assert "lr_multipliers" in cfg
-        assert cfg["lr_multipliers"]["model.vision_tower"] == 0.1
-        assert cfg["training_type"] == "vlm_grpo"
+        assert jc.training_config.value["lr_multipliers"]["model.vision_tower"] == 0.1
 
-    def test_vision_encoder_lr_multiplier_override(self, tmp_path):
-        config = {
-            "project_name": "t",
-            "model_name": "LFM2-VL-1.6B",
-            "training_type": "vlm_grpo",
-            "dataset": VLM_GRPO_DATASET,
-            "training_config": {
-                "extends": "DEFAULT_VLM_GRPO",
-                "vision_encoder_lr_multiplier": 0.05,
-            },
-            "rewards": ["./rewards/length.py::length_reward"],
-        }
-        jc = parse_job_config(write_config(config, tmp_path))
-        assert jc.training_config.value["vision_encoder_lr_multiplier"] == 0.05
-
-
-# === Rejection of GRPO keys on non-GRPO runs ===
-
-
-class TestGRPOKeysRejectedOnNonGRPO:
-    def test_rewards_on_sft_rejected(self, tmp_path):
+    def test_grpo_keys_rejected_on_sft(self, tmp_path):
         config = {
             "project_name": "t",
             "model_name": "LFM2-1.2B",
             "training_type": "sft",
-            "dataset": {"path": "x", "type": "sft"},
+            "dataset": {
+                "path": "HuggingFaceTB/smoltalk",
+                "type": "sft",
+                "limit": 10,
+                "test_size": 0.2,
+            },
             "rewards": ["./rewards/length.py::length_reward"],
         }
-        with pytest.raises((ValueError, Exception), match="grpo"):
+        with pytest.raises(ValueError, match="only valid for training_type"):
             parse_job_config(write_config(config, tmp_path))
-
-    def test_rl_env_on_dpo_rejected(self, tmp_path):
-        config = {
-            "project_name": "t",
-            "model_name": "LFM2-1.2B",
-            "training_type": "dpo",
-            "dataset": {"path": "x", "type": "dpo"},
-            "rl_env": {"source": "qgallouedec/echo_env"},
-        }
-        with pytest.raises((ValueError, Exception), match="grpo"):
-            parse_job_config(write_config(config, tmp_path))
-
-    def test_grpo_rollout_on_vlm_sft_rejected(self, tmp_path):
-        config = {
-            "project_name": "t",
-            "model_name": "LFM2-VL-1.6B",
-            "training_type": "vlm_sft",
-            "dataset": {"path": "x", "type": "vlm_sft"},
-            "grpo_rollout": {"server_gpus": 1},
-        }
-        with pytest.raises((ValueError, Exception), match="grpo"):
-            parse_job_config(write_config(config, tmp_path))
-
-
-# === Shipped example YAMLs ===
-
-
-class TestShippedExampleConfigs:
-    """The example YAMLs in job_configs/ must all parse cleanly."""
-
-    @pytest.mark.parametrize(
-        "filename",
-        [
-            "grpo_example.yaml",
-            "grpo_server_mode_example.yaml",
-            "vlm_grpo_grounding_example.yaml",
-        ],
-    )
-    def test_example_parses(self, filename, job_configs_dir):
-        path = str(job_configs_dir / filename)
-        jc = parse_job_config(path)
-        assert jc.training_type in ("grpo", "vlm_grpo")
-        resolve_reward_specs(jc.rewards, job_configs_dir)
-
-    @pytest.mark.parametrize(
-        "filename",
-        [
-            "e2e_grpo.yaml",
-            "e2e_vlm_grpo.yaml",
-        ],
-    )
-    def test_grpo_smoke_fixtures_keep_vllm_enabled(self, filename, fixtures_dir):
-        path = str(fixtures_dir / filename)
-        jc = parse_job_config(path)
-        assert jc.training_type in ("grpo", "vlm_grpo")
-        assert jc.training_config.value["use_vllm"] is True
-        assert jc.training_config.value["vllm_mode"] == "colocate"

@@ -42,6 +42,12 @@ class _EvalRequest:
 class _EvalResult:
     step: int
     metrics: dict
+    # False ONLY when the helper-thread cycle raised. ``metrics`` can be
+    # empty in healthy cycles too (e.g. benchmarks with no samples, or
+    # NotImplementedError-skipped benchmarks for the current backend), so
+    # we must distinguish "cycle failed" from "cycle ran clean and had
+    # nothing to log" for the auto-disable counter.
+    ok: bool = True
 
 
 class ReservedEvalCallback(TrainerCallback):
@@ -102,12 +108,12 @@ class ReservedEvalCallback(TrainerCallback):
                 break
             try:
                 metrics = self._run_one_cycle(backend, req)
-                self._output_q.put(_EvalResult(step=req.step, metrics=metrics))
+                self._output_q.put(_EvalResult(step=req.step, metrics=metrics, ok=True))
             except Exception:
                 logger.exception(
                     "[async_eval/reserved] cycle failed at step %d", req.step
                 )
-                self._output_q.put(_EvalResult(step=req.step, metrics={}))
+                self._output_q.put(_EvalResult(step=req.step, metrics={}, ok=False))
 
     def _run_one_cycle(self, backend, req: _EvalRequest) -> dict:
         """Respawn the server with the new checkpoint, wait for /health,
@@ -386,16 +392,17 @@ class ReservedEvalCallback(TrainerCallback):
     def _account_result(self, result: _EvalResult) -> None:
         """Track helper-thread eval-cycle success/failure for auto-disable.
 
-        ``_run_loop`` catches exceptions and emits an empty ``metrics``
-        dict; without this accounting, ``_consecutive_failures`` never
-        increments and ``_disabled`` never flips — silently breaking the
-        docstring's ``failure.max_consecutive`` contract.
+        Only ``ok=False`` (a raised exception inside ``_run_one_cycle``)
+        counts as a failure. An empty ``metrics`` dict with ``ok=True``
+        is healthy — happens when benchmarks legitimately produce no
+        rows (no samples loaded, or all benchmarks ``NotImplementedError``
+        on the current backend and got skipped). Treating those as
+        failures would auto-disable a working setup.
         """
-        if not result.metrics:
+        if not result.ok:
             self._consecutive_failures += 1
             logger.warning(
-                "[async_eval/reserved] eval cycle at step %d returned no "
-                "metrics (%d consecutive)",
+                "[async_eval/reserved] eval cycle failed at step %d (%d consecutive)",
                 result.step,
                 self._consecutive_failures,
             )

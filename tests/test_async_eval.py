@@ -735,53 +735,56 @@ class TestSidecarConcurrentMarkers:
 
 
 class TestReservedFailureAccounting:
-    """Helper-thread eval failures must increment ``_consecutive_failures``
-    so the docstring's ``failure.max_consecutive`` auto-disable contract
-    actually fires — Copilot's catch."""
+    """Helper-thread cycle failures must increment ``_consecutive_failures``
+    so the docstring's ``failure.max_consecutive`` auto-disable fires —
+    BUT empty-metrics-with-ok=True (healthy no-op cycle, e.g. benchmarks
+    with no samples) must NOT count. Codex catches."""
 
-    def test_empty_metrics_count_as_failures(self, tmp_path):
+    def _cb(self, tmp_path, max_consecutive=2):
         from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
-        from leap_finetune.evaluation.reserved_callback import (
-            ReservedEvalCallback,
-            _EvalResult,
-        )
+        from leap_finetune.evaluation.reserved_callback import ReservedEvalCallback
 
-        cb = ReservedEvalCallback(
+        return ReservedEvalCallback(
             benchmarks=[MagicMock(name="bench1")],
             cfg=AsyncEvalConfig.from_dict(
-                {"mode": "reserved", "failure": {"max_consecutive": 2}}
+                {"mode": "reserved", "failure": {"max_consecutive": max_consecutive}}
             ),
             server_url="http://localhost:8100",
             output_dir=str(tmp_path),
             eval_gpu_ids="0",
         )
 
-        cb._account_result(_EvalResult(step=1, metrics={}))
+    def test_raised_cycle_counts_as_failure(self, tmp_path):
+        """``ok=False`` is the failure signal from a raised cycle."""
+        from leap_finetune.evaluation.reserved_callback import _EvalResult
+
+        cb = self._cb(tmp_path)
+        cb._account_result(_EvalResult(step=1, metrics={}, ok=False))
         assert cb._consecutive_failures == 1
         assert cb._disabled is False
-
-        cb._account_result(_EvalResult(step=2, metrics={}))
+        cb._account_result(_EvalResult(step=2, metrics={}, ok=False))
         assert cb._consecutive_failures == 2
         assert cb._disabled is True
 
-    def test_success_resets_consecutive_counter(self, tmp_path):
-        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
-        from leap_finetune.evaluation.reserved_callback import (
-            ReservedEvalCallback,
-            _EvalResult,
-        )
+    def test_empty_metrics_with_ok_true_does_NOT_count(self, tmp_path):
+        """Healthy cycles can legitimately return zero metrics (no samples
+        loaded, NotImplementedError-skipped benchmarks, ...). They must
+        NOT trip auto-disable — Codex's catch."""
+        from leap_finetune.evaluation.reserved_callback import _EvalResult
 
-        cb = ReservedEvalCallback(
-            benchmarks=[MagicMock(name="bench1")],
-            cfg=AsyncEvalConfig.from_dict(
-                {"mode": "reserved", "failure": {"max_consecutive": 3}}
-            ),
-            server_url="http://localhost:8100",
-            output_dir=str(tmp_path),
-            eval_gpu_ids="0",
-        )
-        cb._account_result(_EvalResult(step=1, metrics={}))
-        cb._account_result(_EvalResult(step=2, metrics={"benchmark/x": 0.5}))
+        cb = self._cb(tmp_path, max_consecutive=2)
+        # 10 healthy no-metric cycles in a row — must not disable.
+        for step in range(10):
+            cb._account_result(_EvalResult(step=step, metrics={}, ok=True))
+        assert cb._consecutive_failures == 0
+        assert cb._disabled is False
+
+    def test_success_resets_consecutive_counter(self, tmp_path):
+        from leap_finetune.evaluation.reserved_callback import _EvalResult
+
+        cb = self._cb(tmp_path, max_consecutive=3)
+        cb._account_result(_EvalResult(step=1, metrics={}, ok=False))
+        cb._account_result(_EvalResult(step=2, metrics={"benchmark/x": 0.5}, ok=True))
         assert cb._consecutive_failures == 0
 
 

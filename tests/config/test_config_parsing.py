@@ -199,9 +199,11 @@ class TestFocusedValidation:
         with pytest.raises(ValueError, match="Unknown base config"):
             materialize_job_config(parsed)
 
-    def test_eval_strategy_requires_eval_dataset(self, tmp_path):
+    def test_eval_strategy_uses_default_split_when_test_size_omitted(self, tmp_path):
+        # Offline training types get the default 0.2 eval split when no explicit
+        # validation source is given, so eval_strategy works without test_size.
         config = {
-            "project_name": "bad_eval",
+            "project_name": "default_eval",
             "model_name": "LFM2-1.2B",
             "training_type": "sft",
             "dataset": {
@@ -215,8 +217,8 @@ class TestFocusedValidation:
             },
         }
         parsed = parse_job_config(write_config(config, tmp_path))
-        with pytest.raises(ValueError, match="requires a validation dataset"):
-            materialize_job_config(parsed)
+        materialized = materialize_job_config(parsed)
+        assert materialized.training_config.value["eval_strategy"] == "steps"
 
     def test_training_type_defaults_apply_without_extends(self, tmp_path):
         config = {

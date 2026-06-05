@@ -458,6 +458,14 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
     )
     final_train_values["output_dir"] = str(final_output_dir)
     final_train_values["leap_run_name_template"] = run_name
+    # Default 0.2 eval split for offline types, only when eval is enabled;
+    # eval_strategy="no" keeps the full dataset. (grpo gets 0.01 at load.)
+    if (
+        not dataset.has_eval_dataset()
+        and training_type not in ("grpo", "vlm_grpo")
+        and final_train_values.get("eval_strategy", "no") != "no"
+    ):
+        dataset.test_size = 0.2
     if not dataset.has_eval_dataset():
         raw_eval_strategy = train_config_overrides.get("eval_strategy")
         if raw_eval_strategy and raw_eval_strategy != "no":
@@ -571,12 +579,13 @@ def _validate_parallelism_config(
     if training_type in ("sft", "dpo") and is_moe_model_from_name(model_name):
         effective_training_type = f"moe_{training_type}"
 
-    if effective_training_type == "moe_sft":
+    if effective_training_type in ("moe_sft", "moe_dpo"):
+        # EP forward path ignores capacity dropping; reject for both so it isn't a silent no-op.
         capacity_factor = moe_config.get("capacity_factor")
         token_drop_policy = moe_config.get("token_drop_policy")
         if capacity_factor is not None or token_drop_policy not in (None, "probs"):
             raise ValueError(
-                "MoE SFT currently supports uncapped routing only. "
+                "MoE training currently supports uncapped routing only. "
                 "Remove capacity_factor/token_drop_policy from moe_training."
             )
 

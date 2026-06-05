@@ -138,7 +138,9 @@ def vlm_sft_run(training_config: dict) -> None:
     grad_accum = train_config_filtered.get("gradient_accumulation_steps", 1)
     epochs = train_config_filtered.get("num_train_epochs", 3)
     steps_per_epoch = math.ceil(num_samples / train_batch_size)
-    max_steps = steps_per_epoch * epochs // grad_accum
+    # int(): num_train_epochs can be a float (1.0) -> float max_steps crashes HF's
+    # range(). max(1, ...): avoid 0 steps on tiny datasets / large grad accum.
+    max_steps = max(1, int(steps_per_epoch * epochs // grad_accum))
 
     logger.info(
         "Computed max_steps=%d (samples=%d, batch=%d, accum=%d, epochs=%s)",

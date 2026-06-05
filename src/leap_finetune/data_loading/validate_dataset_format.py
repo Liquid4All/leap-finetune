@@ -486,7 +486,14 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
         if not isinstance(messages, list):
             return row
 
-        # === 3. Prepend image_root to relative image paths ===
+        # === 3. Uniformize content shape ===
+        # Wrap string content into list-of-parts so the column isn't mixed
+        # list/string, which Arrow can't represent downstream.
+        for message in messages:
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                message["content"] = [{"type": "text", "text": message["content"]}]
+
+        # === 4. Prepend image_root to relative image paths ===
         if image_root:
             root = pathlib.PurePosixPath(image_root)
             for message in messages:

@@ -144,7 +144,7 @@ class DatasetLoader:
         """Load a HuggingFace Hub dataset into Ray Data via streaming."""
         import ray
         import ray.data
-        import pyarrow as pa
+        import pandas as pd
         from rich.console import Console
         from rich.progress import (
             Progress,
@@ -186,14 +186,16 @@ class DatasetLoader:
                 )
 
                 for batch in hf_stream.batch(batch_size=batch_size):
-                    table = pa.Table.from_pydict(batch)
+                    # Object dtype preserves heterogeneous messages[].content until
+                    # normalize uniformizes it; pa.Table.from_pydict would reject it here.
+                    df = pd.DataFrame(batch)
                     if self.limit is not None:
                         remaining = self.limit - total_items
                         if remaining <= 0:
                             break
-                        table = table.slice(0, remaining)
-                    refs.append(ray.put(table))
-                    total_items += table.num_rows
+                        df = df.iloc[:remaining]
+                    refs.append(ray.put(df))
+                    total_items += len(df)
                     progress.update(task, items=f"{total_items:,}")
 
                     if self.limit and total_items >= self.limit:
@@ -202,9 +204,7 @@ class DatasetLoader:
                 if self.limit and total_items >= self.limit:
                     break
 
-        if hasattr(ray.data, "from_arrow_refs"):
-            return ray.data.from_arrow_refs(refs)
-        return ray.data.from_arrow(ray.get(refs))
+        return ray.data.from_pandas_refs(refs)
 
     def _load_dataset_via_hf(self, *, path: str, subset: str | None, split: str):
         """Load non-parquet sources via Hugging Face datasets and convert to Ray."""

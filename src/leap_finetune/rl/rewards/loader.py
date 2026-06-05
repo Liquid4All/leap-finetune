@@ -6,9 +6,9 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
+from leap_finetune import LEAP_FINETUNE_DIR
 from leap_finetune.rl.judge import get_judge_config, judge_llm_reward
 from leap_finetune.rl.rewards.recipe import Recipe
-from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
 
 logger = logging.getLogger(__name__)
 

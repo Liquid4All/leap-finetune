@@ -25,6 +25,10 @@ dependencies = [
     "torchvision>=0.24.1",
     "modal>=0.73",
     "trackio>=0.3",
+    "typer>=0.20.0",
+    "kubernetes>=34.0.0",
+    "pydantic>=2.0",
+    "bitsandbytes>=0.48.0; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
@@ -36,15 +40,17 @@ rl-env = [
 
 [project.scripts]
 leap-finetune = "leap_finetune:main"
+leap-export-manual-sharded-checkpoint = "leap_finetune.cli.export_manual_sharded_checkpoint:main"
+leap-export-gguf = "leap_finetune.cli.export_gguf:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv]
-# flash-attn uses a legacy setup.py build that imports torch and setuptools.
-# Disable build isolation so it builds against the runtime torch ABI selected
-# for vLLM/Transformers.
+# External flash-attn is optional because vLLM pins the CUDA stack tightly.
+# If installed via `uv sync --group flash-attn`, build against the runtime
+# torch ABI instead of an isolated build environment.
 no-build-isolation-package = ["flash-attn"]
 default-groups = ["dev", "cuda"]
 environments = [
@@ -56,6 +62,7 @@ environments = [
 #   uv sync --no-group cuda --group rocm
 conflicts = [
     [{ group = "cuda" }, { group = "rocm" }],
+    [{ group = "flash-attn" }, { group = "rocm" }],
 ]
 
 # vLLM 0.19.0 still declares transformers<5, but LFM models require
@@ -111,26 +118,33 @@ requires-dist = ["torch", "einops", "ninja", "packaging", "setuptools", "wheel"]
 testpaths = ["tests"]
 markers = [
     "configs: config parsing, validation, override, filtering (no GPU)",
-    "data: dataset loading, tokenization, sharding validation",
+    "rl: RL data, rewards, rollout, and environment tests",
     "dense: dense model end-to-end training tests",
     "vlm: VLM end-to-end training tests",
     "moe: MoE end-to-end training tests",
 ]
 addopts = "-v --tb=short"
 
+[tool.ruff]
+exclude = ["src/leap_finetune/quantization/gguf"]
+
 [dependency-groups]
 cuda = [
-    "flash-attn>=2.8.0; sys_platform == 'linux'",
     "liger-kernel>=0.6.2; sys_platform == 'linux'",
     # Keep CUDA vLLM pinned to the Transformers 5 / LFM stack that has
-    # been validated. Floating can pull a different Torch/CUDA ABI and
-    # break flash-attn at model load time.
+    # been validated. External flash-attn remains opt-in below; vLLM uses
+    # its own kernels for GRPO in the default CUDA install path.
     "vllm==0.19.0; sys_platform == 'linux'",
 ]
 dev = [
     "pre-commit>=4.2.0",
     "pytest>=8.0",
     "ruff>=0.11.13",
+]
+flash-attn = [
+    # Optional HF FA2 support for environments with a known-good wheel/build.
+    # Model loading still probes the import at runtime and falls back to SDPA.
+    "flash-attn>=2.8.0; sys_platform == 'linux'",
 ]
 rocm = [
     # Keep these direct so uv 0.6.x can apply the group-scoped vLLM ROCm index.
@@ -143,5 +157,5 @@ rocm = [
     "triton==3.6.0; sys_platform == 'linux'",
     "triton-kernels==1.0.0; sys_platform == 'linux'",
     "liger-kernel>=0.6.2; sys_platform == 'linux'",
-    "vllm==0.21.0+rocm722; sys_platform == 'linux'",
+    "vllm==0.22.0+rocm722; sys_platform == 'linux'",
 ]

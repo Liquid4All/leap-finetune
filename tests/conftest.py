@@ -8,7 +8,7 @@ import pytest
 import torch
 import yaml
 
-from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
+from leap_finetune import LEAP_FINETUNE_DIR
 
 # === Ray temp dir ===
 _RAY_TMPDIR = pathlib.Path(f"/tmp/{os.environ.get('USER', 'default')}/ray")
@@ -25,7 +25,7 @@ _TEST_RESULTS_DIR = pathlib.Path.home() / "test-results"
 
 def pytest_addoption(parser):
     parser.addoption("--configs", action="store_true", help="Run only config tests")
-    parser.addoption("--data", action="store_true", help="Run only data tests")
+    parser.addoption("--rl", action="store_true", help="Run only RL tests")
     parser.addoption("--dense", action="store_true", help="Run only dense GPU tests")
     parser.addoption("--vlm", action="store_true", help="Run only VLM GPU tests")
     parser.addoption("--moe", action="store_true", help="Run only MoE GPU tests")
@@ -34,7 +34,7 @@ def pytest_addoption(parser):
 def pytest_collection_modifyitems(config, items):
     flag_mark_map = {
         "configs": "configs",
-        "data": "data",
+        "rl": "rl",
         "dense": "dense",
         "vlm": "vlm",
         "moe": "moe",
@@ -108,7 +108,7 @@ def slurm_config_path(job_configs_dir):
 
 @pytest.fixture
 def fixtures_dir():
-    return pathlib.Path(__file__).parent / "fixtures"
+    return pathlib.Path(__file__).parent / "e2e" / "fixtures"
 
 
 BASE_SFT_DATASET = {
@@ -164,10 +164,11 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
     """Parse config, override output_dir, run training, return Result."""
     os.environ["OUTPUT_DIR"] = str(output_dir)
     try:
-        from leap_finetune.utils.config_parser import parse_job_config
-        from leap_finetune.trainer import ray_trainer
+        from leap_finetune.config.parser import materialize_job_config, parse_job_config
+        from leap_finetune.distribution.ray_trainer import ray_trainer
 
         job_config = parse_job_config(config_path)
+        job_config = materialize_job_config(job_config)
         job_config_dict = job_config.to_dict()
         return ray_trainer(job_config_dict)
     finally:
@@ -240,6 +241,12 @@ def assert_training_result(
         assert math.isfinite(metrics["train_loss"]), (
             f"train_loss is not finite: {metrics['train_loss']}"
         )
+
+
+def assert_eval_callback_logged(result):
+    metrics = result.metrics or {}
+    benchmark_keys = [key for key in metrics if key.startswith("benchmark/")]
+    assert benchmark_keys, f"No benchmark/eval metrics found in result: {metrics}"
 
 
 def assert_checkpoints_exist(output_dir: pathlib.Path):

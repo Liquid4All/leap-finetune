@@ -64,3 +64,7 @@ class Benchmark(ABC):
         if self._samples is None:
             self._samples = self.load_samples()
         return self._samples
+
+
+EvalResult = BenchmarkResult
+Eval = Benchmark

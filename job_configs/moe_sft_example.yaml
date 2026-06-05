@@ -1,6 +1,6 @@
 project_name: "my_moe_sft_project"
 model_name: "LFM2-8B-A1B"
-training_type: "sft"
+training_type: "moe_sft"
 
 dataset:
   path: "HuggingFaceTB/smoltalk"

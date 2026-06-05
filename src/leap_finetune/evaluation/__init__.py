@@ -1,4 +1,9 @@
-from leap_finetune.evaluation.base import Benchmark, BenchmarkResult
+from leap_finetune.evaluation.base import (
+    Benchmark,
+    BenchmarkResult,
+    Eval,
+    EvalResult,
+)
 from leap_finetune.evaluation.callback import BenchmarkEvalCallback
 from leap_finetune.evaluation.llm_benchmarks import (
     LLMGenerationBenchmark,
@@ -12,15 +17,24 @@ from leap_finetune.evaluation.vlm_benchmarks import (
 )
 from leap_finetune.evaluation.vlm_config import create_vlm_benchmarks_from_config
 
+EvalCallback = BenchmarkEvalCallback
+create_llm_evals_from_config = create_llm_benchmarks_from_config
+create_vlm_evals_from_config = create_vlm_benchmarks_from_config
+
 __all__ = [
     "Benchmark",
     "BenchmarkResult",
+    "Eval",
+    "EvalResult",
+    "EvalCallback",
     "BenchmarkEvalCallback",
     "LLMGenerationBenchmark",
     "LLMLogprobBenchmark",
     "VLMGenerationBenchmark",
     "VLMLogprobBenchmark",
     "create_llm_benchmarks_from_config",
+    "create_llm_evals_from_config",
     "create_vlm_benchmarks_from_config",
+    "create_vlm_evals_from_config",
     "compute_metric",
 ]

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 BASE_RUNTIME_EXCLUDED_KEYS = {
     "training_type",
@@ -49,4 +52,10 @@ def filter_runtime_config_kwargs(
 
     valid_keys = set(inspect.signature(config_cls.__init__).parameters) - {"self"}
     dropped = sorted(k for k in filtered if k not in valid_keys)
+    if dropped:
+        logger.warning(
+            "Dropping unrecognized %s config keys (possible typo): %s",
+            config_cls.__name__,
+            dropped,
+        )
     return {k: v for k, v in filtered.items() if k in valid_keys}, dropped

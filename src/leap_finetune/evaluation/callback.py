@@ -7,7 +7,6 @@ from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 
 from leap_finetune.evaluation.base import Benchmark
-from leap_finetune.training.utils.logging import is_rank_zero
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +128,10 @@ class BenchmarkEvalCallback(TrainerCallback):
 
     @staticmethod
     def _log_to_wandb(results: dict):
+        # Lazy import avoids a circular import (training package imports the loops,
+        # which import this module).
+        from leap_finetune.training.utils.logging import is_rank_zero
+
         if not is_rank_zero():
             return
         try:

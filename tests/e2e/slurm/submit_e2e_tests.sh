@@ -95,7 +95,7 @@ export TRITON_CACHE_DIR=\${TMPDIR}/triton_cache
 export OUTPUT_DIR=${OUTPUT_DIR}
 export PYTHONUNBUFFERED=1
 
-uv run pytest ${PYTEST_ARGS}
+pytest ${PYTEST_ARGS}
 
 echo "================================================"
 echo "E2E TESTS DONE"

@@ -1,0 +1,47 @@
+# Toy end-to-end test for async_eval mode=sidecar.
+# - LFM2-1.2B, 200 smoltalk samples, batch=2, 1 epoch
+# - eval_steps=10 → multiple eval cycles
+# - benchmarks: 5 tiny Q&A samples
+# - async_eval.mode: sidecar → sbatch fired per eval cycle, training never pauses
+project_name: "async_eval_toy_sidecar"
+model_name: "LFM2-1.2B"
+training_type: "sft"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  limit: 200
+  test_size: 0.1
+  subset: "all"
+
+training_config:
+  extends: "DEFAULT_SFT"
+  num_train_epochs: 4
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 2e-5
+  logging_steps: 10
+  eval_strategy: "steps"
+  eval_steps: 60
+  save_strategy: "no"
+  wandb_logging: true
+
+evals:
+  max_new_tokens: 32
+  benchmarks:
+    - name: tiny_qa
+      path: tests/e2e/fixtures/tiny_qa_bench.jsonl
+      metric: short_answer
+      match_mode: contains
+
+async_eval:
+  mode: sidecar
+  vllm_gpus: 1
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.85
+  dtype: bfloat16
+  sbatch:
+    time: "00:15:00"
+  on_overlap: skip
+  failure:
+    max_consecutive: 3

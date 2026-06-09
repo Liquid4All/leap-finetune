@@ -33,6 +33,20 @@ def _parse_cli_args():
             args = parser.parse_args()
             config_path_arg = args.config_path
             output_dir_arg = args.output_dir
+        elif sys.argv[1] == "eval":
+            command = "eval"
+            parser = argparse.ArgumentParser(description="Run standalone evals")
+            parser.add_argument("command", choices=["eval"])
+            parser.add_argument("config_path", help="Path to YAML eval config file")
+            parser.add_argument(
+                "--output",
+                "-o",
+                help="Optional JSON metrics output path",
+                default=None,
+            )
+            args = parser.parse_args()
+            config_path_arg = args.config_path
+            output_dir_arg = args.output
         elif sys.argv[1] == "run":
             command = "run"
             parser = argparse.ArgumentParser(description="Run training job")
@@ -68,6 +82,18 @@ def _generate_slurm_script(config_path_arg: str | None, output_dir_arg: str | No
     generate_slurm_script(config_path, config_dict, output_dir, auto_submit=False)
 
 
+def _run_standalone_eval(config_path_arg: str | None, output_path_arg: str | None):
+    if not config_path_arg:
+        print("No eval config file provided.")
+        print("Usage: leap-finetune eval <path_to_eval_config.yaml>")
+        sys.exit(1)
+
+    from leap_finetune.evaluation.runner import run_eval_config
+
+    results = run_eval_config(config_path_arg, output_path=output_path_arg)
+    print(yaml.safe_dump(results, sort_keys=True))
+
+
 def _assert_local_cuda_available() -> None:
     try:
         import torch
@@ -94,17 +120,20 @@ def check_and_handle_slurm(
     return _impl(config_path_arg, config_dict=config_dict)
 
 
-def run_config(config_path) -> None:
-    """Launch a training job from a YAML config path or typed JobConfig.
+def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
+    """Launch a training job or standalone eval from a config path/model.
 
-    This is the programmatic equivalent of `leap-finetune <config>`. It keeps
-    the same backend dispatch behavior: configs with `slurm`, `kuberay`, or
-    `modal` sections submit remotely; other configs launch local Ray training.
+    This is the programmatic equivalent of `leap-finetune <config>`. Training
+    configs keep the same backend dispatch behavior: configs with `slurm`,
+    `kuberay`, or `modal` sections submit remotely; other training configs
+    launch local Ray training. Eval-only configs run benchmarks without
+    starting training.
     """
-    from leap_finetune.config import JobConfig
+    from leap_finetune.config import EvalRunConfig, JobConfig
     from leap_finetune.config.parser import (
         materialize_job_config,
         normalized_job_config_dict,
+        parse_eval_config,
         parse_job_config,
         print_job_config_summary,
     )
@@ -112,6 +141,10 @@ def run_config(config_path) -> None:
     parsed_job = None
     config_dict = None
     config_path_arg = None
+    if isinstance(config_path, EvalRunConfig):
+        from leap_finetune.evaluation.runner import run_eval_config as _run_eval_config
+
+        return _run_eval_config(config_path, output_path=output_path)
     if isinstance(config_path, JobConfig):
         parsed_job = config_path
         config_dict = normalized_job_config_dict(parsed_job)
@@ -133,6 +166,18 @@ def run_config(config_path) -> None:
 
     if check_and_handle_modal(config_path_arg, config_dict=config_dict):
         return
+
+    if parsed_job is None:
+        try:
+            eval_config = parse_eval_config(config_path_arg)
+        except Exception:
+            eval_config = None
+        else:
+            from leap_finetune.evaluation.runner import (
+                run_eval_config as _run_eval_config,
+            )
+
+            return _run_eval_config(eval_config, output_path=output_path)
 
     _assert_local_cuda_available()
 
@@ -169,11 +214,15 @@ def main() -> None:
     if command == "slurm":
         _generate_slurm_script(config_path_arg, output_dir_arg)
         return
+    if command == "eval":
+        _run_standalone_eval(config_path_arg, output_dir_arg)
+        return
 
     if not config_path_arg:
         print("No config file provided. Please provide a path to a YAML config file.")
         print("Usage: leap-finetune <path_to_config.yaml>")
         print("   or: leap-finetune slurm <path_to_config.yaml>")
+        print("   or: leap-finetune eval <path_to_eval_config.yaml>")
         sys.exit(1)
 
     run_config(config_path_arg)

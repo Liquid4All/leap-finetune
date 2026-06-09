@@ -1,10 +1,59 @@
 # Evaluation Benchmarks
 
-Run benchmarks automatically during training at every `eval_steps`. Works with all training types: **SFT**, **DPO**, and **VLM SFT**. Results are logged to wandb and printed to stdout. No code changes needed — configure everything in YAML.
+Run benchmarks automatically during training at every `eval_steps`, or run the
+same suite directly with `leap-finetune <eval_config>` without starting a
+training job.
+Works with SFT, DPO, GRPO, and VLM variants. Results are logged to wandb during
+training and printed to stdout.
+
+Benchmarks live under `evals:`. The legacy `benchmarks:` alias still parses,
+but new configs should use `evals:` so training and standalone eval configs
+share the same `EvalSuiteConfig` shape.
+
+Standalone evals can run without a training job:
+
+```bash
+uv run leap-finetune job_configs/eval_standalone_example.yaml
+```
+
+Standalone configs require `model_name` or `checkpoint`, an `evals:` suite, and
+an optional `backend:` block. They deliberately do not include `dataset`,
+`training_type`, `training_config`, or `async_eval`:
+
+```yaml
+model_name: "LFM2-1.2B"
+
+evals:
+  benchmarks:
+    - name: "tiny_qa"
+      path: "/data/tiny_qa.jsonl"
+      metric: "short_answer"
+
+backend:
+  type: "hf" # hf | vllm
+```
+
+Use `leap-finetune eval <eval_config> --output results.json` when you want the
+CLI to write metrics to a JSON file.
+
+Text standalone evals default to `modality: text`. Set `modality: vlm` only
+when running standalone VLM evals outside a VLM training job.
+
+Python uses the same config:
+
+```python
+from leap_finetune import run_config
+
+metrics = run_config("job_configs/eval_standalone_example.yaml")
+```
+
+Async training evals use the same `evals:` suite. The `async_eval:` block only
+chooses execution mode (`sync`, `sidecar`, or `reserved`) and vLLM/SLURM
+placement settings.
 
 ## Quick Setup
 
-Add a `benchmarks` section to your job config.
+Add an `evals` section to your job config.
 
 ### VLM (vision-language) benchmarks
 
@@ -13,7 +62,7 @@ training_config:
   eval_strategy: "steps"
   eval_steps: 2000
 
-benchmarks:
+evals:
   max_new_tokens: 128 # default for all generation benchmarks
   image_root: "/data/images" # optional, prepended to relative image paths
   benchmarks:
@@ -34,7 +83,7 @@ training_config:
   eval_strategy: "steps"
   eval_steps: 2000
 
-benchmarks:
+evals:
   max_new_tokens: 128
   benchmarks:
     - name: "reading_comprehension"
@@ -156,7 +205,7 @@ Per-benchmark fields:
 
 ## How It Works
 
-1. The trainer reads `benchmarks:` from your YAML config
+1. The trainer reads `evals:` from your YAML config
 2. The appropriate factory creates benchmark objects based on training type:
    - **VLM SFT**: `create_vlm_benchmarks_from_config()` — uses the VLM processor for image+text inputs
    - **SFT / DPO**: `create_llm_benchmarks_from_config()` — uses the tokenizer for text-only inputs

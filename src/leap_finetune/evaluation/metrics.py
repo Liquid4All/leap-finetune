@@ -11,7 +11,12 @@ from collections import Counter
 def score_grounding_iou(
     prediction: str, ground_truth: str, iou_threshold: float = 0.5, **_
 ) -> float:
-    """1.0 if predicted bbox overlaps ground truth above threshold, else 0.0."""
+    """1.0 if predicted bbox overlaps ground truth above threshold, else 0.0.
+
+    Single-bbox metric: only the first bbox in either side is read. For
+    multi-bbox samples (Group_Grounding, Object_Tracking, …) use
+    ``grounding_iou_f1`` instead.
+    """
     pred_bbox = _parse_bbox(prediction)
     gt_bbox = _parse_bbox(ground_truth)
 
@@ -19,6 +24,38 @@ def score_grounding_iou(
         return 0.0
 
     return 1.0 if _compute_iou(pred_bbox, gt_bbox) >= iou_threshold else 0.0
+
+
+def score_grounding_iou_f1(prediction: str, ground_truth: str, **_) -> float:
+    """Soft F1 over Hungarian-matched (pred, gt) bbox pairs scored by IoU.
+
+    Multi-bbox safe — required for Group_Grounding and Object_Tracking
+    samples whose ground truth is a list of bboxes (one per object or per
+    input frame). Returns a continuous score in [0, 1]:
+      * (no preds, no gt) → 1.0 (correct abstention)
+      * (preds without gt, or vice versa) → 0.0
+      * else: F1 = 2·P·R/(P+R) where P = Σ(matched IoUs)/n_pred,
+        R = Σ(matched IoUs)/n_gt; unmatched preds drag precision,
+        unmatched gt boxes drag recall.
+
+    Mirrors the GRPO reward's iou_f1 semantics so train and eval signals
+    are aligned.
+    """
+    pred_boxes = _parse_bboxes(prediction)
+    gt_boxes = _parse_bboxes(ground_truth)
+
+    if not pred_boxes and not gt_boxes:
+        return 1.0
+    if not pred_boxes or not gt_boxes:
+        return 0.0
+
+    matches = _hungarian_match_iou(pred_boxes, gt_boxes)
+    score = sum(max(0.0, iou) for iou in matches)
+    precision = score / len(pred_boxes)
+    recall = score / len(gt_boxes)
+    if precision + recall <= 0.0:
+        return 0.0
+    return 2.0 * precision * recall / (precision + recall)
 
 
 def score_short_answer(
@@ -160,6 +197,7 @@ def score_rouge_l(prediction: str, ground_truth: str, **_) -> float:
 
 _METRIC_DISPATCH: dict[str, callable] = {
     "grounding_iou": score_grounding_iou,
+    "grounding_iou_f1": score_grounding_iou_f1,
     "short_answer": score_short_answer,
     "mcq_gen": score_mcq_gen,
     "gsm8k": score_gsm8k,
@@ -208,13 +246,38 @@ def _extract_mcq_answer(text: str) -> str | None:
 
 
 def _parse_bbox(text: str) -> list[float] | None:
-    """Parse bounding box [x1, y1, x2, y2] from JSON or Python literal formats.
+    """Permissive single-bbox parser for the legacy ``grounding_iou`` metric.
 
-    Handles nested structures like [{"bbox": [...]}] and normalizes 0-1000 coords to 0-1.
+    Accepts the wider set of formats refcoco-style baselines emit:
+      * prose-embedded JSON (regex-extracted)
+      * bare ``[x,y,x,y]`` and list-of-lists
+      * list-of-dicts with ``bbox`` field
+      * 0-1000 coord space (autoscaled to 0-1)
+      * ``ast.literal_eval`` fallback when ``json.loads`` fails
+
+    Returns ``None`` on ANY malformed input — never raises. Hardening
+    matters: ``Benchmark.evaluate`` excludes per-sample failures from
+    the count, so a parser exception would silently drop the sample
+    instead of scoring it as 0 — inflating the mean.
+
+    ``grounding_iou_f1`` uses ``_parse_bboxes`` directly: it must mirror
+    the GRPO reward's strict rules. Loosening this legacy path is
+    intentional — ``grounding_iou`` scores published checkpoints whose
+    output predates the cookbook recipe; strict parsing would silently
+    deflate baseline numbers.
     """
     if not isinstance(text, str):
         return None
+    try:
+        return _parse_bbox_unchecked(text)
+    except Exception:
+        # Any malformed input we didn't anticipate (TypeError on len() of an
+        # int-shaped "bbox", recursion depth on pathological JSON, ...) maps
+        # to "no valid bbox" rather than letting the exception escape.
+        return None
 
+
+def _parse_bbox_unchecked(text: str) -> list[float] | None:
     text = text.strip()
     json_match = re.search(r"(\[.*\]|\{.*\})", text, re.DOTALL)
     if json_match:
@@ -232,7 +295,7 @@ def _parse_bbox(text: str) -> list[float] | None:
     if isinstance(data, list) and len(data) > 0:
         if isinstance(data[0], dict):
             for item in data:
-                if "bbox" in item:
+                if isinstance(item, dict) and "bbox" in item:
                     bbox = item["bbox"]
                     break
         elif isinstance(data[0], list) and len(data[0]) == 4:
@@ -242,19 +305,120 @@ def _parse_bbox(text: str) -> list[float] | None:
     elif isinstance(data, dict) and "bbox" in data:
         bbox = data["bbox"]
 
-    if bbox is None or len(bbox) != 4:
+    # isinstance check covers cases where bbox came from {"bbox": <non-list>}
+    # — without this, ``len(bbox)`` raises TypeError on int/float/dict values
+    # and the failure inflates the running mean.
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
+    # Reject bool entries before they coerce to 0.0/1.0: ``bool`` subclasses
+    # ``int``, so ``[false, false, true, true]`` would otherwise become a
+    # clean-looking ``[0, 0, 1, 1]`` and score IoU=1.0 against the full-image
+    # GT — a free perfect score from gibberish output.
+    if any(isinstance(v, bool) for v in bbox):
         return None
 
     try:
         bbox = [float(x) for x in bbox]
     except (ValueError, TypeError):
         return None
+    if any(not math.isfinite(c) for c in bbox):
+        return None  # NaN/Inf would poison _compute_iou downstream.
 
-    # Normalize 0-1000 coordinate space to 0-1
+    # 0-1000 coord space (MGrounding native) autoscaled to 0-1.
     if max(abs(c) for c in bbox) > 1.5:
         bbox = [c / 1000.0 for c in bbox]
 
     return bbox
+
+
+def _parse_bboxes(text: str) -> list[list[float]]:
+    """Strict twin of the GRPO reward's bbox parser (rewards/tasks/
+    vlm_grounding/recipe.py: _extract_bboxes / _parse_gt_bboxes / _validate_bbox).
+
+    A completion that scores 0.0 on the reward must also score 0.0 here, so
+    we deliberately do NOT relax any of the reward's rules:
+      * ``json.loads`` only — no ast.literal_eval, no regex JSON-extraction
+        from prose. Any preamble around the JSON kills the parse.
+      * Top-level must be a list. Each item must be a dict with a ``bbox``
+        field; bare ``[x,y,x,y]`` and list-of-lists are rejected.
+      * No 0-1000 → 0-1 rescaling: the reward computes IoU against 0-1 GT
+        with whatever scale the model emitted, so we do too.
+      * NaN/Inf and inverted/zero-area boxes (``x2<=x1`` or ``y2<=y1``)
+        are rejected (matches ``_validate_bbox``).
+    """
+    if not isinstance(text, str):
+        return []
+    try:
+        parsed = json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+
+    out: list[list[float]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        b = item.get("bbox")
+        if not isinstance(b, (list, tuple)) or len(b) != 4:
+            continue
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in b):
+            continue
+        if not all(math.isfinite(float(v)) for v in b):
+            continue
+        box = [float(v) for v in b]
+        # Range check: coords must be normalized to [0, 1]. The model is
+        # trained on bboxes in that range, so anything outside is a format
+        # violation — give it 0 instead of partial credit for accidentally
+        # overlapping the GT.
+        if any(c < 0.0 or c > 1.0 for c in box):
+            continue
+        x1, y1, x2, y2 = box
+        if not (x2 > x1 and y2 > y1):
+            continue
+        out.append(box)
+    return out
+
+
+def _hungarian_match_iou(
+    pred_boxes: list[list[float]], gt_boxes: list[list[float]]
+) -> list[float]:
+    """Return the matched-pair IoUs from a 1-to-1 max-similarity bipartite
+    matching of ``pred_boxes`` against ``gt_boxes``. Uses scipy when
+    available; greedy otherwise. The list length is ``min(n_pred, n_gt)``.
+    """
+    sim = [[_compute_iou(p, g) for g in gt_boxes] for p in pred_boxes]
+    try:
+        import numpy as np
+        from scipy.optimize import linear_sum_assignment
+
+        cost = -np.asarray(sim)
+        rows, cols = linear_sum_assignment(cost)
+        return [sim[r][c] for r, c in zip(rows, cols)]
+    except ImportError:
+        pass
+    used_p: set[int] = set()
+    used_g: set[int] = set()
+    matched: list[float] = []
+    max_n = min(len(pred_boxes), len(gt_boxes))
+    while len(matched) < max_n:
+        best = -math.inf
+        best_p = best_g = -1
+        for i in range(len(pred_boxes)):
+            if i in used_p:
+                continue
+            for j in range(len(gt_boxes)):
+                if j in used_g:
+                    continue
+                if sim[i][j] > best:
+                    best = sim[i][j]
+                    best_p, best_g = i, j
+        if best_p < 0:
+            break
+        matched.append(best)
+        used_p.add(best_p)
+        used_g.add(best_g)
+    return matched
 
 
 def _tokenize(text: str) -> list[str]:

@@ -1,0 +1,19 @@
+# Standalone benchmark evaluation. No dataset or training_config is required.
+
+project_name: "standalone_eval_example"
+model_name: "LFM2-1.2B"
+
+evals:
+  max_new_tokens: 128
+  benchmarks:
+    - name: "tiny_qa"
+      path: "../tests/e2e/fixtures/tiny_qa_bench.jsonl"
+      metric: "short_answer"
+      limit: 10
+
+backend:
+  type: "hf" # hf | vllm
+  # vLLM-only settings:
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.9
+  dtype: "bfloat16"

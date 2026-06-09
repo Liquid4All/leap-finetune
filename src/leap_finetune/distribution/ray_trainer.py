@@ -28,16 +28,16 @@ from leap_finetune.distribution.ray_runtime import (
     select_ray_temp_dir,
     worker_process_setup_hook,
 )
+from leap_finetune.distribution.vllm_server import (
+    launch_vllm_server,
+    resolve_server_host,
+    resolve_vllm_rollout_plan,
+)
 from leap_finetune.rl.judge import (
     build_judge_runtime_config,
     export_judge_runtime_config,
     get_judge_config,
     judge_needs_local_server,
-)
-from leap_finetune.rl.vllm_server import (
-    launch_vllm_server,
-    resolve_server_host,
-    resolve_vllm_rollout_plan,
 )
 from leap_finetune.training import TRAINING_LOOPS
 from leap_finetune.training.utils.logging import print_next_steps_panel
@@ -246,6 +246,7 @@ def ray_trainer(job_config: dict) -> None:
         "model_config": job_config.get("model_config"),
         "benchmark_configs": job_config.get("benchmark_configs"),
         "rewards": rewards_cfg,
+        "async_eval": job_config.get("async_eval"),
         "rl_env": job_config.get("rl_env"),
         "grpo_rollout": job_config.get("grpo_rollout"),
         "config_dir": job_config.get("config_dir"),
@@ -265,6 +266,45 @@ def ray_trainer(job_config: dict) -> None:
     if is_grpo and rollout_plan is not None and not connect_existing_cluster:
         num_workers = rollout_plan.num_training_workers
         resources_per_worker = rollout_plan.resources_per_worker
+
+    async_eval_cfg = job_config.get("async_eval") or {}
+    if async_eval_cfg.get("mode") == "reserved":
+        if connect_existing_cluster:
+            raise NotImplementedError(
+                "async_eval mode=reserved is single-node only. "
+                "Use mode=sidecar for multi-node training."
+            )
+
+        eval_gpu_count = int(async_eval_cfg.get("vllm_gpus", 1))
+        current_train_gpus = list(range(num_workers))
+        if eval_gpu_count >= len(current_train_gpus):
+            raise ValueError(
+                f"async_eval.vllm_gpus={eval_gpu_count} leaves no GPUs for training "
+                f"(remaining={len(current_train_gpus)})."
+            )
+
+        eval_gpus_local = current_train_gpus[:eval_gpu_count]
+        train_gpus_local = current_train_gpus[eval_gpu_count:]
+        visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if visible_devices:
+            visible_tokens = [token for token in visible_devices.split(",") if token]
+            eval_gpu_ids = [visible_tokens[i] for i in eval_gpus_local]
+            train_gpu_ids = [visible_tokens[i] for i in train_gpus_local]
+        else:
+            eval_gpu_ids = [str(gpu_id) for gpu_id in eval_gpus_local]
+            train_gpu_ids = [str(gpu_id) for gpu_id in train_gpus_local]
+
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(train_gpu_ids)
+        num_workers = len(train_gpu_ids)
+
+        eval_port = int((async_eval_cfg.get("reserved") or {}).get("server_port", 8100))
+        eval_host = resolve_server_host(None)
+        train_loop_config["async_eval_server_url"] = f"http://{eval_host}:{eval_port}"
+        train_loop_config["async_eval_gpu_ids"] = ",".join(eval_gpu_ids)
+        print(
+            f"[async_eval/reserved] reserved GPU(s) {eval_gpu_ids} for vLLM at "
+            f"{train_loop_config['async_eval_server_url']}; training on {train_gpu_ids}"
+        )
 
     scale_config = build_scaling_config(
         ray_config,

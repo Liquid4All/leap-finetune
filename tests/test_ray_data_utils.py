@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pyarrow as pa
+
 from leap_finetune.data_loading import ray_data_utils
 from leap_finetune.data_loading.dataset_loader import DatasetLoader
 from leap_finetune.data_loading.ray_data_utils import (
@@ -14,8 +16,9 @@ class _RowShard:
     def __init__(self, rows):
         self._rows = rows
 
-    def iter_rows(self):
-        yield from self._rows
+    def iter_batches(self, batch_format):
+        assert batch_format == "pyarrow"
+        yield pa.Table.from_pylist(self._rows)
 
 
 def test_ray_dataset_to_hf_materializes_rows():

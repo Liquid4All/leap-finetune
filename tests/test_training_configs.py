@@ -1,10 +1,17 @@
 import pytest
 
-from leap_finetune.config.parser import parse_job_config
+from leap_finetune.config.parser import (
+    materialize_job_config,
+    parse_job_config as _parse_job_config,
+)
 
 from conftest import BASE_DPO_DATASET, BASE_SFT_DATASET, BASE_VLM_DATASET, write_config
 
 pytestmark = pytest.mark.configs
+
+
+def parse_job_config(config_input):
+    return materialize_job_config(_parse_job_config(config_input))
 
 
 # === Config pipeline integrity ===
@@ -174,49 +181,43 @@ class TestConfigPipelineIntegrity:
 
 class TestDeepSpeedConfigStructure:
     def test_sft_deepspeed_has_optimizer(self):
-        from leap_finetune.training.default_configs.sft_configs import DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.sft_configs import DEFAULT_SFT
 
-        assert "optimizer" in DEEPSPEED_CONFIG
-        assert DEEPSPEED_CONFIG["optimizer"]["type"] == "AdamW"
+        cfg = DEFAULT_SFT["deepspeed"]
+        assert "optimizer" in cfg
+        assert cfg["optimizer"]["type"] == "AdamW"
 
     def test_dpo_deepspeed_has_no_optimizer(self):
-        from leap_finetune.training.default_configs.dpo_configs import DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.dpo_configs import DEFAULT_DPO
 
-        assert "optimizer" not in DEEPSPEED_CONFIG
+        assert "optimizer" not in DEFAULT_DPO["deepspeed"]
 
     def test_vlm_deepspeed_has_no_optimizer(self):
         from leap_finetune.training.default_configs.vlm_sft_configs import (
-            DEEPSPEED_CONFIG,
+            DEFAULT_VLM_SFT,
         )
 
-        assert "optimizer" not in DEEPSPEED_CONFIG
+        assert "optimizer" not in DEFAULT_VLM_SFT["deepspeed"]
 
-    def test_moe_sft_deepspeed_has_optimizer(self):
-        from leap_finetune.training.default_configs.sft_configs import (
-            MOE_DEEPSPEED_CONFIG,
-        )
+    def test_moe_sft_deepspeed_has_no_optimizer(self):
+        from leap_finetune.training.default_configs.sft_configs import MOE_SFT
 
-        assert "optimizer" in MOE_DEEPSPEED_CONFIG
-        assert MOE_DEEPSPEED_CONFIG["optimizer"]["type"] == "AdamW"
+        assert "optimizer" not in MOE_SFT["deepspeed"]
 
     def test_moe_dpo_deepspeed_has_no_optimizer(self):
-        from leap_finetune.training.default_configs.dpo_configs import (
-            MOE_DEEPSPEED_CONFIG,
-        )
+        from leap_finetune.training.default_configs.dpo_configs import MOE_DPO
 
-        assert "optimizer" not in MOE_DEEPSPEED_CONFIG
+        assert "optimizer" not in MOE_DPO["deepspeed"]
 
     def test_sft_deepspeed_zero_stage_2(self):
-        from leap_finetune.training.default_configs.sft_configs import DEEPSPEED_CONFIG
+        from leap_finetune.training.default_configs.sft_configs import DEFAULT_SFT
 
-        assert DEEPSPEED_CONFIG["zero_optimization"]["stage"] == 2
+        assert DEFAULT_SFT["deepspeed"]["zero_optimization"]["stage"] == 2
 
     def test_moe_deepspeed_zero_stage_0(self):
-        from leap_finetune.training.default_configs.sft_configs import (
-            MOE_DEEPSPEED_CONFIG,
-        )
+        from leap_finetune.training.default_configs.sft_configs import MOE_SFT
 
-        assert MOE_DEEPSPEED_CONFIG["zero_optimization"]["stage"] == 0
+        assert MOE_SFT["deepspeed"]["zero_optimization"]["stage"] == 0
 
 
 # === MoE detection ===

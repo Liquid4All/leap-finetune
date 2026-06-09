@@ -1,12 +1,19 @@
 import pytest
 
 from leap_finetune.rl.rewards import resolve_reward_specs
-from leap_finetune.config import parse_job_config
-from leap_finetune.training.default_configs import TrainingConfig
+from leap_finetune.config import (
+    materialize_job_config,
+    parse_job_config as _parse_job_config,
+)
+from leap_finetune.training.default_configs import TRAINING_DEFAULTS
 
 from conftest import write_config
 
 pytestmark = pytest.mark.configs
+
+
+def parse_job_config(config_input):
+    return materialize_job_config(_parse_job_config(config_input))
 
 
 # === Shared fixtures ===
@@ -31,16 +38,16 @@ VLM_GRPO_DATASET = {
 
 class TestGRPOBaseConfigDiscovery:
     def test_default_grpo_discovered(self):
-        assert "DEFAULT_GRPO" in {m.name for m in TrainingConfig}
+        assert "DEFAULT_GRPO" in TRAINING_DEFAULTS
 
     def test_default_vlm_grpo_discovered(self):
-        assert "DEFAULT_VLM_GRPO" in {m.name for m in TrainingConfig}
+        assert "DEFAULT_VLM_GRPO" in TRAINING_DEFAULTS
 
     def test_moe_grpo_discovered(self):
-        assert "MOE_GRPO" in {m.name for m in TrainingConfig}
+        assert "MOE_GRPO" in TRAINING_DEFAULTS
 
     def test_default_grpo_has_trl_v1_fields(self):
-        cfg = TrainingConfig.DEFAULT_GRPO.value
+        cfg = TRAINING_DEFAULTS["DEFAULT_GRPO"]
         assert cfg["training_type"] == "grpo"
         assert cfg["loss_type"] == "dapo"  # TRL v1 default
         assert cfg["beta"] == 0.0  # KL off by default
@@ -49,7 +56,7 @@ class TestGRPOBaseConfigDiscovery:
         assert cfg["num_generations"] == 8
 
     def test_default_vlm_grpo_has_correct_training_type(self):
-        cfg = TrainingConfig.DEFAULT_VLM_GRPO.value
+        cfg = TRAINING_DEFAULTS["DEFAULT_VLM_GRPO"]
         assert cfg["training_type"] == "vlm_grpo"
         assert cfg["num_generations"] == 4  # smaller groups for VLM memory
         assert "lr_multipliers" in cfg

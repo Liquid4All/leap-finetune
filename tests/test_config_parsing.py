@@ -6,7 +6,8 @@ from peft import LoraConfig
 
 from leap_finetune.config.parser import (
     generate_run_name,
-    parse_job_config,
+    materialize_job_config,
+    parse_job_config as _parse_job_config,
     resolve_config_path,
 )
 from leap_finetune import LEAP_FINETUNE_DIR
@@ -14,6 +15,10 @@ from leap_finetune import LEAP_FINETUNE_DIR
 from conftest import BASE_DPO_DATASET, BASE_SFT_DATASET, BASE_VLM_DATASET, write_config
 
 pytestmark = pytest.mark.configs
+
+
+def parse_job_config(config_input):
+    return materialize_job_config(_parse_job_config(config_input))
 
 
 # === Config path resolution ===
@@ -219,9 +224,10 @@ class TestPeftOverrides:
             "peft_config": {"use_peft": True},
         }
         job = parse_job_config(write_config(config, tmp_path))
-        from leap_finetune.training.default_configs import PeftConfig
+        from leap_finetune.training.default_configs import PEFT_DEFAULTS
 
-        assert job.peft_config is PeftConfig.DEFAULT_LORA
+        assert job.peft_config is not None
+        assert job.peft_config.value is PEFT_DEFAULTS["DEFAULT_LORA"]
 
     def test_no_peft_section_gives_none(self, tmp_path):
         config = {
@@ -546,7 +552,7 @@ class TestInvalidConfigs:
             "training_type": "invalid_type",
             "dataset": BASE_SFT_DATASET,
         }
-        with pytest.raises(ValueError, match="Unknown training type"):
+        with pytest.raises(ValueError, match="Invalid config"):
             parse_job_config(write_config(config, tmp_path))
 
 

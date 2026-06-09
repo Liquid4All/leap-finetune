@@ -19,8 +19,9 @@ class _FakeTokenizer:
         max_length=None,
         return_dict=False,
         return_assistant_tokens_mask=False,
+        tools=None,
     ):
-        del messages, tokenize, truncation, max_length
+        del messages, tokenize, truncation, max_length, tools
         output = {"input_ids": [10, 11, 12, 13, 14, 15]}
         if return_assistant_tokens_mask:
             output["assistant_masks"] = [0, 1, 1, 0, 1, 1]
@@ -150,8 +151,9 @@ class _PackingTokenizer(_FakeTokenizer):
         max_length=None,
         return_dict=False,
         return_assistant_tokens_mask=False,
+        tools=None,
     ):
-        del tokenize, truncation, max_length
+        del tokenize, truncation, max_length, tools
         key = messages[0]["content"]
         if key == "one":
             output = {"input_ids": [1, 2, 3]}
@@ -226,8 +228,9 @@ class _VariableLengthTokenizer(_FakeTokenizer):
         max_length=None,
         return_dict=False,
         return_assistant_tokens_mask=False,
+        tools=None,
     ):
-        del tokenize
+        del tokenize, tools
         length = int(messages[0]["content"])
         input_ids = list(range(length))
         if truncation and max_length is not None:

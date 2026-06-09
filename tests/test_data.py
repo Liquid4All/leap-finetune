@@ -96,7 +96,7 @@ class TestToolCallValidation:
                 }
             ]
         )
-        with pytest.raises(ValueError, match="tool_calls.*not supported"):
+        with pytest.raises(ValueError, match="no tool response"):
             validate_sft_format(ds)
 
     def test_sft_missing_tool_response_rejected(self):
@@ -195,7 +195,7 @@ class TestToolCallValidation:
                     ]
                 }
             )
-            is False
+            is True
         )
 
     def test_dpo_row_filter_rejects_foreign_markers(self):

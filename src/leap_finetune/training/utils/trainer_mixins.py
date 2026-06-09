@@ -47,7 +47,11 @@ class RayDataLoaderMixin:
         )
 
 
-def validate_manual_sharded_training_args(config_kwargs: dict) -> None:
+def validate_manual_sharded_training_args(
+    config_kwargs: dict,
+    *,
+    checkpoint_format: str | None = None,
+) -> None:
     """Reject Trainer args that conflict with the manual-sharded runtime."""
     if config_kwargs.get("gradient_checkpointing"):
         raise ValueError(
@@ -55,7 +59,9 @@ def validate_manual_sharded_training_args(config_kwargs: dict) -> None:
             "runs. This path already applies activation checkpointing in the FSDP2 "
             "wrapper; remove gradient_checkpointing from training_config."
         )
-    checkpoint_format = config_kwargs.get("manual_sharded_checkpoint_format")
+    checkpoint_format = checkpoint_format or config_kwargs.get(
+        "manual_sharded_checkpoint_format"
+    )
     if checkpoint_format is not None:
         try:
             normalize_manual_sharded_checkpoint_format(checkpoint_format)

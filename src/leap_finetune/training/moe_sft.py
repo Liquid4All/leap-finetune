@@ -216,7 +216,10 @@ def moe_sft_run(training_config: dict) -> None:
     }
 
     if use_ep or use_fsdp2:
-        validate_manual_sharded_training_args(config_kwargs)
+        validate_manual_sharded_training_args(
+            config_kwargs,
+            checkpoint_format=manual_sharded_checkpoint_format,
+        )
         if use_ep:
             logger.info("EP mode: ep_size=%s, FSDP2 on dp_mesh", ep_size)
         else:

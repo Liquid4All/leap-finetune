@@ -25,6 +25,12 @@ _TEST_RESULTS_DIR = pathlib.Path.home() / "test-results"
 
 def pytest_addoption(parser):
     parser.addoption("--configs", action="store_true", help="Run only config tests")
+    parser.addoption(
+        "--distribution", action="store_true", help="Run only distribution tests"
+    )
+    parser.addoption(
+        "--evaluation", action="store_true", help="Run only evaluation tests"
+    )
     parser.addoption("--rl", action="store_true", help="Run only RL tests")
     parser.addoption("--dense", action="store_true", help="Run only dense GPU tests")
     parser.addoption("--vlm", action="store_true", help="Run only VLM GPU tests")
@@ -34,6 +40,8 @@ def pytest_addoption(parser):
 def pytest_collection_modifyitems(config, items):
     flag_mark_map = {
         "configs": "configs",
+        "distribution": "distribution",
+        "evaluation": "evaluation",
         "rl": "rl",
         "dense": "dense",
         "vlm": "vlm",

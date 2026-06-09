@@ -1,15 +1,9 @@
-"""Inference backends for benchmark evaluation.
-
-One narrow Protocol (``generate`` + ``logprobs``) implemented three ways:
-``HFBackend`` (in-process HF model — sync path + logprob fallback),
-``VLLMInProcessBackend`` (sidecar mode), ``VLLMServerBackend`` (reserved
-mode). VLM is handled per-request via the ``images`` field.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+# ==== Backend Protocol ====
 
 
 @dataclass
@@ -325,11 +319,9 @@ class VLLMInProcessBackend:
 
 
 class VLLMServerBackend:
-    """HTTP client to a long-running ``trl vllm-serve``. Used by reserved
-    mode, where one or more GPUs are dedicated to a persistent vLLM server
-    so eval requests skip startup cost. Talks to the OpenAI-compatible
-    ``/v1/chat/completions`` endpoint. VLM requests embed images as
-    base64 data URLs. Logprob scoring is not implemented.
+    """HTTP client to the OpenAI-compatible vLLM server used by reserved
+    eval mode. VLM requests embed images as base64 data URLs. Logprob
+    scoring is not implemented.
     """
 
     name = "vllm-server"

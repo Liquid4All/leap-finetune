@@ -8,18 +8,19 @@
 #   sidecar  - at each `eval_steps`, the trainer fires `sbatch` for a short
 #              eval job that runs vLLM on the latest checkpoint. Training
 #              never pauses, never reserves eval GPUs. Eval results lag by
-#              `slurm queue + eval time` and are back-filled to wandb at the
+#              `slurm queue + eval time` and log `benchmark/step` /
+#              `train/global_step` so dashboards can align them to the
 #              originating training step. Requires running under SLURM.
 #
-#   reserved - carve N dedicated GPUs at job start for a long-running
-#              `trl vllm-serve`. Worker rank 0 runs a helper thread that
-#              respawns the server with each new checkpoint, runs benchmarks
-#              over HTTP, and drains results to wandb. Predictable latency
-#              at the cost of N reserved GPUs throughout the run.
+#   reserved - carve N dedicated GPUs at job start for an OpenAI-compatible
+#              vLLM server. Worker rank 0 runs a helper thread that respawns
+#              the server with each new checkpoint, runs benchmarks over HTTP,
+#              and drains results to wandb. Predictable latency at the cost
+#              of N reserved GPUs throughout the run.
 #              Single-node only for v1.
 #
-# All three modes log `benchmark/<bench>/<metric>` keys on the global
-# trainer step axis - dashboards look identical regardless of mode.
+# All three modes log `benchmark/<bench>/<metric>` keys with `benchmark/step`
+# so dashboards can use a consistent training-step axis.
 
 project_name: "sft_async_eval_example"
 model_name: "LFM2-1.2B"
@@ -38,8 +39,8 @@ training_config:
   eval_strategy: "steps"
   eval_steps: 200
 
-# === Benchmarks: same shape as today's sync benchmarks block ===
-benchmarks:
+# === Evals: same shape as today's sync eval suite ===
+evals:
   max_new_tokens: 256
   benchmarks:
     - name: gsm8k

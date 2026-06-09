@@ -134,6 +134,7 @@ Useful starter configs:
 | MoE SFT                 | [`job_configs/moe_sft_example.yaml`](./job_configs/moe_sft_example.yaml)                       |
 | MoE DPO                 | [`job_configs/moe_dpo_example.yaml`](./job_configs/moe_dpo_example.yaml)                       |
 | Expert-parallel MoE SFT | [`job_configs/moe_ep_sft_example.yaml`](./job_configs/moe_ep_sft_example.yaml)                 |
+| Standalone eval         | [`job_configs/eval_standalone_example.yaml`](./job_configs/eval_standalone_example.yaml)       |
 
 ## CLI and Python Usage
 
@@ -143,6 +144,8 @@ CUDA/vLLM stack:
 ```bash
 uv run leap-finetune job_configs/sft_example.yaml
 uv run leap-finetune run job_configs/sft_example.yaml
+uv run leap-finetune job_configs/eval_standalone_example.yaml
+uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
 ```
 
 Install the command as a reusable tool from a checkout:
@@ -151,6 +154,8 @@ Install the command as a reusable tool from a checkout:
 uv tool install --editable . --force
 leap-finetune /absolute/path/to/config.yaml
 leap-finetune slurm /absolute/path/to/config.yaml --output-dir /absolute/path/to/slurms
+leap-finetune /absolute/path/to/eval_config.yaml
+leap-finetune eval /absolute/path/to/eval_config.yaml --output /absolute/path/to/results.json
 ```
 
 `uv tool install` creates an isolated tool environment. Use explicit config
@@ -172,6 +177,14 @@ configs run local Ray training and require visible CUDA devices.
 from leap_finetune import run_config
 
 run_config("/absolute/path/to/config.yaml")
+```
+
+Standalone evals use the same entry point:
+
+```python
+from leap_finetune import run_config
+
+metrics = run_config("/absolute/path/to/eval_config.yaml")
 ```
 
 Run that file inside an environment where `leap-finetune` is installed:
@@ -672,11 +685,11 @@ is simpler and faster.
 
 ## Evaluation
 
-Run benchmarks during training at every `eval_steps` by adding a `benchmarks:`
-section:
+Run benchmarks during training at every `eval_steps` by adding an `evals:`
+section. The legacy `benchmarks:` alias still parses.
 
 ```yaml
-benchmarks:
+evals:
   max_new_tokens: 128
   benchmarks:
     - name: "mmmu_val"
@@ -696,9 +709,40 @@ metrics include `short_answer`, `grounding_iou`, `mcq_gen`, and
 See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data
 format examples, YAML reference, and custom metrics.
 
+Run the same eval suite without training:
+
+```bash
+uv run leap-finetune job_configs/eval_standalone_example.yaml
+```
+
+Standalone eval configs use `model_name` or `checkpoint`, `evals:`, and an
+optional `backend:` block. They do not include `dataset`, `training_type`,
+`training_config`, or `async_eval`. Text evals default to `modality: text`;
+set `modality: vlm` only for standalone VLM evals.
+
+Use the explicit `eval` subcommand when you want CLI-only eval options such as
+writing metrics to JSON:
+
+```bash
+uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
+```
+
+The same path is available from Python:
+
+```python
+from leap_finetune import run_config
+
+metrics = run_config("job_configs/eval_standalone_example.yaml")
+```
+
 ### Async Eval (vLLM)
 
-By default, every `eval_steps` blocks training until benchmarks finish. For large generation suites this dominates wall-clock time. Add an `async_eval` block to run benchmarks **without blocking training**, using vLLM for the actual generation. Results are logged to wandb at the **same global-step axis** as today — dashboards look identical.
+By default, every `eval_steps` blocks training until benchmarks finish. For
+large generation suites this dominates wall-clock time. Add an `async_eval`
+block to run benchmarks **without blocking training**, using vLLM for the
+actual generation. Results are logged to wandb with `benchmark/step` and
+`train/global_step` fields so dashboards can align benchmark metrics to the
+training step that triggered them.
 
 Three modes (default is `sync` = today's behavior):
 
@@ -713,7 +757,10 @@ training via the driver's `CUDA_VISIBLE_DEVICES`, which only affects
 the head node. Multi-node training will raise `NotImplementedError`
 at startup — use `sidecar` instead, which scales to any node count.
 
-Both async modes serve generation through vLLM. Logprob benchmarks fall back to a sync HF model inside the runner if the chosen vLLM build doesn't support them.
+Async sidecar mode serves generation through vLLM and falls back to an HF model
+inside the sidecar for benchmark types vLLM cannot serve, such as logprob
+scoring. Reserved mode keeps a persistent vLLM server and should be used for
+generation benchmarks; use `sync` or `sidecar` for logprob suites.
 
 ```yaml
 # Opt in by adding this block. See job_configs/sft_with_async_eval_example.yaml

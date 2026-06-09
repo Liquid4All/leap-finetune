@@ -1,16 +1,12 @@
-"""Render an sbatch script that runs ``async_runner_main`` for one eval
-cycle. The script clears the ``.in_flight`` marker and the staging
-checkpoint on exit (any signal) so a crashed runner can't block the
-callback.
-"""
-
 from __future__ import annotations
 
 import pathlib
 import shlex
 from dataclasses import dataclass
 
-from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
+from leap_finetune import LEAP_FINETUNE_DIR
+
+# ==== Sidecar Sbatch Rendering ====
 
 
 @dataclass
@@ -82,10 +78,7 @@ def render_sbatch_script(
         runner_args += ["--wandb-project", wandb_project]
 
     runner_cmd = (
-        # --no-sync: reuse the parent's resolved venv. Re-resolution in a
-        # sidecar can fail if an upstream index has churned (e.g. vllm rocm
-        # wheels yanked) since the parent locked.
-        "uv run --no-sync python -m leap_finetune.evaluation.async_runner_main \\\n    "
+        "python -m leap_finetune.evaluation.async_runner_main \\\n    "
         + " \\\n    ".join(shlex.quote(a) for a in runner_args)
     )
 

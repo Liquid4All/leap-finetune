@@ -1,19 +1,9 @@
-"""TrainerCallback for ``async_eval.mode == "sidecar"``.
-
-At each ``eval_steps`` the callback (rank 0) stages a checkpoint, renders
-an sbatch script, and submits it. The sbatch job loads vLLM, runs every
-configured benchmark, and back-fills the training run's wandb log at the
-originating training step. Training itself never blocks on eval — except
-for the optional sync step-0 short-circuit (see ``on_train_begin``).
-"""
-
 from __future__ import annotations
 
 import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -22,10 +12,13 @@ from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 
 from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+from leap_finetune.evaluation.runner import stage_checkpoint_for_eval
 from leap_finetune.evaluation.sbatch_template import render_sbatch_script
-from leap_finetune.utils.logging_utils import is_rank_zero
+from leap_finetune.training.utils.logging import is_rank_zero
 
 logger = logging.getLogger(__name__)
+
+# ==== Async Sidecar Callback ====
 
 _MARKER_PREFIX = (
     ".in_flight.step_"  # one file per in-flight step → ".in_flight.step_<N>"
@@ -241,39 +234,16 @@ class SidecarEvalCallback(TrainerCallback):
         # EXIT trap removes only its own (templated by step number).
         marker = eval_dir / f"{_MARKER_PREFIX}{state.global_step}"
 
-        ckpt_root = eval_dir / "checkpoints"
-        ckpt_root.mkdir(parents=True, exist_ok=True)
-        ckpt_path = ckpt_root / f"step_{state.global_step}"
-
         # Each sbatch self-cleans its own checkpoint on EXIT. We also evict
         # stale dirs here so a crashed runner that skipped its trap can't
         # leak disk indefinitely; keep enough to support on_overlap=queue.
-        if ckpt_path.exists():
-            shutil.rmtree(ckpt_path, ignore_errors=True)
-        existing = sorted(
-            ckpt_root.glob("step_*"),
-            key=lambda p: int(p.name.removeprefix("step_"))
-            if p.name[5:].isdigit()
-            else 0,
+        ckpt_path = stage_checkpoint_for_eval(
+            model=model,
+            benchmarks=self.benchmarks,
+            ckpt_root=eval_dir / "checkpoints",
+            step=state.global_step,
+            keep=_STAGING_KEEP,
         )
-        for stale in existing[:-_STAGING_KEEP]:
-            shutil.rmtree(stale, ignore_errors=True)
-
-        unwrapped = model.module if hasattr(model, "module") else model
-        unwrapped.save_pretrained(str(ckpt_path))
-        # The sidecar needs the tokenizer/processor at load time to
-        # re-construct the benchmarks; one is enough since all share it.
-        for b in self.benchmarks:
-            tk = getattr(b, "tokenizer", None) or getattr(b, "processor", None)
-            if tk is not None:
-                try:
-                    tk.save_pretrained(str(ckpt_path))
-                except Exception:
-                    logger.debug(
-                        "[async_eval/sidecar] tokenizer save_pretrained failed",
-                        exc_info=True,
-                    )
-                break
 
         bench_json = ckpt_path / "_benchmark_configs.json"
         bench_json.write_text(json.dumps(self.benchmark_configs))

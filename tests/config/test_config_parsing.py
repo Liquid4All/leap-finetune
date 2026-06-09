@@ -4,6 +4,7 @@ from leap_finetune import run_config
 from leap_finetune.config import (
     DatasetConfig,
     EvalConfig,
+    EvalRunConfig,
     EvalSuiteConfig,
     JobConfig,
     TrainingConfig,
@@ -141,6 +142,91 @@ class TestDirectPythonConfig:
         assert calls["job_dict"]["job_name"] == "py_run"
         assert calls["job_dict"]["training_type"] == "sft"
 
+    def test_run_config_accepts_eval_model(self, monkeypatch):
+        calls = {}
+
+        def fake_run_eval_config(config, *, output_path=None):
+            calls["config"] = config
+            calls["output_path"] = output_path
+            return {"benchmark/tiny_qa/score": 1.0}
+
+        monkeypatch.setattr(
+            "leap_finetune.evaluation.runner.run_eval_config",
+            fake_run_eval_config,
+        )
+
+        eval_config = EvalRunConfig(
+            model_name="LFM2-1.2B",
+            evals=EvalSuiteConfig(
+                benchmarks=[
+                    EvalConfig(
+                        name="tiny_qa",
+                        path="/tmp/tiny_qa.jsonl",
+                        metric="short_answer",
+                    )
+                ]
+            ),
+        )
+
+        result = run_config(eval_config, output_path="/tmp/results.json")
+
+        assert result == {"benchmark/tiny_qa/score": 1.0}
+        assert calls["config"] is eval_config
+        assert calls["output_path"] == "/tmp/results.json"
+
+    def test_run_config_dispatches_eval_yaml_without_training(
+        self, tmp_path, monkeypatch
+    ):
+        calls = {}
+
+        def fake_run_eval_config(config, *, output_path=None):
+            calls["config"] = config
+            calls["output_path"] = output_path
+            return {"benchmark/tiny_qa/score": 1.0}
+
+        monkeypatch.setattr(
+            "leap_finetune.cli.main.check_and_handle_slurm",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.modal.check_and_handle_modal",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.cli.main._assert_local_cuda_available",
+            lambda: pytest.fail("eval-only run_config should not require CUDA"),
+        )
+        monkeypatch.setattr(
+            "leap_finetune.evaluation.runner.run_eval_config",
+            fake_run_eval_config,
+        )
+
+        cfg_path = write_config(
+            {
+                "model_name": "LFM2-1.2B",
+                "evals": {
+                    "benchmarks": [
+                        {
+                            "name": "tiny_qa",
+                            "path": "/tmp/tiny_qa.jsonl",
+                            "metric": "short_answer",
+                        }
+                    ]
+                },
+            },
+            tmp_path,
+        )
+
+        result = run_config(cfg_path)
+
+        assert result == {"benchmark/tiny_qa/score": 1.0}
+        assert isinstance(calls["config"], EvalRunConfig)
+        assert calls["output_path"] is None
+
 
 class TestFocusedValidation:
     def test_evals_and_benchmarks_both_parse(self, tmp_path):
@@ -173,6 +259,33 @@ class TestFocusedValidation:
         assert parsed_old.evals is not None
         assert parsed_new.evals.benchmarks[0].name == "toy_eval"
         assert parsed_old.evals.benchmarks[0].name == "toy_eval"
+
+    def test_materialize_resolves_repo_relative_eval_paths(self, tmp_path):
+        config = {
+            "project_name": "repo_relative_eval",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"eval_strategy": "epoch"},
+            "evals": {
+                "benchmarks": [
+                    {
+                        "name": "tiny_qa",
+                        "path": "tests/e2e/fixtures/tiny_qa_bench.jsonl",
+                        "metric": "short_answer",
+                    }
+                ]
+            },
+        }
+
+        materialized = materialize_job_config(
+            parse_job_config(write_config(config, tmp_path))
+        )
+
+        assert materialized.benchmark_configs is not None
+        assert materialized.benchmark_configs["benchmarks"][0]["path"].endswith(
+            "/tests/e2e/fixtures/tiny_qa_bench.jsonl"
+        )
 
     def test_invalid_dataset_path_combination_rejected(self, tmp_path):
         config = {

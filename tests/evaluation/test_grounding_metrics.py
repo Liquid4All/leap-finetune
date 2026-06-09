@@ -1,18 +1,12 @@
-"""Grounding metric contract tests.
-
-Pins the user-visible behavior of ``grounding_iou`` (legacy permissive)
-and ``grounding_iou_f1`` (strict, reward-aligned), plus the scipy-or-greedy
-fallback for Hungarian matching. Internal-helper edge cases live below
-the surface — only regressions Codex actually caught are pinned here.
-"""
-
 from __future__ import annotations
 
 import sys
 
 import pytest
 
-pytestmark = pytest.mark.data
+pytestmark = pytest.mark.evaluation
+
+# === Grounding Metric Tests ===
 
 
 class TestStrictParser:

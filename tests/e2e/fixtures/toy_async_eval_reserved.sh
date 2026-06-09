@@ -26,5 +26,4 @@ export TMPDIR="${HOME}/tmp"
 export TRITON_CACHE_DIR="${HOME}/.triton_cache"
 mkdir -p "$TMPDIR" "$TRITON_CACHE_DIR" logs/async_eval_toy
 
-# --no-sync: use the already-activated .venv instead of re-resolving deps.
-uv run --no-sync leap-finetune tests/fixtures/toy_async_eval_reserved.yaml
+leap-finetune tests/e2e/fixtures/toy_async_eval_reserved.yaml

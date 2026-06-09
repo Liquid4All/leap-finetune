@@ -7,6 +7,7 @@ from datasets import Dataset
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from leap_finetune.data_loading.dataset_loader import DatasetLoader
+from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
 
 TrainingType = Literal[
     "sft",
@@ -131,6 +132,58 @@ class EvalSuiteConfig(BaseModel):
     benchmarks: list[EvalConfig] = Field(default_factory=list)
 
 
+class EvalBackendConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["hf", "vllm"] = "hf"
+    tensor_parallel_size: int = 1
+    gpu_memory_utilization: float = 0.9
+    dtype: str = "bfloat16"
+    max_model_len: int | None = None
+
+    @model_validator(mode="after")
+    def _validate_backend(self) -> EvalBackendConfig:
+        if self.tensor_parallel_size < 1:
+            raise ValueError("backend.tensor_parallel_size must be >= 1")
+        if self.gpu_memory_utilization <= 0 or self.gpu_memory_utilization > 1:
+            raise ValueError("backend.gpu_memory_utilization must be in (0, 1]")
+        return self
+
+
+class EvalRunConfig(BaseModel):
+    """Standalone eval config.
+
+    Uses the same ``evals:`` suite as training configs, but deliberately has
+    no dataset or training section. Backend placement/configuration is kept
+    outside the eval suite so benchmark definitions remain reusable.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    project_name: str | None = None
+    model_name: str | None = None
+    checkpoint: str | None = None
+    modality: Literal["text", "vlm"] = "text"
+    evals: EvalSuiteConfig = Field(
+        validation_alias=AliasChoices("evals", "benchmarks"),
+        serialization_alias="evals",
+    )
+    backend: EvalBackendConfig = Field(default_factory=EvalBackendConfig)
+    model_overrides: dict[str, Any] | None = Field(default=None, alias="model_config")
+    output_path: str | None = None
+    config_dir: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_eval_run(self) -> EvalRunConfig:
+        if not self.model_name and not self.checkpoint:
+            raise ValueError("Standalone eval requires model_name or checkpoint")
+        return self
+
+    @property
+    def model_ref(self) -> str:
+        return self.checkpoint or self.model_name or ""
+
+
 class RayConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -182,7 +235,7 @@ class JobConfig(BaseModel):
     rewards: list[Any] | dict[str, Any] | None = None
     rl_env: dict[str, Any] | None = None
     grpo_rollout: dict[str, Any] | None = None
-    async_eval: dict[str, Any] | None = None
+    async_eval: AsyncEvalConfig | None = None
     config_dir: str | None = None
 
     @model_validator(mode="after")

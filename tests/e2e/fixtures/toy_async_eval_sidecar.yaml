@@ -26,11 +26,11 @@ training_config:
   save_strategy: "no"
   wandb_logging: true
 
-benchmarks:
+evals:
   max_new_tokens: 32
   benchmarks:
     - name: tiny_qa
-      path: tests/fixtures/tiny_qa_bench.jsonl
+      path: tests/e2e/fixtures/tiny_qa_bench.jsonl
       metric: short_answer
       match_mode: contains
 

@@ -15,12 +15,12 @@ import requests
 logger = logging.getLogger(__name__)
 
 
-# === vLLM server-mode lifecycle ===
+# === Local vLLM server lifecycle and resource planning ===
 #
-# The driver resolves the local GPU split before Ray starts, launches
-# `trl vllm-serve` on the reserved GPUs, waits for /health, then passes the
-# resulting endpoint through GRPOConfig. TRL owns the server protocol; this
-# module only handles local process lifecycle and resource planning.
+# The driver resolves local GPU splits before Ray starts, launches vLLM
+# server processes on reserved GPUs, waits for /health, then passes endpoints
+# to the relevant runtime config. The caller owns the server protocol; this
+# module handles local process lifecycle and resource planning.
 
 
 @dataclass
@@ -465,7 +465,7 @@ def launch_vllm_server(
     # gets its process terminated.
     atexit.register(_terminate_server, process)
 
-    _wait_for_health(
+    wait_for_vllm_health(
         handle.base_url,
         timeout=startup_timeout,
         process=process,
@@ -475,7 +475,7 @@ def launch_vllm_server(
     return handle
 
 
-def _wait_for_health(
+def wait_for_vllm_health(
     base_url: str,
     timeout: float,
     process: subprocess.Popen,

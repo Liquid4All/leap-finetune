@@ -14,6 +14,8 @@ from leap_finetune import LEAP_FINETUNE_DIR
 from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 from leap_finetune.config.job_config import (
     DatasetConfig,
+    EvalRunConfig,
+    EvalSuiteConfig,
     JobConfig,
     ResolvedJobConfig,
     _ResolvedConfigValue,
@@ -73,8 +75,13 @@ def _resolve_local_path(value: str | None, *, base_dir: pathlib.Path) -> str | N
     if expanded.is_absolute():
         return str(expanded.resolve())
 
-    if value.startswith(("./", "../")) or (base_dir / value).exists():
+    if value.startswith(("./", "../")):
         return str((base_dir / value).resolve())
+
+    for root in (base_dir, pathlib.Path.cwd(), LEAP_FINETUNE_DIR):
+        candidate = root / value
+        if candidate.exists():
+            return str(candidate.resolve())
 
     return value
 
@@ -194,6 +201,26 @@ def parse_job_config(config_input: str | pathlib.Path) -> JobConfig:
         )
     except ValidationError as e:
         raise ValueError(f"Invalid config: {e}") from e
+
+
+def parse_eval_config(config_input: str | pathlib.Path) -> EvalRunConfig:
+    """Parse a standalone eval config.
+
+    Standalone eval configs intentionally do not require training-only fields
+    like ``dataset`` or ``training_config``. They share ``EvalSuiteConfig`` with
+    training through the top-level ``evals:`` section.
+    """
+    path_obj = resolve_config_path(config_input)
+    config_dict = _load_yaml_config(path_obj)
+    try:
+        return EvalRunConfig.model_validate(
+            {
+                **config_dict,
+                "config_dir": str(path_obj.parent.resolve()),
+            }
+        )
+    except ValidationError as e:
+        raise ValueError(f"Invalid eval config: {e}") from e
 
 
 def _resolve_training_type(
@@ -378,6 +405,52 @@ def _resolve_output_dir(
     return pathlib.Path(base_project_dir).resolve() / run_name
 
 
+def _resolve_eval_suite_paths(
+    evals: EvalSuiteConfig,
+    *,
+    base_dir: pathlib.Path,
+) -> dict[str, Any]:
+    benchmark_configs = evals.model_dump(exclude_none=True)
+    if isinstance(benchmark_configs.get("image_root"), str):
+        benchmark_configs["image_root"] = _resolve_local_path(
+            benchmark_configs["image_root"],
+            base_dir=base_dir,
+        )
+    for bench in benchmark_configs.get("benchmarks", []):
+        if isinstance(bench.get("path"), str):
+            bench["path"] = _resolve_local_path(bench["path"], base_dir=base_dir)
+        if isinstance(bench.get("image_root"), str):
+            bench["image_root"] = _resolve_local_path(
+                bench["image_root"],
+                base_dir=base_dir,
+            )
+    return benchmark_configs
+
+
+def materialize_eval_config(eval_config: EvalRunConfig) -> EvalRunConfig:
+    """Resolve local paths in a standalone eval config."""
+    config_dir = pathlib.Path(eval_config.config_dir or pathlib.Path.cwd()).resolve()
+    payload = eval_config.model_dump(by_alias=True, exclude_none=True)
+
+    if isinstance(payload.get("checkpoint"), str):
+        payload["checkpoint"] = _resolve_local_path(
+            payload["checkpoint"],
+            base_dir=config_dir,
+        )
+
+    output_path = payload.get("output_path")
+    if isinstance(output_path, str):
+        payload["output_path"] = _resolve_local_path(output_path, base_dir=config_dir)
+
+    if eval_config.evals:
+        payload["evals"] = _resolve_eval_suite_paths(
+            eval_config.evals,
+            base_dir=config_dir,
+        )
+    payload["config_dir"] = str(config_dir)
+    return EvalRunConfig.model_validate(payload)
+
+
 def _create_output_dir(
     *,
     output_dir: pathlib.Path,
@@ -480,26 +553,14 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
     grpo_rollout_cfg = job_config.grpo_rollout
     benchmark_configs = None
     if job_config.evals:
-        benchmark_configs = job_config.evals.model_dump(exclude_none=True)
-        if isinstance(benchmark_configs.get("image_root"), str):
-            benchmark_configs["image_root"] = _resolve_local_path(
-                benchmark_configs["image_root"],
-                base_dir=config_dir,
-            )
-        for bench in benchmark_configs.get("benchmarks", []):
-            if isinstance(bench.get("path"), str):
-                bench["path"] = _resolve_local_path(bench["path"], base_dir=config_dir)
-            if isinstance(bench.get("image_root"), str):
-                bench["image_root"] = _resolve_local_path(
-                    bench["image_root"],
-                    base_dir=config_dir,
-                )
+        benchmark_configs = _resolve_eval_suite_paths(
+            job_config.evals,
+            base_dir=config_dir,
+        )
 
-    async_eval_cfg = job_config.async_eval
-    if async_eval_cfg is not None:
-        from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
-
-        AsyncEvalConfig.from_dict(async_eval_cfg)
+    async_eval_cfg = (
+        job_config.async_eval.to_dict() if job_config.async_eval is not None else None
+    )
 
     _validate_parallelism_config(
         final_train_values,

@@ -1,24 +1,7 @@
-"""TrainerCallback for ``async_eval.mode == "reserved"``.
-
-Rank 0 owns a daemon helper thread that:
-1. Launches a vLLM OpenAI server on the dedicated eval GPUs (carved off
-   the training pool by the driver at job start).
-2. On each ``on_evaluate``: respawns the server with the latest
-   checkpoint, runs all benchmarks via ``VLLMServerBackend``, pushes an
-   ``EvalResult`` to an output queue.
-3. ``on_log`` drains the queue and logs to wandb at the originating step.
-
-Weight reload only supports ``respawn`` today; ``in_place`` is rejected
-at construction with a clear error. Helper-thread exceptions never
-propagate to training; after ``failure.max_consecutive`` failures the
-callback disables itself.
-"""
-
 from __future__ import annotations
 
 import logging
 import queue
-import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,9 +10,12 @@ from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 
 from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
-from leap_finetune.utils.logging_utils import is_rank_zero
+from leap_finetune.evaluation.runner import stage_checkpoint_for_eval
+from leap_finetune.training.utils.logging import is_rank_zero
 
 logger = logging.getLogger(__name__)
+
+# ==== Reserved Async Eval Callback ====
 
 
 @dataclass
@@ -80,6 +66,8 @@ class ReservedEvalCallback(TrainerCallback):
         self._thread: threading.Thread | None = None
         self._consecutive_failures = 0
         self._disabled = False
+        self._in_flight_lock = threading.Lock()
+        self._in_flight_count = 0
 
     @property
     def _eval_dir(self) -> Path:
@@ -114,6 +102,8 @@ class ReservedEvalCallback(TrainerCallback):
                     "[async_eval/reserved] cycle failed at step %d", req.step
                 )
                 self._output_q.put(_EvalResult(step=req.step, metrics={}, ok=False))
+            finally:
+                self._release_eval_slot()
 
     def _run_one_cycle(self, backend, req: _EvalRequest) -> tuple[dict, bool]:
         """Respawn the server with the new checkpoint, wait for /health,
@@ -125,10 +115,14 @@ class ReservedEvalCallback(TrainerCallback):
         NotImplementedError and empty-samples paths don't count as
         failures; they're healthy ways for a cycle to be a no-op.
         """
-        from leap_finetune.utils.vllm_server import _wait_for_health  # noqa: PLC2701
+        from leap_finetune.distribution.vllm_server import wait_for_vllm_health
 
         self._respawn_server(req.ckpt_path)
-        _wait_for_health(self.server_url, timeout=600.0, process=self._server_process)
+        wait_for_vllm_health(
+            self.server_url,
+            timeout=600.0,
+            process=self._server_process,
+        )
 
         results: dict[str, float] = {}
         real_errors = 0
@@ -163,7 +157,7 @@ class ReservedEvalCallback(TrainerCallback):
 
     # === Subprocess management (helper thread owns it) ===
 
-    _server_process = None  # subprocess.Popen of trl vllm-serve
+    _server_process = None  # subprocess.Popen of vLLM OpenAI API server
 
     def _respawn_server(self, ckpt_path: Path) -> None:
         import shlex
@@ -266,12 +260,7 @@ class ReservedEvalCallback(TrainerCallback):
             )
             return
 
-        # Backpressure
-        if not self._input_q.empty() and self.cfg.on_overlap == "skip":
-            logger.warning(
-                "[async_eval/reserved] previous eval still in flight; skipping step %d",
-                state.global_step,
-            )
+        if not self._reserve_eval_slot(state.global_step):
             return
 
         try:
@@ -285,6 +274,7 @@ class ReservedEvalCallback(TrainerCallback):
             # auto-disable could never fire. Only an ok=True cycle drain
             # resets the counter — see _account_result.
         except Exception:
+            self._release_eval_slot()
             self._consecutive_failures += 1
             logger.exception(
                 "[async_eval/reserved] submission failed at step %d (%d consecutive)",
@@ -372,41 +362,30 @@ class ReservedEvalCallback(TrainerCallback):
 
     # === Helpers ===
 
+    def _reserve_eval_slot(self, step: int) -> bool:
+        with self._in_flight_lock:
+            if self.cfg.on_overlap == "skip" and self._in_flight_count > 0:
+                logger.warning(
+                    "[async_eval/reserved] previous eval still in flight; "
+                    "skipping step %d",
+                    step,
+                )
+                return False
+            self._in_flight_count += 1
+            return True
+
+    def _release_eval_slot(self) -> None:
+        with self._in_flight_lock:
+            self._in_flight_count = max(0, self._in_flight_count - 1)
+
     def _save_checkpoint(self, model, state: TrainerState) -> Path:
-        ckpt_root = self._eval_dir / "checkpoints"
-        ckpt_root.mkdir(parents=True, exist_ok=True)
-        ckpt_path = ckpt_root / f"step_{state.global_step}"
-
-        if ckpt_path.exists():
-            shutil.rmtree(ckpt_path, ignore_errors=True)
-
-        # Bound disk: keep only the latest 2 staging checkpoints
-        existing = sorted(
-            ckpt_root.glob("step_*"),
-            key=lambda p: int(p.name.removeprefix("step_"))
-            if p.name[5:].isdigit()
-            else 0,
+        return stage_checkpoint_for_eval(
+            model=model,
+            benchmarks=self.benchmarks,
+            ckpt_root=self._eval_dir / "checkpoints",
+            step=state.global_step,
+            keep=2,
         )
-        for stale in existing[:-1]:
-            shutil.rmtree(stale, ignore_errors=True)
-
-        unwrapped = model.module if hasattr(model, "module") else model
-        unwrapped.save_pretrained(str(ckpt_path))
-
-        # Save tokenizer/processor too — vLLM needs them at load time
-        for b in self.benchmarks:
-            tk = getattr(b, "tokenizer", None) or getattr(b, "processor", None)
-            if tk is not None:
-                try:
-                    tk.save_pretrained(str(ckpt_path))
-                except Exception:
-                    logger.debug(
-                        "[async_eval/reserved] tokenizer save_pretrained failed",
-                        exc_info=True,
-                    )
-                break
-
-        return ckpt_path
 
     def _account_result(self, result: _EvalResult) -> None:
         """Track helper-thread eval-cycle success/failure for auto-disable.

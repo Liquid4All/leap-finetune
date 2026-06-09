@@ -96,7 +96,7 @@ training_config:
 # logs `benchmark/<name>/<metric>` to stdout + wandb. Each entry points at a
 # jsonl/parquet of `{messages: [user, assistant]}` samples; the last message
 # is treated as ground truth.
-benchmarks:
+evals:
   max_new_tokens: 256
   benchmarks:
     - name: "refcoco_m"

@@ -28,16 +28,16 @@ from leap_finetune.distribution.ray_runtime import (
     select_ray_temp_dir,
     worker_process_setup_hook,
 )
+from leap_finetune.distribution.vllm_server import (
+    launch_vllm_server,
+    resolve_server_host,
+    resolve_vllm_rollout_plan,
+)
 from leap_finetune.rl.judge import (
     build_judge_runtime_config,
     export_judge_runtime_config,
     get_judge_config,
     judge_needs_local_server,
-)
-from leap_finetune.rl.vllm_server import (
-    launch_vllm_server,
-    resolve_server_host,
-    resolve_vllm_rollout_plan,
 )
 from leap_finetune.training import TRAINING_LOOPS
 from leap_finetune.training.utils.logging import print_next_steps_panel
@@ -297,9 +297,7 @@ def ray_trainer(job_config: dict) -> None:
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(train_gpu_ids)
         num_workers = len(train_gpu_ids)
 
-        eval_port = int(
-            (async_eval_cfg.get("reserved") or {}).get("server_port", 8100)
-        )
+        eval_port = int((async_eval_cfg.get("reserved") or {}).get("server_port", 8100))
         eval_host = resolve_server_host(None)
         train_loop_config["async_eval_server_url"] = f"http://{eval_host}:{eval_port}"
         train_loop_config["async_eval_gpu_ids"] = ",".join(eval_gpu_ids)

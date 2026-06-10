@@ -44,3 +44,11 @@ tests/slurm/generated/
 
 # wandb local run dirs (offline logs, large + transient)
 wandb/
+
+# Blog/demo generated artifacts only (predictions, downloaded OOD images,
+# rendered viewer, run manifests). Source scripts + drafts stay visible to git.
+cookbook/visual-grounding/blog_demo/predictions/
+cookbook/visual-grounding/blog_demo/viewer/
+cookbook/visual-grounding/blog_demo/samples/manifest.jsonl
+cookbook/visual-grounding/blog_demo/ood/manifest.jsonl
+cookbook/visual-grounding/blog_demo/ood/*.jpg

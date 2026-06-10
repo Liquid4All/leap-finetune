@@ -1,0 +1,108 @@
+# Visual Grounding GRPO — Phase 2 of the cookbook.
+#
+# Refines the Phase 1 SFT checkpoint with GRPO on the 20% holdout split
+# produced by prepare_data.py. Reward: strict_format + CIoU-F1 Hungarian.
+#
+# Before launching: set model_name to the absolute path of your SFT final
+# checkpoint (Phase 1 output), and set dataset.path to the grounding_grpo
+# split prepare_data.py wrote.
+#
+# Launch:
+#   sbatch cookbook/visual-grounding/configs/grpo_grounding.sh
+
+project_name: "visual_grounding_grpo"
+# <SET ME> — path to your Phase 1 SFT final checkpoint.
+model_name: "./outputs/visual_grounding_sft/<your-sft-final-checkpoint>"
+training_type: "vlm_grpo"
+
+dataset:
+  path: "./data/grounding_grpo"
+  type: "vlm_grpo"
+  test_size: 0.01
+
+rewards:
+  recipe: "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingCIoURecipe"
+
+training_config:
+  extends: "DEFAULT_VLM_GRPO"
+
+  output_dir: "./outputs/visual_grounding_grpo"
+
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  num_generations: 4
+  learning_rate: 1e-6
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+
+  max_completion_length: 256
+  temperature: 1.0
+  top_p: 1.0
+  top_k: 0
+
+  beta: 0.01
+  epsilon: 0.2
+  loss_type: "dapo"
+  scale_rewards: "group"
+  mask_truncated_completions: true
+
+  use_vllm: true
+  vllm_mode: "colocate"
+  vllm_gpu_memory_utilization: 0.25
+  vllm_enable_sleep_mode: false
+  vllm_importance_sampling_correction: true
+  vllm_importance_sampling_mode: "token_truncate"
+
+  do_image_splitting: false
+
+  eval_strategy: "steps"
+  eval_steps: 1000
+  eval_on_start: false
+  save_strategy: "steps"
+  save_steps: 1000
+  save_total_limit: 20
+  logging_steps: 10
+  logging_first_step: true
+  log_completions: false
+  num_completions_to_print: 4
+
+  wandb_logging: true
+
+  bf16: true
+  gradient_checkpointing: true
+
+benchmarks:
+  max_new_tokens: 256
+  benchmarks:
+    - name: "refcoco_val"
+      path: "./data/grounding_evals/refcoco_val.jsonl"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+    - name: "refcoco_plus_val"
+      path: "./data/grounding_evals/refcoco_plus_val.jsonl"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+    - name: "refcocog_val"
+      path: "./data/grounding_evals/refcocog_val.jsonl"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+    - name: "mgrounding_test"
+      path: "./data/grounding_test/test.parquet"
+      metric: "grounding_iou_f1"
+      limit: 500
+
+async_eval:
+  mode: sidecar
+  vllm_gpus: 1
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.85
+  dtype: bfloat16
+  on_overlap: queue
+  failure:
+    max_consecutive: 3
+    max_submit_attempts: 3
+
+peft_config:
+  use_peft: false

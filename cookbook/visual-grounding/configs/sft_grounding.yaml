@@ -1,0 +1,88 @@
+# Visual Grounding SFT — Phase 1 of the cookbook.
+#
+# Trains the base LFM2.5-VL on the 80% SFT split of MGrounding-630k (full
+# mix, including Object_Tracking; multi-image tracking samples are
+# canonicalized into the same [{"label","bbox"}] JSON schema as single-
+# image grounding so the supervision is uniform). Test holdout (10%) is
+# what mgrounding_test evaluates on.
+#
+# Launch:
+#   sbatch cookbook/visual-grounding/configs/sft_grounding.sh
+
+project_name: "visual_grounding_sft"
+model_name: "LFM2.5-VL-1.6B"
+training_type: "vlm_sft"
+
+dataset:
+  path: "./data/grounding_sft"
+  type: "vlm_sft"
+  test_size: 0.01
+
+training_config:
+  extends: "DEFAULT_VLM_SFT"
+
+  output_dir: "./outputs/visual_grounding_sft"
+
+  num_train_epochs: 1
+  per_device_train_batch_size: 4
+  # 2 nodes × 8 GPUs × per_device 4 × accum 2 → effective batch 128.
+  gradient_accumulation_steps: 2
+  learning_rate: 5e-5
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+
+  do_image_splitting: false
+
+  vision_encoder_lr_multiplier: 0.1
+
+  eval_strategy: "steps"
+  eval_steps: 1000
+  eval_on_start: true
+  save_strategy: "steps"
+  save_steps: 4000
+  save_total_limit: 3
+  logging_steps: 25
+  logging_first_step: true
+
+  wandb_logging: true
+
+  bf16: true
+  gradient_checkpointing: true
+
+benchmarks:
+  max_new_tokens: 256
+  benchmarks:
+    - name: "refcoco_val"
+      path: "./data/grounding_evals/refcoco_val.jsonl"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+    - name: "refcoco_plus_val"
+      path: "./data/grounding_evals/refcoco_plus_val.jsonl"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+    - name: "refcocog_val"
+      path: "./data/grounding_evals/refcocog_val.jsonl"
+      metric: "grounding_iou"
+      iou_threshold: 0.5
+    - name: "mgrounding_test"
+      path: "./data/grounding_test/test.parquet"
+      # Hungarian-matched F1 over IoUs — handles the multi-bbox
+      # Group_Grounding / Object_Tracking samples in the test pool, and
+      # reduces to the single-bbox IoU case naturally.
+      metric: "grounding_iou_f1"
+      limit: 1000
+
+async_eval:
+  mode: sidecar
+  vllm_gpus: 1
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.85
+  dtype: bfloat16
+  on_overlap: queue
+  failure:
+    max_consecutive: 3
+    max_submit_attempts: 3
+
+peft_config:
+  use_peft: false

@@ -44,6 +44,245 @@ from leap_finetune.training.utils.config_filter import filter_runtime_config_kwa
 logger = logging.getLogger(__name__)
 
 
+_LFM2VL_PER_IMAGE_KEYS = (
+    "spatial_shapes",
+    "image_sizes",
+    "pixel_attention_mask",
+    "pixel_position_ids",
+    "mm_token_type_ids",
+)
+
+# Diagnostic toggle — one log per worker so we know our patches saw real data.
+_LEAP_SPLIT_LOGGED = False
+
+
+def _patch_trl_split_pixel_values_for_lfm2vl() -> None:
+    """Make TRL's batch splitter aware of LFM2-VL's per-image layout.
+
+    Upstream ``trl.trainer.utils.split_pixel_values_by_grid`` assumes a
+    Qwen-VL layout (``pixel_values`` is one big concat of all patches,
+    sliced via ``image_grid_thw.prod(-1)``). LFM2-VL's layout is
+    per-image: ``pixel_values`` shape ``(total_images, max_patches,
+    embed_dim)`` paired with ``spatial_shapes``. Without a split-aware
+    path here, TRL's per-rank distribution falls back to row-by-row
+    slicing that cuts through multi-image samples, and the downstream
+    forward fails with "Image features and image tokens do not match".
+
+    We split every per-image tensor in lock-step using ``num_images``,
+    and the matching ``unsplit_pixel_values_by_grid`` patch below
+    re-merges them with ``torch.cat(..., dim=0)``. Qwen-style batches
+    (``image_grid_thw`` present) are forwarded to the original. Single-
+    image and tiled-image batches bail out unchanged (the patch's
+    ``pv.size(0) == sum(num_images)`` guard fails for tiled inputs).
+    Idempotent.
+    """
+    try:
+        from trl.trainer import utils as _trl_utils
+    except Exception:
+        return
+    if getattr(_trl_utils.split_pixel_values_by_grid, "_leap_lfm2vl_patched", False):
+        return
+    _orig = _trl_utils.split_pixel_values_by_grid
+
+    def patched(batch):
+        # Qwen-VL path is unchanged.
+        if (
+            "image_grid_thw" in batch
+            and "pixel_values" in batch
+            and "num_images" in batch
+        ):
+            return _orig(batch)
+        if (
+            "pixel_values" in batch
+            and "num_images" in batch
+            and ("spatial_shapes" in batch or "image_sizes" in batch)
+            and isinstance(batch["pixel_values"], torch.Tensor)
+        ):
+            pv = batch["pixel_values"]
+            num_images = batch["num_images"]
+            # Tiled inputs put extra rows in pixel_values per image; bail.
+            if pv.size(0) != sum(num_images):
+                return batch
+            split_pv = list(torch.split(pv, list(num_images), dim=0))
+            new_batch = {**batch, "pixel_values": split_pv}
+            # Every per-image tensor must follow the same split so they
+            # stay aligned through the collator and per-rank distribution.
+            for key in _LFM2VL_PER_IMAGE_KEYS:
+                v = batch.get(key)
+                if isinstance(v, torch.Tensor) and v.size(0) == sum(num_images):
+                    new_batch[key] = list(torch.split(v, list(num_images), dim=0))
+            # One-shot diagnostic to confirm split inputs are consistent
+            # (only the FIRST call per worker logs).
+            global _LEAP_SPLIT_LOGGED
+            if not _LEAP_SPLIT_LOGGED:
+                _LEAP_SPLIT_LOGGED = True
+                ss = batch.get("spatial_shapes") or batch.get("image_sizes")
+                pam = batch.get("pixel_attention_mask")
+                print(
+                    f"[vlm_grpo:split] num_images={num_images} "
+                    f"pv={tuple(pv.shape)} "
+                    f"ss={tuple(ss.shape) if isinstance(ss, torch.Tensor) else None} "
+                    f"pam.sum(dim=1)="
+                    f"{pam.sum(dim=1).tolist() if isinstance(pam, torch.Tensor) else None}",
+                    flush=True,
+                )
+            return new_batch
+        return _orig(batch)
+
+    patched._leap_lfm2vl_patched = True  # type: ignore[attr-defined]
+    _trl_utils.split_pixel_values_by_grid = patched
+
+    # TRL's unsplit only merges pixel_values + image_grid_thw; the
+    # remaining per-image tensors stay as lists after our split, which
+    # crashes the vision tower. Re-merge them here.
+    _orig_unsplit = _trl_utils.unsplit_pixel_values_by_grid
+
+    def patched_unsplit(batch):
+        batch = _orig_unsplit(batch)
+        for key in _LFM2VL_PER_IMAGE_KEYS:
+            v = batch.get(key)
+            if isinstance(v, list) and v and all(isinstance(t, torch.Tensor) for t in v):
+                batch = {**batch, key: torch.cat(v, dim=0)}
+        return batch
+
+    patched_unsplit._leap_lfm2vl_patched = True  # type: ignore[attr-defined]
+    _trl_utils.unsplit_pixel_values_by_grid = patched_unsplit
+
+    # grpo_trainer.py imports the names directly, so rebind them there too.
+    try:
+        from trl.trainer import grpo_trainer as _trl_grpo
+
+        _trl_grpo.split_pixel_values_by_grid = patched
+        _trl_grpo.unsplit_pixel_values_by_grid = patched_unsplit
+    except Exception:
+        pass
+    logger.info("[vlm_grpo] patched TRL split/unsplit_pixel_values_by_grid for LFM2-VL")
+
+
+def _get_blocked_vllm_image_token_bias(processor) -> dict[int, float]:
+    """Return a ``logit_bias`` map that makes image-control tokens unsamplable
+    by vLLM during rollout decode.
+
+    Workaround for TRL issue #3847: when GRPO's stochastic exploration causes
+    the model to emit an image_token_id mid-completion, the (prompt + completion)
+    forward pass downstream tries to splice an image feature into that position
+    via masked_scatter, but no image feature backs it — assertion fires, CUDA
+    device-side asserts, worker dies. Setting these tokens' logits to -100 at
+    sampling time means the model literally cannot emit them, so no completion
+    can ever carry a stray image-token into the training forward.
+    """
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is None or not hasattr(tokenizer, "convert_tokens_to_ids"):
+        return {}
+    init_kwargs = getattr(tokenizer, "init_kwargs", {}) or {}
+    unk_token_id = getattr(tokenizer, "unk_token_id", None)
+    blocked: dict[int, float] = {}
+    for attr, fallback in (
+        ("image_token", "<image>"),
+        ("image_start_token", "<|image_start|>"),
+        ("image_end_token", "<|image_end|>"),
+    ):
+        token = (
+            getattr(processor, attr, None)
+            or getattr(tokenizer, attr, None)
+            or init_kwargs.get(attr)
+            or fallback
+        )
+        if not isinstance(token, str):
+            continue
+        token_id = tokenizer.convert_tokens_to_ids(token)
+        if isinstance(token_id, int) and token_id >= 0 and token_id != unk_token_id:
+            blocked[token_id] = -100.0
+    return blocked
+
+
+def _patch_vllm_rollout_for_multi_image(trainer: GRPOTrainer) -> None:
+    """Inject ``mm_processor_kwargs`` + suppress image-control tokens in rollouts.
+
+    Two patches on TRL's ``vllm_generation.llm.generate``:
+
+    1. ``mm_processor_kwargs`` injection — vLLM 0.19's LFM2-VL preprocessor
+       has TWO splitting paths: the HF-processor ``do_image_splitting`` flag
+       (which we set False in YAML) AND an internal ``_is_image_too_large``
+       check in ``lfm2_vl.py:_get_image_feature_grid_size`` that re-decides
+       splitting based on the image's pixel count. The internal check is gated
+       on ``min_tiles == max_tiles == 1`` (line 219 of lfm2_vl.py); the
+       image-processor defaults have ``min_tiles != 1``, so for any single
+       image that crosses the pixel-count threshold vLLM crops it into
+       ``grid_h * grid_w + 1 thumbnail`` tiles and emits ``num_patches=N``
+       while our preprocessing assumed ``num_patches=1`` — placeholder vs.
+       feature count mismatch, masked_scatter assert in the compiled graph.
+       Pass ``do_image_splitting=False, min_tiles=1, max_tiles=1`` for EVERY
+       image-bearing prompt (not just multi-image) to disable both paths.
+    2. Image-control-token suppression — adds a ``logit_bias`` entry of -100
+       on ``image_token``/``image_start_token``/``image_end_token`` so the
+       model cannot emit them during decode. Works around TRL issue #3847
+       (masked_scatter assert when a generated image-token re-enters the HF
+       forward without a backing image feature).
+    """
+    if not getattr(trainer.args, "use_vllm", False):
+        return
+    vllm_gen = getattr(trainer, "vllm_generation", None)
+    if vllm_gen is None or not hasattr(vllm_gen, "llm"):
+        return
+
+    orig_generate = vllm_gen.llm.generate
+    # Keep ``use_thumbnail`` at the processor's default (True). Turning
+    # it off causes a placeholder-vs-feature count mismatch against the
+    # training-side HF processor — surfaces as "Image features and image
+    # tokens do not match".
+    _NO_SPLIT_KWARGS = {
+        "do_image_splitting": False,
+        "min_tiles": 1,
+        "max_tiles": 1,
+    }
+    blocked_logit_bias = _get_blocked_vllm_image_token_bias(trainer.processing_class)
+    forced_counter = {"calls": 0, "prompts_with_images": 0}
+
+    def patched_generate(prompts, sampling_params=None, use_tqdm=False, **kwargs):
+        if isinstance(prompts, list):
+            forced_counter["calls"] += 1
+            with_images_this_call = 0
+            for p in prompts:
+                if not (isinstance(p, dict) and "multi_modal_data" in p):
+                    continue
+                images = p["multi_modal_data"].get("image")
+                if not images:
+                    continue
+                with_images_this_call += 1
+                p.setdefault("mm_processor_kwargs", dict(_NO_SPLIT_KWARGS))
+            forced_counter["prompts_with_images"] += with_images_this_call
+            # Sparse heartbeat (every 200 calls) so the patch leaves an
+            # audit trail without spamming the log every rollout.
+            if forced_counter["calls"] % 200 == 1:
+                logger.info(
+                    "[vlm_grpo:rollout] generate() call #%d, %d/%d prompts had "
+                    "images this call (force-no-split applied); cumulative "
+                    "prompts-with-images = %d",
+                    forced_counter["calls"],
+                    with_images_this_call,
+                    len(prompts),
+                    forced_counter["prompts_with_images"],
+                )
+        if sampling_params is not None and blocked_logit_bias:
+            merged = dict(getattr(sampling_params, "logit_bias", {}) or {})
+            for tid, bias in blocked_logit_bias.items():
+                prev = merged.get(tid)
+                merged[tid] = bias if prev is None else min(prev, bias)
+            sampling_params.logit_bias = merged
+        return orig_generate(
+            prompts, sampling_params=sampling_params, use_tqdm=use_tqdm, **kwargs
+        )
+
+    vllm_gen.llm.generate = patched_generate
+    logger.info(
+        "[vlm_grpo] patched vLLM rollout: force-no-split mm_processor_kwargs "
+        "for every image-bearing prompt + image-token suppression "
+        "(blocked %d token ids)",
+        len(blocked_logit_bias),
+    )
+
+
 # === VLM GRPO loop ===
 
 
@@ -204,6 +443,129 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         finally:
             processor.__class__ = real_cls
 
+    def _check_image_token_mismatch(
+        self, model, model_inputs: dict, num_images: list | None
+    ) -> "torch.Tensor | None":
+        """Per-sample preflight: return a bool tensor ``bad_rows[B]``
+        (True = this sample has a placeholder/feature mismatch that would
+        cause LFM2-VL's ``masked_scatter`` to assert).
+
+        A global reconciler that sums *all* spatial_shapes rows and compares
+        to *all* image tokens in the batch can be fooled by cross-sample
+        cancellation (sample A has +1 extra token, sample B has -1), masking
+        real per-sample mismatches while a crashed forward is still inevitable.
+        This splits spatial_shapes by ``num_images`` and checks each sample
+        independently.
+
+        Returns ``None`` when the batch has no images, ``image_token_id``
+        can't be resolved, or all samples are clean. When a mismatch is found
+        the offending row is neutralised in-place (surplus image tokens →
+        pad_id, or phantom placeholders inserted on underflow) so the forward
+        still runs on the whole batch, and ``bad_rows[i]`` is set so the caller
+        can zero that sample's loss contribution.
+        """
+        ids = model_inputs.get("input_ids")
+        spatial = model_inputs.get("spatial_shapes")
+        if not isinstance(ids, torch.Tensor) or not isinstance(spatial, torch.Tensor):
+            return None  # text-only batch
+
+        # getattr so tests can build an instance via __new__ without going
+        # through __init__/processing_class wiring. We need both the processor
+        # (for downsample_factor) and an image_token_id — bail with no preflight
+        # if either is missing rather than crashing on ``None.image_processor``.
+        proc = getattr(self, "processing_class", None)
+        if proc is None:
+            return None
+        image_token_id = getattr(proc, "image_token_id", None)
+        if image_token_id is None:
+            image_token_id = getattr(
+                getattr(model, "config", None), "image_token_id", None
+            )
+        if image_token_id is None:
+            return None
+
+        B = ids.shape[0]
+        image_processor = getattr(proc, "image_processor", None)
+        df = int(getattr(image_processor, "downsample_factor", 2) or 2)
+
+        # Split spatial_shapes (total_images, 2) per sample by num_images[i].
+        if num_images is None or len(num_images) != B:
+            num_images_list = [1] * B  # single-image-per-sample fallback
+        else:
+            num_images_list = list(num_images)
+
+        splits = torch.split(spatial, num_images_list, dim=0)
+        expected_per_sample = [
+            int(((s[:, 0] // df) * (s[:, 1] // df)).sum().item()) for s in splits
+        ]
+
+        is_img = ids == image_token_id  # (B, L)
+        actual_per_sample = is_img.sum(dim=1).tolist()
+
+        bad_rows = torch.zeros(B, dtype=torch.bool, device=ids.device)
+        any_bad = False
+
+        pad_id = getattr(proc, "pad_token_id", None) or getattr(
+            getattr(proc, "tokenizer", None), "pad_token_id", 0
+        )
+
+        for i in range(B):
+            exp = expected_per_sample[i]
+            act = actual_per_sample[i]
+            if act == exp:
+                continue
+            bad_rows[i] = True
+            any_bad = True
+            row = ids[i]
+            if act < exp:
+                # Underflow: insert (exp - act) phantom image-token placeholders
+                # at non-image positions so the forward sees matched counts and
+                # masked_scatter doesn't assert. Garbage scatter is harmless —
+                # the row's loss contribution is zeroed via bad_rows downstream.
+                # Prefer pad positions, then any non-image position, then (last
+                # resort) trailing positions including special tokens.
+                deficit = exp - act
+                is_img_row = row == image_token_id
+                candidate_mask = (~is_img_row) & (row == pad_id)
+                candidates = candidate_mask.nonzero(as_tuple=True)[0]
+                if candidates.numel() < deficit:
+                    candidates = (~is_img_row).nonzero(as_tuple=True)[0]
+                if candidates.numel() < deficit:
+                    candidates = torch.arange(row.numel(), device=row.device)
+                to_fill = candidates[:deficit]
+                ids[i][to_fill] = image_token_id
+                logger.warning(
+                    "[vlm_grpo] sample %d: padded image-token UNDERFLOW "
+                    "placeholders %d -> %d (features=%d, n_images=%d) — "
+                    "dropping from loss",
+                    i,
+                    act,
+                    exp,
+                    exp,
+                    num_images_list[i],
+                )
+            else:
+                # Surplus: replace trailing surplus image tokens with pad so the
+                # forward doesn't crash (masked_scatter needs exact count).
+                surplus = act - exp
+                img_pos = (row == image_token_id).nonzero(as_tuple=True)[0]
+                to_pad = img_pos[-surplus:]
+                ids[i][to_pad] = pad_id
+                logger.warning(
+                    "[vlm_grpo] sample %d: trimmed %d surplus image-token(s) "
+                    "placeholders %d -> %d (features=%d) — dropping from loss",
+                    i,
+                    surplus,
+                    act,
+                    exp,
+                    exp,
+                )
+
+        if any_bad:
+            model_inputs["input_ids"] = ids
+
+        return bad_rows if any_bad else None
+
     def _get_per_token_logps_and_entropies(
         self,
         model,
@@ -258,6 +620,12 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
             model_inputs["logits_to_keep"] = logits_to_keep + 1
         model_inputs["use_cache"] = False
 
+        # Per-sample preflight: detect placeholder/feature count mismatches that
+        # would otherwise make LFM2-VL's masked_scatter CUDA-assert. Trims any
+        # surplus image tokens in-place and returns a boolean mask of "bad" rows
+        # whose loss contribution we zero below (rather than crashing the forward).
+        bad_rows = self._check_image_token_mismatch(model, model_inputs, num_images)
+
         logits = model(**model_inputs).logits
         # Drop next-token logit, keep only the completion region.
         logits = logits[:, :-1, :]
@@ -266,10 +634,18 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         completion_ids = input_ids[:, -logits_to_keep:]
         logps = selective_log_softmax(logits, completion_ids)
 
+        # Trimmed rows produced garbage logits — exclude them from the gradient.
+        if bad_rows is not None:
+            logps = logps.clone()
+            logps[bad_rows] = 0.0
+
         entropies = None
         if compute_entropy:
             with torch.no_grad():
                 entropies = entropy_from_logits(logits)
+            if bad_rows is not None:
+                entropies = entropies.clone()
+                entropies[bad_rows] = 0.0
 
         return logps, entropies
 
@@ -420,6 +796,14 @@ def vlm_grpo_run(training_config: dict) -> None:
         processing_class=processor,
         rollout_func=rollout_func,
     )
+
+    # LFM2-VL multi-image fixes:
+    #   1. TRL's per-sample splitter assumes Qwen-VL pixel_values layout;
+    #      patch it to split by num_images for LFM2-VL.
+    #   2. vLLM rollout preprocessor needs force-no-split mm_processor_kwargs
+    #      for image-bearing prompts + image-token suppression. No-op for text.
+    _patch_trl_split_pixel_values_for_lfm2vl()
+    _patch_vllm_rollout_for_multi_image(trainer)
 
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
 

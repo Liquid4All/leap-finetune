@@ -14,7 +14,8 @@ wheels/
 # Local agent/editor state
 .codex
 .codex/
-.claude/
+.claude/*
+!.claude/skills
 
 # Local HF models (ignores everything in src except leap_finetune)
 src/*

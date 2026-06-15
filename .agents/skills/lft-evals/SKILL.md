@@ -49,7 +49,7 @@ description: Create, modify, and run leap-finetune eval suites and metrics. Use 
 ## Verification
 
 ```bash
-uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
+uv run leap-finetune job_configs/eval_standalone_example.yaml --output results.json
 uv run pytest tests/evaluation
 ```
 

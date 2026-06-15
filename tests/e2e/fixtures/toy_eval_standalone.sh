@@ -1,6 +1,6 @@
 #!/bin/bash
 # Toy slurm launcher for standalone eval only.
-# Uses the explicit eval subcommand so the fixture can pass `--output`.
+# Uses the same config entry point as training, with `--output` for metrics.
 #SBATCH --job-name=eval_standalone_toy
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -30,6 +30,6 @@ export TRITON_CACHE_DIR="${TMPDIR}/triton_cache"
 export TORCH_EXTENSIONS_DIR="${TMPDIR}/torch_extensions"
 mkdir -p "$TMPDIR" "$TRITON_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" logs/eval_standalone_toy outputs/eval_standalone_toy
 
-leap-finetune eval \
+leap-finetune \
     tests/e2e/fixtures/toy_eval_standalone.yaml \
     --output "outputs/eval_standalone_toy/results_${SLURM_JOB_ID:-manual}.json"

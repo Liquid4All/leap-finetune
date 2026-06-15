@@ -17,7 +17,7 @@ default assumption for repo changes.
 - Install ROCm environment: `uv sync --no-group cuda --group rocm`
 - Run training: `uv run leap-finetune job_configs/sft_example.yaml`
 - Run explicit training command: `uv run leap-finetune run job_configs/sft_example.yaml`
-- Run standalone eval: `uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json`
+- Run standalone eval: `uv run leap-finetune job_configs/eval_standalone_example.yaml --output results.json`
 - Generate SLURM script: `uv run leap-finetune slurm job_configs/sft_example_with_slurm.yaml`
 - Export GGUF: `uv run leap-export-gguf /path/to/checkpoint --output-dir /path/to/gguf`
 - Run core non-GPU tests: `uv run pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe`

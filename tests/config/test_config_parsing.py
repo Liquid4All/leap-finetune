@@ -229,6 +229,67 @@ class TestDirectPythonConfig:
         assert isinstance(calls["config"], EvalRunConfig)
         assert calls["output_path"] is None
 
+    def test_cli_dispatches_eval_yaml_without_eval_subcommand(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        calls = {}
+
+        def fake_run_eval_config(config, *, output_path=None):
+            calls["config"] = config
+            calls["output_path"] = output_path
+            return {"benchmark/tiny_qa/score": 1.0}
+
+        monkeypatch.setattr(
+            "leap_finetune.cli.main.check_and_handle_slurm",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.modal.check_and_handle_modal",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.cli.main._assert_local_cuda_available",
+            lambda: pytest.fail("eval-only CLI should not require CUDA"),
+        )
+        monkeypatch.setattr(
+            "leap_finetune.evaluation.runner.run_eval_config",
+            fake_run_eval_config,
+        )
+
+        cfg_path = write_config(
+            {
+                "model_name": "LFM2-1.2B",
+                "evals": {
+                    "benchmarks": [
+                        {
+                            "name": "tiny_qa",
+                            "path": "/tmp/tiny_qa.jsonl",
+                            "metric": "short_answer",
+                        }
+                    ]
+                },
+            },
+            tmp_path,
+        )
+        output_path = tmp_path / "results.json"
+        monkeypatch.setattr(
+            "sys.argv",
+            ["leap-finetune", cfg_path, "--output", str(output_path)],
+        )
+
+        from leap_finetune.cli.main import main
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "benchmark/tiny_qa/score: 1.0" in captured.out
+        assert isinstance(calls["config"], EvalRunConfig)
+        assert calls["output_path"] == str(output_path)
+
     def test_run_config_dispatches_remote_yaml_from_light_config(
         self, tmp_path, monkeypatch
     ):

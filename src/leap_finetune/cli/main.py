@@ -50,7 +50,7 @@ def _load_config_for_remote_dispatch(
 def _parse_cli_args():
     command = None
     config_path_arg = None
-    output_dir_arg = None
+    output_arg = None
 
     if len(sys.argv) > 1:
         if sys.argv[1] == "slurm":
@@ -66,34 +66,40 @@ def _parse_cli_args():
             )
             args = parser.parse_args()
             config_path_arg = args.config_path
-            output_dir_arg = args.output_dir
-        elif sys.argv[1] == "eval":
-            command = "eval"
-            parser = argparse.ArgumentParser(description="Run standalone evals")
-            parser.add_argument("command", choices=["eval"])
-            parser.add_argument("config_path", help="Path to YAML eval config file")
+            output_arg = args.output_dir
+        elif sys.argv[1] == "run":
+            parser = argparse.ArgumentParser(
+                description="Run a training or standalone eval config"
+            )
+            parser.add_argument("command", choices=["run"])
+            parser.add_argument(
+                "config_path", help="Path to YAML config file", nargs="?"
+            )
             parser.add_argument(
                 "--output",
                 "-o",
-                help="Optional JSON metrics output path",
+                help="Optional JSON metrics output path for standalone eval configs",
                 default=None,
             )
             args = parser.parse_args()
             config_path_arg = args.config_path
-            output_dir_arg = args.output
-        elif sys.argv[1] == "run":
-            command = "run"
-            parser = argparse.ArgumentParser(description="Run training job")
-            parser.add_argument("command", choices=["run"])
+            output_arg = args.output
+        else:
+            parser = argparse.ArgumentParser(
+                description="Run a training or standalone eval config"
+            )
+            parser.add_argument("config_path", help="Path to YAML config file")
             parser.add_argument(
-                "config_path", help="Path to YAML job config file", nargs="?"
+                "--output",
+                "-o",
+                help="Optional JSON metrics output path for standalone eval configs",
+                default=None,
             )
             args = parser.parse_args()
             config_path_arg = args.config_path
-        else:
-            config_path_arg = sys.argv[1]
+            output_arg = args.output
 
-    return command, config_path_arg, output_dir_arg
+    return command, config_path_arg, output_arg
 
 
 def _generate_slurm_script(config_path_arg: str | None, output_dir_arg: str | None):
@@ -113,18 +119,6 @@ def _generate_slurm_script(config_path_arg: str | None, output_dir_arg: str | No
         output_dir = config_path.parent / "slurms"
 
     generate_slurm_script(config_path, config_dict, output_dir, auto_submit=False)
-
-
-def _run_standalone_eval(config_path_arg: str | None, output_path_arg: str | None):
-    if not config_path_arg:
-        print("No eval config file provided.")
-        print("Usage: leap-finetune eval <path_to_eval_config.yaml>")
-        sys.exit(1)
-
-    from leap_finetune.evaluation.runner import run_eval_config
-
-    results = run_eval_config(config_path_arg, output_path=output_path_arg)
-    print(yaml.safe_dump(results, sort_keys=True))
 
 
 def _assert_local_cuda_available() -> None:
@@ -270,21 +264,20 @@ def main() -> None:
 
         sys.exit(env_main(sys.argv[2:]))
 
-    command, config_path_arg, output_dir_arg = _parse_cli_args()
+    command, config_path_arg, output_arg = _parse_cli_args()
 
     if command == "slurm":
-        _generate_slurm_script(config_path_arg, output_dir_arg)
-        return
-    if command == "eval":
-        _run_standalone_eval(config_path_arg, output_dir_arg)
+        _generate_slurm_script(config_path_arg, output_arg)
         return
 
     if not config_path_arg:
         print("No config file provided. Please provide a path to a YAML config file.")
         print("Usage: leap-finetune <path_to_config.yaml>")
+        print("   or: leap-finetune <path_to_eval_config.yaml> --output results.json")
         print("   or: leap-finetune slurm <path_to_config.yaml>")
-        print("   or: leap-finetune eval <path_to_eval_config.yaml>")
         print("   or: leap-finetune env fa2-status")
         sys.exit(1)
 
-    run_config(config_path_arg)
+    result = run_config(config_path_arg, output_path=output_arg)
+    if result is not None:
+        print(yaml.safe_dump(result, sort_keys=True))

@@ -33,8 +33,8 @@ backend:
   type: "hf" # hf | vllm
 ```
 
-Use `leap-finetune eval <eval_config> --output results.json` when you want the
-CLI to write metrics to a JSON file.
+Use `leap-finetune <eval_config> --output results.json` when you want the CLI
+to write metrics to a JSON file.
 
 Text standalone evals default to `modality: text`. Set `modality: vlm` only
 when running standalone VLM evals outside a VLM training job.

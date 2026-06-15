@@ -257,7 +257,7 @@ CUDA/vLLM stack:
 ```bash
 uv run leap-finetune job_configs/sft_example.yaml
 uv run leap-finetune run job_configs/sft_example.yaml
-uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
+uv run leap-finetune job_configs/eval_standalone_example.yaml --output results.json
 uv run leap-finetune slurm job_configs/sft_example_with_slurm.yaml --output-dir job_configs/slurms
 ```
 
@@ -266,7 +266,7 @@ Install the command as a reusable tool from a checkout:
 ```bash
 uv tool install --editable . --force
 leap-finetune /absolute/path/to/config.yaml
-leap-finetune eval /absolute/path/to/eval_config.yaml --output /absolute/path/to/results.json
+leap-finetune /absolute/path/to/eval_config.yaml --output /absolute/path/to/results.json
 leap-finetune slurm /absolute/path/to/config.yaml --output-dir /absolute/path/to/slurms
 ```
 
@@ -832,7 +832,7 @@ set `modality: vlm` only for standalone VLM evals.
 Run the same eval suite without training and write metrics to JSON:
 
 ```bash
-uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
+uv run leap-finetune job_configs/eval_standalone_example.yaml --output results.json
 ```
 
 The same path is available from Python:

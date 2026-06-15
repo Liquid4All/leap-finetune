@@ -51,7 +51,7 @@ description: Launch leap-finetune jobs locally, on SLURM, Modal, or KubeRay. Use
 ## Verification
 
 ```bash
-uv run pytest tests/distribution tests/test_ray_cluster_support.py
+uv run pytest tests/distribution tests/config
 uv run leap-finetune slurm job_configs/sft_example_with_slurm.yaml --output-dir job_configs/slurms
 ```
 

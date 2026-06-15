@@ -24,8 +24,7 @@ description: Inspect, resume, export, and validate leap-finetune checkpoints. Us
 - `src/leap_finetune/checkpointing/`
 - `src/leap_finetune/cli/export_manual_sharded_checkpoint.py`
 - `src/leap_finetune/cli/export_gguf.py`
-- `tests/test_checkpoint_callback.py`
-- `tests/test_hf_export_metadata.py`
+- `tests/e2e/`
 
 ## Steps
 
@@ -49,13 +48,7 @@ description: Inspect, resume, export, and validate leap-finetune checkpoints. Us
 ## Verification
 
 ```bash
-uv run pytest tests/test_checkpoint_callback.py tests/test_hf_export_metadata.py
-```
-
-For MoE exported checkpoints:
-
-```bash
-uv run python tests/checkpoint_validation/validate_hf_checkpoint.py /path/to/checkpoint --expected-num-experts <n>
+uv run pytest tests/e2e --dense --moe --vlm
 ```
 
 ## Common Failures

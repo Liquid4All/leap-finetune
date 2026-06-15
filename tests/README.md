@@ -3,6 +3,9 @@
 Keep the suite intentionally small. New tests should land in one of these
 buckets:
 
+Do not add root-level `tests/test_*.py` files; use the bucketed directories
+below.
+
 - `config/` — config parsing and generated launch config.
 - `distribution/` — launch/resource planning and distributed backend utilities.
 - `evaluation/` — benchmark, metric, backend, and async eval contracts.

@@ -25,7 +25,8 @@ description: Train LFMs with leap-finetune SFT, DPO, GRPO, VLM, or MoE configs. 
 - `src/leap_finetune/config/job_config.py`
 - `src/leap_finetune/training/default_configs/`
 - `src/leap_finetune/training/`
-- `tests/test_training_configs.py`
+- `tests/config/`
+- `tests/e2e/`
 
 ## Steps
 
@@ -52,7 +53,7 @@ description: Train LFMs with leap-finetune SFT, DPO, GRPO, VLM, or MoE configs. 
 Run the narrowest relevant check:
 
 ```bash
-uv run pytest tests/test_training_configs.py tests/test_config_parsing.py
+uv run pytest tests/config tests/moe
 ```
 
 For broad config/backend edits:

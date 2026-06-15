@@ -23,8 +23,6 @@ description: Prepare and validate leap-finetune training data, eval data, tool-c
 - `README.md`
 - `src/leap_finetune/data_loading/`
 - `src/leap_finetune/data_loading/validate_tool_format.py`
-- `tests/test_data.py`
-- `tests/test_tool_call_validation.py`
 - `tests/e2e/fixtures/`
 
 ## Steps
@@ -48,13 +46,13 @@ description: Prepare and validate leap-finetune training data, eval data, tool-c
 ## Verification
 
 ```bash
-uv run pytest tests/test_data.py tests/test_tool_call_validation.py tests/test_tool_call_templates.py
+uv run pytest tests/config tests/e2e/test_dense_e2e.py::TestDenseRaySharding
 ```
 
 For loader or Ray Data changes:
 
 ```bash
-uv run pytest tests/test_ray_data_utils.py tests/config
+uv run pytest tests/config tests/e2e/test_dense_e2e.py::TestDenseRaySharding
 ```
 
 ## Common Failures

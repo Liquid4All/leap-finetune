@@ -36,14 +36,14 @@ default assumption for repo changes.
 
 ## Skill Selection
 
-| Task | Skill |
-| --- | --- |
-| Create or modify a training config or trainer path | `lft-training` |
-| Add eval suites, metrics, fixtures, or async eval behavior | `lft-evals` |
-| Add GRPO rewards, task recipes, or judge rewards | `lft-rewards` |
-| Prepare or validate training/eval data formats | `lft-data` |
-| Launch or debug Modal, SLURM, KubeRay, or local backend dispatch | `lft-launch` |
-| Resume, inspect, export, or validate checkpoints | `lft-checkpoints` |
+| Task                                                             | Skill             |
+| ---------------------------------------------------------------- | ----------------- |
+| Create or modify a training config or trainer path               | `lft-training`    |
+| Add eval suites, metrics, fixtures, or async eval behavior       | `lft-evals`       |
+| Add GRPO rewards, task recipes, or judge rewards                 | `lft-rewards`     |
+| Prepare or validate training/eval data formats                   | `lft-data`        |
+| Launch or debug Modal, SLURM, KubeRay, or local backend dispatch | `lft-launch`      |
+| Resume, inspect, export, or validate checkpoints                 | `lft-checkpoints` |
 
 ## Storage
 

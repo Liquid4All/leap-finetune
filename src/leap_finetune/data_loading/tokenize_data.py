@@ -4,11 +4,10 @@ import logging
 import ray
 import ray.data
 import torch
-from datasets import Dataset, Features, Sequence, Value
 import pyarrow as pa
+import pyarrow.compute as pc
 from rich.console import Console
 from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt
-from trl.data_utils import pack_dataset
 
 from leap_finetune.data_loading.image_loader import load_image
 from leap_finetune.data_loading.validate_tool_format import (
@@ -18,6 +17,7 @@ from leap_finetune.data_loading.validate_tool_format import (
 
 logger = logging.getLogger(__name__)
 console = Console()
+_SFT_PACK_COLUMNS = ("input_ids", "assistant_masks", "completion_mask")
 
 
 # === VLM Collate ===
@@ -214,6 +214,35 @@ def tokenize_sft(
     return output
 
 
+def _pack_sft_arrow_batch(batch: pa.Table, max_length: int) -> pa.Table:
+    """Pack one Ray Arrow batch with TRL's BFD algorithm without Python rows."""
+    pack_columns = [name for name in _SFT_PACK_COLUMNS if name in batch.column_names]
+    if "input_ids" not in pack_columns:
+        raise ValueError("SFT packing requires an input_ids column")
+
+    if batch.num_rows == 0:
+        arrays = [
+            pa.array([], type=batch.schema.field(name).type) for name in pack_columns
+        ]
+        arrays.append(pa.array([], type=pa.list_(pa.int32())))
+        arrays.append(pa.array([], type=pa.int32()))
+        return pa.Table.from_arrays(
+            arrays, names=pack_columns + ["seq_lengths", "length"]
+        )
+
+    # TRL exposes the Arrow packer as a private helper; using it here avoids
+    # materializing the full Ray dataset into a Python list on the driver.
+    from trl.data_utils import _pack_bfd
+
+    packed = _pack_bfd(
+        batch.select(pack_columns),
+        seq_length=max_length,
+        on_seq_length_overflow="truncate",
+    )
+    lengths = pc.list_value_length(packed["input_ids"])
+    return packed.append_column("length", lengths)
+
+
 def tokenize_and_pack_sft(
     ds: ray.data.Dataset,
     tokenizer,
@@ -228,7 +257,7 @@ def tokenize_and_pack_sft(
 
     Pipeline:
       1. Distributed tokenization via ray_ds.map()
-      2. If packing: materialize to HF Dataset → pack_dataset (BFD) → back to Ray
+      2. If packing: pack each Arrow batch with BFD in Ray
          If not packing: return directly (tokenizer already truncated)
     """
     # === 1. Distributed tokenization ===
@@ -251,26 +280,12 @@ def tokenize_and_pack_sft(
 
     # === 2. Pack or truncate ===
     if packing:
-        # Packing requires full materialization into an HF Dataset
-        rows = []
-        features_dict = {"input_ids": Sequence(Value("int64"))}
-        for row in ds.iter_rows():
-            packed_row = {"input_ids": row["input_ids"]}
-            if "assistant_masks" in row:
-                packed_row["assistant_masks"] = row["assistant_masks"]
-                features_dict["assistant_masks"] = Sequence(Value("int64"))
-            if "completion_mask" in row:
-                packed_row["completion_mask"] = row["completion_mask"]
-                features_dict["completion_mask"] = Sequence(Value("int64"))
-            rows.append(packed_row)
-        features = Features(features_dict)
-        hf_ds = Dataset.from_list(rows, features=features)
-        console.print(f"[dim]Tokenized {len(hf_ds):,} rows[/dim]")
         console.print(f"[dim]Packing sequences (BFD, max_length={max_length})...[/dim]")
-        hf_ds = pack_dataset(hf_ds, seq_length=max_length, strategy="bfd")
-        hf_ds = hf_ds.map(lambda row: {"length": len(row["input_ids"])})
-        console.print(f"[dim]Packed into {len(hf_ds):,} rows[/dim]")
-        return ray.data.from_arrow(hf_ds.data.table)
+        return ds.map_batches(
+            _pack_sft_arrow_batch,
+            batch_format="pyarrow",
+            fn_kwargs={"max_length": max_length},
+        )
 
     # Non-packing: tokenizer already truncated to max_length or overlength rows
     # were explicitly dropped above.
@@ -351,12 +366,4 @@ def tokenize_dpo_dataset(
             "max_completion_length": max_completion_length,
         },
     )
-
-    arrow_refs = ds.to_arrow_refs()
-    if not arrow_refs:
-        return ds
-
-    tables = ray.get(arrow_refs)
-    row_count = sum(table.num_rows for table in tables)
-    console.print(f"[dim]Tokenized {row_count:,} DPO rows[/dim]")
-    return ray.data.from_arrow(pa.concat_tables(tables))
+    return ds

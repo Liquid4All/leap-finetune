@@ -4,6 +4,8 @@ import sys
 
 import yaml
 
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
 
 def _load_config_dict(config_path: pathlib.Path) -> dict:
     with open(config_path) as f:
@@ -11,6 +13,38 @@ def _load_config_dict(config_path: pathlib.Path) -> dict:
     if not isinstance(config_dict, dict):
         raise ValueError(f"Config must be a YAML mapping: {config_path}")
     return config_dict
+
+
+def _resolve_config_path_light(config_input: str | pathlib.Path) -> pathlib.Path:
+    input_path = pathlib.Path(config_input)
+    candidates = [str(input_path)]
+    if not input_path.suffix:
+        candidates.append(f"{input_path}.yaml")
+
+    for candidate in candidates:
+        candidate_path = pathlib.Path(candidate).expanduser()
+        if candidate_path.exists():
+            return candidate_path.resolve()
+
+        local_job_config = pathlib.Path.cwd() / "job_configs" / candidate
+        if local_job_config.exists():
+            return local_job_config.resolve()
+
+        repo_job_config = _REPO_ROOT / "job_configs" / candidate
+        if repo_job_config.exists():
+            return repo_job_config.resolve()
+
+    raise FileNotFoundError(f"Config file not found at: {input_path}")
+
+
+def _load_config_for_remote_dispatch(
+    config_path_arg: str,
+) -> tuple[pathlib.Path, dict] | tuple[None, None]:
+    try:
+        config_path = _resolve_config_path_light(config_path_arg)
+    except FileNotFoundError:
+        return None, None
+    return config_path, _load_config_dict(config_path)
 
 
 def _parse_cli_args():
@@ -64,14 +98,13 @@ def _parse_cli_args():
 
 def _generate_slurm_script(config_path_arg: str | None, output_dir_arg: str | None):
     from leap_finetune.distribution.backends.slurm import generate_slurm_script
-    from leap_finetune.config.parser import resolve_config_path
 
     if not config_path_arg:
         print("No config file provided.")
         print("Usage: leap-finetune slurm <path_to_config.yaml>")
         sys.exit(1)
 
-    config_path = resolve_config_path(config_path_arg)
+    config_path = _resolve_config_path_light(config_path_arg)
     config_dict = _load_config_dict(config_path)
 
     if output_dir_arg:
@@ -120,6 +153,26 @@ def check_and_handle_slurm(
     return _impl(config_path_arg, config_dict=config_dict)
 
 
+def _dispatch_remote_backends(
+    config_path_arg: str | None,
+    *,
+    config_dict: dict | None,
+) -> bool:
+    # Keep this path light: remote submission should not import torch, Ray,
+    # PEFT, datasets, or training defaults.
+    if check_and_handle_slurm(config_path_arg, config_dict=config_dict):
+        return True
+
+    from leap_finetune.distribution.backends.kuberay import check_and_handle_kuberay
+
+    if check_and_handle_kuberay(config_path_arg, config_dict=config_dict):
+        return True
+
+    from leap_finetune.distribution.backends.modal import check_and_handle_modal
+
+    return check_and_handle_modal(config_path_arg, config_dict=config_dict)
+
+
 def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
     """Launch a training job or standalone eval from a config path/model.
 
@@ -129,6 +182,22 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
     launch local Ray training. Eval-only configs run benchmarks without
     starting training.
     """
+    config_path_arg = None
+    preloaded_config_dict = None
+    if isinstance(config_path, (str, pathlib.Path)):
+        config_path_arg = str(config_path)
+        dispatch_path, dispatch_config = _load_config_for_remote_dispatch(
+            config_path_arg
+        )
+        if dispatch_config is not None:
+            config_path_arg = str(dispatch_path)
+            preloaded_config_dict = dispatch_config
+            if _dispatch_remote_backends(
+                config_path_arg,
+                config_dict=dispatch_config,
+            ):
+                return
+
     from leap_finetune.config import EvalRunConfig, JobConfig
     from leap_finetune.config.parser import (
         materialize_job_config,
@@ -139,8 +208,7 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
     )
 
     parsed_job = None
-    config_dict = None
-    config_path_arg = None
+    config_dict = preloaded_config_dict
     if isinstance(config_path, EvalRunConfig):
         from leap_finetune.evaluation.runner import run_eval_config as _run_eval_config
 
@@ -149,22 +217,10 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
         parsed_job = config_path
         config_dict = normalized_job_config_dict(parsed_job)
     else:
-        config_path_arg = str(config_path)
+        config_path_arg = config_path_arg or str(config_path)
 
     # === Remote backend dispatch ===
-    # Keep this path light: Slurm/Modal submission should not import torch, Ray,
-    # PEFT, or datasets unless we are actually launching local training.
-    if check_and_handle_slurm(config_path_arg, config_dict=config_dict):
-        return
-
-    from leap_finetune.distribution.backends.kuberay import check_and_handle_kuberay
-
-    if check_and_handle_kuberay(config_path_arg, config_dict=config_dict):
-        return
-
-    from leap_finetune.distribution.backends.modal import check_and_handle_modal
-
-    if check_and_handle_modal(config_path_arg, config_dict=config_dict):
+    if _dispatch_remote_backends(config_path_arg, config_dict=config_dict):
         return
 
     if parsed_job is None:

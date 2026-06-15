@@ -33,16 +33,22 @@ def check_and_handle_slurm(
         return False
 
     config_path = None
+    if config_path_arg:
+        candidate = pathlib.Path(config_path_arg).expanduser()
+        if candidate.exists():
+            config_path = candidate.resolve()
+
     if config_dict is None:
         if not config_path_arg:
             return False
 
-        from leap_finetune.config.parser import resolve_config_path
+        if config_path is None:
+            from leap_finetune.config.parser import resolve_config_path
 
-        try:
-            config_path = resolve_config_path(config_path_arg)
-        except FileNotFoundError:
-            return False
+            try:
+                config_path = resolve_config_path(config_path_arg)
+            except FileNotFoundError:
+                return False
 
         with open(config_path) as f:
             config_dict = yaml.safe_load(f) or {}

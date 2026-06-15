@@ -1,3 +1,5 @@
+import pathlib
+
 import pytest
 
 from leap_finetune import run_config
@@ -226,6 +228,51 @@ class TestDirectPythonConfig:
         assert result == {"benchmark/tiny_qa/score": 1.0}
         assert isinstance(calls["config"], EvalRunConfig)
         assert calls["output_path"] is None
+
+    def test_run_config_dispatches_remote_yaml_from_light_config(
+        self, tmp_path, monkeypatch
+    ):
+        calls = {}
+
+        monkeypatch.setattr(
+            "leap_finetune.cli.main.check_and_handle_slurm",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
+            lambda *args, **kwargs: False,
+        )
+
+        def fake_modal(config_path_arg=None, *, config_dict=None):
+            calls["config_path_arg"] = config_path_arg
+            calls["config_dict"] = config_dict
+            return True
+
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.modal.check_and_handle_modal",
+            fake_modal,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.cli.main._assert_local_cuda_available",
+            lambda: pytest.fail("remote config should not require CUDA"),
+        )
+
+        cfg_path = write_config(
+            {
+                "project_name": "modal_run",
+                "model_name": "LFM2-1.2B",
+                "training_type": "sft",
+                "dataset": BASE_SFT_DATASET,
+                "training_config": {"num_train_epochs": 1},
+                "modal": {"gpu": "H100"},
+            },
+            tmp_path,
+        )
+
+        run_config(cfg_path)
+
+        assert calls["config_path_arg"] == str(pathlib.Path(cfg_path).resolve())
+        assert calls["config_dict"]["modal"]["gpu"] == "H100"
 
 
 class TestFocusedValidation:

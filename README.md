@@ -14,6 +14,7 @@
 </div>
 
 <p align="center">
+<a href="#features">Features</a> -
 <a href="#setup">Setup</a> -
 <a href="#quickstart">Quickstart</a> -
 <a href="#cli-and-python-usage">CLI</a> -
@@ -25,9 +26,26 @@
 <a href="#contributing">Contributing</a>
 </p>
 
-LEAP-Finetune is a minimal fine-tuning repo for LFM2. It handles dataset
-formatting, validation, distributed orchestration, checkpointing, and export
-for local GPU nodes, SLURM clusters, Modal, and Kubernetes/KubeRay.
+LEAP-Finetune is a local-first model factory for customizing LFMs. It provides
+a YAML-driven path from data loading and validation to training, evaluation,
+checkpointing, and export across local GPUs, SLURM clusters, Modal, and
+Kubernetes/KubeRay.
+
+## Features
+
+- Train text, VLM, and MoE models with SFT, DPO, GRPO, LoRA, full fine-tuning,
+  and expert-parallel MoE configs.
+- Load local, Hugging Face, S3, GCS, and Azure datasets; normalize and validate
+  SFT, DPO, GRPO, VLM, and tool-calling formats; filter invalid rows; cache
+  tokenized data.
+- Run benchmark suites during training or standalone, including async vLLM eval
+  modes for non-blocking cluster runs.
+- Compose GRPO rewards from Python functions, task recipes, LLM-as-judge
+  scoring, vLLM rollouts, and optional OpenEnv environments.
+- Launch the same config locally, through SLURM, on Modal, or with KubeRay;
+  track runs with Trackio or Weights & Biases.
+- Resume training, inspect outputs, export Hugging Face checkpoints, and produce
+  GGUF artifacts.
 
 For feature requests or custom infrastructure support, reach out to
 [support@liquid.ai](mailto:support@liquid.ai) with your setup.
@@ -239,8 +257,8 @@ CUDA/vLLM stack:
 ```bash
 uv run leap-finetune job_configs/sft_example.yaml
 uv run leap-finetune run job_configs/sft_example.yaml
-uv run leap-finetune job_configs/eval_standalone_example.yaml
 uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
+uv run leap-finetune slurm job_configs/sft_example_with_slurm.yaml --output-dir job_configs/slurms
 ```
 
 Install the command as a reusable tool from a checkout:
@@ -248,9 +266,8 @@ Install the command as a reusable tool from a checkout:
 ```bash
 uv tool install --editable . --force
 leap-finetune /absolute/path/to/config.yaml
-leap-finetune slurm /absolute/path/to/config.yaml --output-dir /absolute/path/to/slurms
-leap-finetune /absolute/path/to/eval_config.yaml
 leap-finetune eval /absolute/path/to/eval_config.yaml --output /absolute/path/to/results.json
+leap-finetune slurm /absolute/path/to/config.yaml --output-dir /absolute/path/to/slurms
 ```
 
 `uv tool install` creates an isolated tool environment. Use explicit config
@@ -463,6 +480,9 @@ Cloud storage requires appropriate AWS, GCP, or Azure credentials. Use `subset`
 for HuggingFace datasets with multiple configs, `split` for HF split
 expressions such as `train+validation`, and `limit` to cap samples for quick
 testing.
+
+During training, raw data is loaded through Ray Data, normalized, filtered for
+valid rows, shuffled, split, and optionally tokenized, packed, and cached.
 
 ### SFT
 
@@ -804,19 +824,12 @@ metrics include `short_answer`, `grounding_iou`, `mcq_gen`, and
 See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data
 format examples, YAML reference, and custom metrics.
 
-Run the same eval suite without training:
-
-```bash
-uv run leap-finetune job_configs/eval_standalone_example.yaml
-```
-
 Standalone eval configs use `model_name` or `checkpoint`, `evals:`, and an
 optional `backend:` block. They do not include `dataset`, `training_type`,
 `training_config`, or `async_eval`. Text evals default to `modality: text`;
 set `modality: vlm` only for standalone VLM evals.
 
-Use the explicit `eval` subcommand when you want CLI-only eval options such as
-writing metrics to JSON:
+Run the same eval suite without training and write metrics to JSON:
 
 ```bash
 uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
@@ -978,9 +991,10 @@ default.
 
 ### Testing
 
-The test suite is intentionally scoped to four buckets: config parsing, e2e,
-RL, and MoE. See [`tests/README.md`](./tests/README.md) for the current layout.
-E2E fixtures and SLURM launchers live under [`tests/e2e/`](./tests/e2e/).
+The test suite is intentionally scoped by area: config, distribution,
+evaluation, e2e, RL, and MoE. See [`tests/README.md`](./tests/README.md) for
+the current layout. E2E fixtures and SLURM launchers live under
+[`tests/e2e/`](./tests/e2e/).
 
 Run the normal tests:
 

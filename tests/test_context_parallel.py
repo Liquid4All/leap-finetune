@@ -1,5 +1,3 @@
-import sys
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -150,10 +148,9 @@ def test_prefix_gather_attention_uses_contiguous_visible_prefix(monkeypatch):
         captured["causal"] = causal
         return q
 
-    monkeypatch.setitem(
-        sys.modules,
-        "flash_attn",
-        SimpleNamespace(flash_attn_func=fake_flash_attn_func),
+    monkeypatch.setattr(
+        "leap_finetune.distribution.context_parallel._get_flash_attn_func",
+        lambda: fake_flash_attn_func,
     )
     monkeypatch.setattr(
         "leap_finetune.distribution.context_parallel._all_gather_fixed_seq",
@@ -173,6 +170,39 @@ def test_prefix_gather_attention_uses_contiguous_visible_prefix(monkeypatch):
     # rank 1 should see rank 0 + rank 1 = 2 contiguous chunks
     assert captured["k_shape"] == (1, 6, 2, 4)
     assert captured["v_shape"] == (1, 6, 2, 4)
+
+
+def test_prefix_gather_attention_falls_back_to_torch_lower_right_sdpa(monkeypatch):
+    monkeypatch.setattr(
+        "leap_finetune.distribution.context_parallel._get_flash_attn_func",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "leap_finetune.distribution.context_parallel._all_gather_fixed_seq",
+        lambda tensor, group: [tensor, tensor + 1],
+    )
+
+    q = torch.randn(1, 2, 2, 4)
+    k = torch.randn(1, 2, 2, 4)
+    v = torch.randn(1, 2, 2, 4)
+    out = prefix_gather_attention(q, k, v, cp_group="group", cp_rank=1, cp_size=2)
+
+    visible_k = torch.cat([k, k + 1], dim=1)
+    visible_v = torch.cat([v, v + 1], dim=1)
+    q_bhsd = q.transpose(1, 2).contiguous()
+    k_bhsd = visible_k.transpose(1, 2).contiguous()
+    v_bhsd = visible_v.transpose(1, 2).contiguous()
+    explicit_lower_right_mask = torch.tensor(
+        [[True, True, True, False], [True, True, True, True]],
+    )
+    expected = F.scaled_dot_product_attention(
+        q_bhsd,
+        k_bhsd,
+        v_bhsd,
+        attn_mask=explicit_lower_right_mask,
+    ).transpose(1, 2)
+
+    assert torch.allclose(out, expected)
 
 
 def test_prepend_cp_left_halo_uses_previous_rank_tail():

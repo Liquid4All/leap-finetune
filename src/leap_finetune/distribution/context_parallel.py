@@ -1,5 +1,6 @@
 import logging
 import socket
+from functools import lru_cache
 
 import torch
 import torch.distributed as dist
@@ -187,6 +188,52 @@ class _CPAllGather(torch.autograd.Function):
         return grad_stack[ctx.rank].contiguous(), None
 
 
+@lru_cache(maxsize=1)
+def _get_flash_attn_func():
+    """Return external flash-attn when its CUDA extension imports cleanly."""
+    try:
+        from flash_attn import flash_attn_func
+    except Exception as exc:
+        logger.warning(
+            "flash-attn failed to import (%s); using torch SDPA for CP attention",
+            exc,
+        )
+        return None
+    return flash_attn_func
+
+
+def _torch_lower_right_sdpa(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+) -> torch.Tensor:
+    """Torch SDPA fallback with FlashAttention-style bottom-right causal masking."""
+    from torch.nn.attention.bias import causal_lower_right
+
+    q_bhsd = q.transpose(1, 2).contiguous()
+    k_bhsd = k.transpose(1, 2).contiguous()
+    v_bhsd = v.transpose(1, 2).contiguous()
+    causal_bias = causal_lower_right(q_bhsd.size(-2), k_bhsd.size(-2))
+    output = F.scaled_dot_product_attention(
+        q_bhsd,
+        k_bhsd,
+        v_bhsd,
+        attn_mask=causal_bias,
+    )
+    return output.transpose(1, 2).contiguous()
+
+
+def _cp_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+) -> torch.Tensor:
+    flash_attn_func = _get_flash_attn_func()
+    if flash_attn_func is not None:
+        return flash_attn_func(q, k, v, causal=True)
+    return _torch_lower_right_sdpa(q, k, v)
+
+
 def prefix_gather_attention(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -196,16 +243,14 @@ def prefix_gather_attention(
     cp_size: int,
 ) -> torch.Tensor:
     """Run causal attention over the contiguous visible prefix for this CP rank."""
-    from flash_attn import flash_attn_func
-
     if cp_size == 1:
-        return flash_attn_func(q, k, v, causal=True)
+        return _cp_attention(q, k, v)
 
     gathered_k_chunks = _all_gather_fixed_seq(k, cp_group)
     gathered_v_chunks = _all_gather_fixed_seq(v, cp_group)
     visible_k = torch.cat(gathered_k_chunks[: cp_rank + 1], dim=1).contiguous()
     visible_v = torch.cat(gathered_v_chunks[: cp_rank + 1], dim=1).contiguous()
-    return flash_attn_func(q, visible_k, visible_v, causal=True)
+    return _cp_attention(q, visible_k, visible_v)
 
 
 def _all_gather_cp_halos(
@@ -722,18 +767,15 @@ def validate_cp_config(
     max_length: int | None = None,
     world_size: int | None = None,
 ) -> None:
-    """Validate context parallelism configuration. Requires flash-attn >= 2.8."""
+    """Validate context parallelism configuration."""
     if cp_size < 1:
         raise ValueError(f"cp_size must be >= 1, got {cp_size}")
 
-    if cp_size > 1:
-        from transformers.utils import is_flash_attn_2_available
-
-        if not is_flash_attn_2_available():
-            raise RuntimeError(
-                "Context parallelism requires flash-attn >= 2.8. "
-                "Install with: pip install flash-attn>=2.8.0"
-            )
+    if cp_size > 1 and not _cp_attention_backend_available():
+        raise RuntimeError(
+            "Context parallelism requires either usable flash-attn or "
+            "torch.nn.attention.bias.causal_lower_right SDPA support."
+        )
 
     # Batch splitting pads sequence-like tensors to a CP-compatible multiple at runtime,
     # so max_length itself does not need to be divisible by cp_size.
@@ -743,3 +785,13 @@ def validate_cp_config(
         raise ValueError(
             f"world_size ({world_size}) must be divisible by cp_size ({cp_size})"
         )
+
+
+def _cp_attention_backend_available() -> bool:
+    if _get_flash_attn_func() is not None:
+        return True
+    try:
+        from torch.nn.attention.bias import causal_lower_right  # noqa: F401
+    except Exception:
+        return False
+    return hasattr(F, "scaled_dot_product_attention")

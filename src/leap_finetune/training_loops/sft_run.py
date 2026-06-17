@@ -109,6 +109,9 @@ def sft_run(training_config: dict) -> None:
         eval_dataset=eval_dataset,
         data_collator=data_collator,
     )
+    trainer.train_dataloader_shuffle = bool(
+        train_config.get("train_dataloader_shuffle", True)
+    )
     trainer.add_callback(LeapCheckpointCallback(run_name_template=run_name_template))
 
     benchmark_configs = training_config.get("benchmark_configs")

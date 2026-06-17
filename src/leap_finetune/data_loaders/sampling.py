@@ -8,8 +8,12 @@ def get_length_grouped_sampler(
     batch_size: int,
     *,
     generator: torch.Generator | None = None,
+    enabled: bool = True,
 ) -> LengthGroupedSampler | None:
     """Build a local length-grouped sampler when the dataset exposes a length column."""
+    if not enabled:
+        return None
+
     if dataset is None:
         return None
 

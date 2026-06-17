@@ -53,7 +53,8 @@ class RayDataLoaderMixin:
     def get_train_dataloader(self):
         generator = None
         cp_config = getattr(self, "cp_config", None)
-        if cp_config is not None and cp_config.get("cp_size", 1) > 1:
+        shuffle = bool(getattr(self, "train_dataloader_shuffle", True))
+        if shuffle and cp_config is not None and cp_config.get("cp_size", 1) > 1:
             generator = torch.Generator().manual_seed(
                 42 + int(cp_config.get("dp_rank", 0))
             )
@@ -66,7 +67,7 @@ class RayDataLoaderMixin:
             self.train_dataset,
             batch_size=self.args.per_device_train_batch_size,
             collate_fn=self.data_collator,
-            shuffle=True,
+            shuffle=shuffle,
             **dataloader_kwargs,
         )
 

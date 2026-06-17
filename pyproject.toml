@@ -33,6 +33,7 @@ dependencies = [
 [project.scripts]
 leap-finetune = "leap_finetune:main"
 leap-export-manual-sharded-checkpoint = "leap_finetune.cli.export_manual_sharded_checkpoint:main"
+leap-build-shopify-action-curriculum = "leap_finetune.cli.build_shopify_action_curriculum_dataset:main"
 
 [build-system]
 requires = ["hatchling"]

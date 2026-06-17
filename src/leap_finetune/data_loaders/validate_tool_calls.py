@@ -101,10 +101,18 @@ def validate_tool_calls_in_messages(
         if not has_tool_call or role != "assistant":
             continue
 
+        following_messages = [
+            next_msg
+            for next_msg in messages[msg_idx + 1 :]
+            if isinstance(next_msg, dict)
+        ]
+        if not following_messages:
+            # Prefix-style SFT rows may legitimately end at the assistant turn
+            # whose target is the tool call itself.
+            continue
+
         found_tool_response = False
-        for next_msg in messages[msg_idx + 1 :]:
-            if not isinstance(next_msg, dict):
-                continue
+        for next_msg in following_messages:
             next_role = next_msg.get("role", "")
             if next_role == "tool":
                 found_tool_response = True

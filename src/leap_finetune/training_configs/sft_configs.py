@@ -15,6 +15,8 @@ SFT_EXCLUDED_KEYS = {
     "eval_packing",
     "padding_free",
     "shuffle_dataset",
+    "train_dataloader_shuffle",
+    "length_grouped_sampling",
     "dataset_text_field",
     "dataset_kwargs",
     "dataset_num_proc",

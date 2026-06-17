@@ -659,6 +659,22 @@ class TestValidateToolCallsInMessages:
         ]
         validate_tool_calls_in_messages(messages, 0)
 
+    def test_terminal_structured_tool_call_prefix_is_allowed(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "Let me check.",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "f", "arguments": {"x": "hello"}},
+                    }
+                ],
+            },
+        ]
+        validate_tool_calls_in_messages(messages, 0, model_family="lfm25")
+
     def test_lfm25_allows_content_before_tool_call_marker(self):
         messages = [
             {"role": "user", "content": "hi"},

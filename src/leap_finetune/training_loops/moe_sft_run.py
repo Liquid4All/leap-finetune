@@ -86,6 +86,8 @@ class LFMMoeSFTTrainer(
         checkpoint_staging_dir: str | None = None,
         manual_sharded_checkpoint_format: str = "hf",
         manual_sharded_export_metadata: dict | None = None,
+        train_dataloader_shuffle: bool = True,
+        length_grouped_sampling: bool = True,
         **kwargs,
     ):
         self.manual_sharded = manual_fsdp2
@@ -93,6 +95,8 @@ class LFMMoeSFTTrainer(
         self.checkpoint_staging_dir = checkpoint_staging_dir
         self.manual_sharded_checkpoint_format = manual_sharded_checkpoint_format
         self.manual_sharded_export_metadata = dict(manual_sharded_export_metadata or {})
+        self.train_dataloader_shuffle = train_dataloader_shuffle
+        self.length_grouped_sampling = length_grouped_sampling
         super().__init__(cp_config=cp_config, **kwargs)
         self.ep_config = ep_config
 
@@ -111,15 +115,17 @@ class LFMMoeSFTTrainer(
             self.train_dataset,
             self._train_batch_size,
             generator=sampler_generator,
+            enabled=bool(getattr(self, "length_grouped_sampling", True)),
         )
         dataloader_kwargs = {}
-        if sampler is None and sampler_generator is not None:
+        shuffle = bool(getattr(self, "train_dataloader_shuffle", True))
+        if sampler is None and shuffle and sampler_generator is not None:
             dataloader_kwargs["generator"] = sampler_generator
         return DataLoader(
             self.train_dataset,
             batch_size=self._train_batch_size,
             collate_fn=self.data_collator,
-            shuffle=sampler is None,
+            shuffle=sampler is None and shuffle,
             sampler=sampler,
             drop_last=True,
             **dataloader_kwargs,
@@ -320,6 +326,10 @@ def moe_sft_run(training_config: dict) -> None:
         checkpoint_staging_dir=train_config.get("checkpoint_staging_dir"),
         manual_sharded_checkpoint_format=manual_sharded_checkpoint_format,
         manual_sharded_export_metadata=manual_sharded_export_metadata,
+        train_dataloader_shuffle=bool(
+            train_config.get("train_dataloader_shuffle", True)
+        ),
+        length_grouped_sampling=bool(train_config.get("length_grouped_sampling", True)),
         model=model,
         processing_class=tokenizer,
         args=training_args,

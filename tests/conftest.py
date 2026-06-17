@@ -126,6 +126,11 @@ def fixtures_dir():
     return pathlib.Path(__file__).parent / "e2e" / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def isolated_lft_state_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("LFT_STATE_DIR", str(tmp_path / ".lft"))
+
+
 BASE_SFT_DATASET = {
     "path": "HuggingFaceTB/smoltalk",
     "type": "sft",

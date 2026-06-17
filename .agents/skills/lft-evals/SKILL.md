@@ -36,13 +36,16 @@ description: Create, modify, and run leap-finetune eval suites and metrics. Use 
    for standalone VLM evals.
 5. For async evals, choose `sync`, `sidecar`, or `reserved` based on available
    GPUs and queue behavior.
-6. When adding a metric, register it in the metric dispatch and the relevant
+6. After standalone eval, inspect `uv run leap-finetune runs show <run_id>` for
+   recorded metrics.
+7. When adding a metric, register it in the metric dispatch and the relevant
    text or VLM config factory.
 
 ## Expected Output
 
 - An `evals:` block, standalone eval config, metric change, or fixture update.
 - The exact standalone eval command when applicable.
+- The run ID and metrics location for standalone evals.
 - The smallest relevant eval test command.
 - Any async eval operational notes, especially for SLURM sidecar behavior.
 

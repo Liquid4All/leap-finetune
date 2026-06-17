@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -11,6 +12,8 @@ from leap_finetune import LEAP_FINETUNE_DIR
 
 
 _PASSTHROUGH_ENV_VARS = (
+    "LFT_RUN_ID",
+    "LFT_STATE_DIR",
     "NCCL_IB_DISABLE",
     "NCCL_DEBUG",
     "NCCL_DEBUG_SUBSYS",
@@ -28,7 +31,7 @@ def check_and_handle_slurm(
     config_path_arg: str | None = None,
     *,
     config_dict: dict | None = None,
-) -> bool:
+) -> bool | dict[str, Any]:
     if os.environ.get("LEAP_FINETUNE_FROM_SLURM") == "1":
         return False
 
@@ -98,7 +101,17 @@ def check_and_handle_slurm(
         sys.exit(1)
 
     print(f"SLURM job submitted: {result.stdout.strip()}")
-    return True
+    return {
+        "backend": "slurm",
+        "status": "submitted",
+        "job_id": _parse_sbatch_job_id(result.stdout),
+        "script_path": str(script_path),
+    }
+
+
+def _parse_sbatch_job_id(stdout: str) -> str | None:
+    match = re.search(r"Submitted batch job\s+(\d+)", stdout)
+    return match.group(1) if match else None
 
 
 def _default_judge_gpus(config_dict: dict[str, Any]) -> int:

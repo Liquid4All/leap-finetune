@@ -18,6 +18,7 @@
 <a href="#setup">Setup</a> -
 <a href="#quickstart">Quickstart</a> -
 <a href="#cli-and-python-usage">CLI</a> -
+<a href="#local-state">Local State</a> -
 <a href="#execution-backends">Backends</a> -
 <a href="#datasets">Datasets</a> -
 <a href="#grpo">GRPO</a> -
@@ -44,6 +45,8 @@ Kubernetes/KubeRay.
   scoring, vLLM rollouts, and optional OpenEnv environments.
 - Launch the same config locally, through SLURM, on Modal, or with KubeRay;
   track runs with Trackio or Weights & Biases.
+- Keep lightweight local state for runs, eval metrics, backend IDs, and
+  experiment memory that coding agents can inspect between sessions.
 - Resume training, inspect outputs, export Hugging Face checkpoints, and produce
   GGUF artifacts.
 
@@ -259,6 +262,7 @@ uv run leap-finetune job_configs/sft_example.yaml
 uv run leap-finetune run job_configs/sft_example.yaml
 uv run leap-finetune job_configs/eval_standalone_example.yaml --output results.json
 uv run leap-finetune slurm job_configs/sft_example_with_slurm.yaml --output-dir job_configs/slurms
+uv run leap-finetune runs list
 ```
 
 Install the command as a reusable tool from a checkout:
@@ -304,6 +308,30 @@ Run that file inside an environment where `leap-finetune` is installed:
 ```bash
 uv run --with-editable . python launch_training.py
 ```
+
+## Local State
+
+Every CLI or `run_config(...)` launch writes a gitignored `.lft/` directory in
+the current working directory, or `LFT_STATE_DIR` if set.
+
+- `.lft/state.json` stores factual run state: run ID, status, kind, config
+  path, backend, backend ID, output dir, timestamps, and standalone eval
+  metrics.
+- `.lft/memory.md` is for non-discrete experiment judgment: why a run was
+  tried, what it means, and what to try next. Reference run IDs instead of
+  copying metrics or config details into memory.
+
+```bash
+uv run leap-finetune runs list
+uv run leap-finetune runs show <run_id>
+uv run leap-finetune runs sync <run_id>
+uv run leap-finetune memory add "Next try lower LR; run was stable but underfit." --ref <run_id>
+uv run leap-finetune memory show
+```
+
+`runs sync` currently checks SLURM state when a run has a SLURM job ID. Modal
+and KubeRay commands record the submitted backend ID; use the backend's own log
+commands for live logs.
 
 ## Execution Backends
 

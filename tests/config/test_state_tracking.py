@@ -1,0 +1,148 @@
+import json
+import pathlib
+
+import pytest
+
+from leap_finetune import run_config
+from leap_finetune.cli.main import main
+
+from conftest import BASE_SFT_DATASET, write_config
+
+pytestmark = pytest.mark.configs
+
+
+def _state_file() -> pathlib.Path:
+    from leap_finetune.state import get_state_dir
+
+    return get_state_dir() / "state.json"
+
+
+def _load_state() -> dict:
+    return json.loads(_state_file().read_text())
+
+
+def test_eval_run_writes_state_and_memory_stays_separate(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    def fake_run_eval_config(config, *, output_path=None):
+        return {"benchmark/tiny_qa/score": 1.0}
+
+    monkeypatch.setattr(
+        "leap_finetune.cli.main.check_and_handle_slurm",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "leap_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "leap_finetune.distribution.backends.modal.check_and_handle_modal",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "leap_finetune.cli.main._assert_local_cuda_available",
+        lambda: pytest.fail("eval-only run_config should not require CUDA"),
+    )
+    monkeypatch.setattr(
+        "leap_finetune.evaluation.runner.run_eval_config",
+        fake_run_eval_config,
+    )
+
+    cfg_path = write_config(
+        {
+            "model_name": "LFM2-1.2B",
+            "evals": {
+                "benchmarks": [
+                    {
+                        "name": "tiny_qa",
+                        "path": "/tmp/tiny_qa.jsonl",
+                        "metric": "short_answer",
+                    }
+                ]
+            },
+        },
+        tmp_path,
+    )
+
+    result = run_config(cfg_path)
+    state = _load_state()
+    run = state["runs"][0]
+
+    assert result == {"benchmark/tiny_qa/score": 1.0}
+    assert run["status"] == "completed"
+    assert run["kind"] == "eval"
+    assert run["metrics"] == {"benchmark/tiny_qa/score": 1.0}
+    assert pathlib.Path(run["config"]) == pathlib.Path(cfg_path)
+
+    monkeypatch.setattr("sys.argv", ["leap-finetune", "runs", "list"])
+    main()
+    assert run["id"] in capsys.readouterr().out
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "leap-finetune",
+            "memory",
+            "add",
+            "Tiny QA passed; next run should broaden the benchmark.",
+            "--ref",
+            run["id"],
+        ],
+    )
+    main()
+
+    memory = pathlib.Path(_state_file()).with_name("memory.md").read_text()
+    assert f"Refs: `{run['id']}`" in memory
+    assert "Tiny QA passed" in memory
+    assert "benchmark/tiny_qa/score" not in memory
+
+
+def test_remote_submission_writes_backend_state(tmp_path, monkeypatch):
+    calls = {}
+
+    monkeypatch.setattr(
+        "leap_finetune.cli.main.check_and_handle_slurm",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "leap_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
+        lambda *args, **kwargs: False,
+    )
+
+    def fake_modal(config_path_arg=None, *, config_dict=None):
+        calls["config_path_arg"] = config_path_arg
+        calls["config_dict"] = config_dict
+        return {"status": "submitted", "app_id": "ap-test"}
+
+    monkeypatch.setattr(
+        "leap_finetune.distribution.backends.modal.check_and_handle_modal",
+        fake_modal,
+    )
+    monkeypatch.setattr(
+        "leap_finetune.cli.main._assert_local_cuda_available",
+        lambda: pytest.fail("remote config should not require CUDA"),
+    )
+
+    cfg_path = write_config(
+        {
+            "project_name": "modal_run",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"num_train_epochs": 1},
+            "modal": {"gpu": "H100"},
+        },
+        tmp_path,
+    )
+
+    run_config(cfg_path)
+    run = _load_state()["runs"][0]
+
+    assert calls["config_path_arg"] == str(pathlib.Path(cfg_path).resolve())
+    assert calls["config_dict"]["modal"]["gpu"] == "H100"
+    assert run["status"] == "submitted"
+    assert run["kind"] == "train"
+    assert run["backend"] == "modal"
+    assert run["backend_id"] == "ap-test"

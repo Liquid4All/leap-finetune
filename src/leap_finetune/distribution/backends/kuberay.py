@@ -70,7 +70,7 @@ def check_and_handle_kuberay(
     config_path_arg: str | None = None,
     *,
     config_dict: dict | None = None,
-) -> bool:
+) -> bool | dict:
     if config_dict is None:
         if not config_path_arg:
             return False
@@ -100,8 +100,7 @@ def check_and_handle_kuberay(
 
         print("Config contains KubeRay settings - submitting RayJob...\n")
         _print_config_summary(config_dict, kuberay_cfg)
-        _submit(config_dict, kuberay_cfg)
-        return True
+        return _submit(config_dict, kuberay_cfg)
     except SystemExit:
         raise
     except Exception as exc:
@@ -174,7 +173,7 @@ def _load_kubernetes_config(config_module) -> None:
     sys.exit(1)
 
 
-def _submit(config_dict: dict, kuberay_cfg: dict) -> None:
+def _submit(config_dict: dict, kuberay_cfg: dict) -> dict:
     try:
         from kubernetes import client, config
     except ImportError:
@@ -229,6 +228,12 @@ def _submit(config_dict: dict, kuberay_cfg: dict) -> None:
     print("\nMonitor with:")
     print(f"  kubectl get rayjob {job_name} -n {namespace}")
     print(f"  kubectl logs -f -l ray.io/cluster={job_name} -n {namespace}")
+    return {
+        "backend": "kuberay",
+        "status": "submitted",
+        "job_name": job_name,
+        "namespace": namespace,
+    }
 
 
 def _generate_rayjob_manifest(

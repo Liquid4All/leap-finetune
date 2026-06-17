@@ -23,6 +23,7 @@ description: Launch leap-finetune jobs locally, on SLURM, Modal, or KubeRay. Use
 - `README.md`
 - `src/leap_finetune/cli/main.py`
 - `src/leap_finetune/distribution/backends/`
+- `src/leap_finetune/state/`
 - `job_configs/sft_example_modal.yaml`
 - `job_configs/sft_example_with_slurm.yaml`
 - `tests/distribution/`
@@ -38,13 +39,15 @@ description: Launch leap-finetune jobs locally, on SLURM, Modal, or KubeRay. Use
    `modal app logs` / `modal app stop` commands.
 5. For KubeRay, check namespace, image, worker replicas, GPUs per worker, and
    output PVC.
-6. Add backend tests for generated configs, resource planning, or command
+6. After submission, inspect state with `uv run leap-finetune runs list`.
+7. Add backend tests for generated configs, resource planning, or command
    output when behavior changes.
 
 ## Expected Output
 
 - The backend config block or backend code change.
 - The exact launch, dry-run, monitor, or stop command.
+- The run ID plus backend ID when the job was submitted.
 - Whether the job is attached or detached.
 - The focused backend test or SLURM generation check.
 

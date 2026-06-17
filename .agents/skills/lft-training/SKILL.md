@@ -38,7 +38,8 @@ description: Train LFMs with leap-finetune SFT, DPO, GRPO, VLM, or MoE configs. 
    duplicating default fields.
 4. Keep dataset paths, output paths, and large artifacts outside git.
 5. For local training, run `uv run leap-finetune <config>`.
-6. If behavior changes config validation or materialization, add a non-GPU
+6. After launch, use `uv run leap-finetune runs list` to find the run record.
+7. If behavior changes config validation or materialization, add a non-GPU
    config test.
 
 ## Expected Output
@@ -47,6 +48,7 @@ description: Train LFMs with leap-finetune SFT, DPO, GRPO, VLM, or MoE configs. 
 - The exact launch command for local or remote execution.
 - The validation or test command that should be run before a real GPU job.
 - Notes on output/checkpoint paths when they affect follow-up work.
+- The run ID when a job was launched or submitted.
 
 ## Verification
 

@@ -16,6 +16,7 @@ wheels/
 .codex/
 .claude/*
 !.claude/skills
+.lft/
 
 # Local HF models (ignores everything in src except leap_finetune)
 src/*

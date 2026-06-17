@@ -12,7 +12,7 @@ def check_and_handle_modal(
     config_path_arg: str | None = None,
     *,
     config_dict: dict | None = None,
-) -> bool:
+) -> bool | dict:
     if config_dict is None:
         if not config_path_arg:
             return False
@@ -44,8 +44,7 @@ def check_and_handle_modal(
         print("Config contains Modal settings - submitting Modal job...\n")
         _preflight_checks(config_dict, modal_cfg)
         _print_config_summary(config_dict, modal_cfg)
-        _submit(config_dict, modal_cfg)
-        return True
+        return _submit(config_dict, modal_cfg)
     except SystemExit:
         raise
     except Exception as e:
@@ -149,7 +148,7 @@ def _print_config_summary(config_dict: dict, modal_cfg: dict) -> None:
 # === Submit job ===
 
 
-def _submit(config_dict: dict, modal_cfg: dict) -> None:
+def _submit(config_dict: dict, modal_cfg: dict) -> dict:
     from contextlib import nullcontext
 
     import modal
@@ -226,8 +225,19 @@ def _submit(config_dict: dict, modal_cfg: dict) -> None:
                     print(f"Dashboard: https://modal.com/id/{app.app_id}")
                     print(f"Monitor with: modal app logs {app.app_id}")
                     print(f"Stop with: modal app stop {app.app_id}")
+                return {
+                    "backend": "modal",
+                    "status": "submitted",
+                    "app_id": app.app_id,
+                    "call_id": call.object_id,
+                }
             else:
                 train.remote(config_str)
+                return {
+                    "backend": "modal",
+                    "status": "completed",
+                    "app_id": app.app_id,
+                }
 
 
 # === Image build ===

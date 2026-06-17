@@ -1,8 +1,13 @@
 from types import SimpleNamespace
 
 import pytest
+from datasets import Dataset
 
-from leap_finetune.utils.trainer_mixins import run_training_safely
+from leap_finetune.training.dpo import LFMDPOTrainer
+from leap_finetune.training.utils.trainer_lifecycle import run_training_safely
+from leap_finetune.training.utils.trainer_mixins import (
+    validate_manual_sharded_training_args,
+)
 
 
 class FailingTrainer:
@@ -39,3 +44,20 @@ def test_run_training_safely_suppresses_cleanup_error_after_epoch_target(caplog)
     run_training_safely(trainer)
 
     assert "Training completed but hit distributed communication error" in caplog.text
+
+
+def test_lfm_dpo_trainer_skips_prepare_dataset():
+    dummy = Dataset.from_dict({"a": [1, 2, 3]})
+
+    result = LFMDPOTrainer._prepare_dataset(None, dummy)
+
+    assert result is dummy
+
+
+def test_validate_manual_sharded_training_args_accepts_raw_checkpoint_format():
+    validate_manual_sharded_training_args({}, checkpoint_format="both")
+
+
+def test_validate_manual_sharded_training_args_rejects_raw_checkpoint_format():
+    with pytest.raises(ValueError, match="manual_sharded_checkpoint_format"):
+        validate_manual_sharded_training_args({}, checkpoint_format="invalid")

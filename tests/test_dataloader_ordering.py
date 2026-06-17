@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 from torch.utils.data import Dataset
 
-from leap_finetune.data_loaders.sampling import get_length_grouped_sampler
-from leap_finetune.utils.trainer_mixins import RayDataLoaderMixin
+from leap_finetune.data_loading.length_grouping import get_length_grouped_sampler
+from leap_finetune.training.utils.trainer_mixins import RayDataLoaderMixin
 
 
 class _TinyDataset(Dataset):

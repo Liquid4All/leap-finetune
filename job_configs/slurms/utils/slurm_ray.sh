@@ -14,14 +14,12 @@ RAY_TEMP_ROOT=""
 _ray_slurm_detect_iface_for_ip() {
   local target_ip="$1"
   python - "$target_ip" <<'PY'
-import ipaddress
 import re
 import socket
 import subprocess
 import sys
 
 target = sys.argv[1]
-family = socket.AF_INET6 if ":" in target else socket.AF_INET
 
 try:
     result = subprocess.run(

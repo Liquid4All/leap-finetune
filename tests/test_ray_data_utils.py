@@ -1,11 +1,13 @@
 from pathlib import Path
 
-from leap_finetune.data_loaders import ray_data_utils
-from leap_finetune.data_loaders.dataset_loader import DatasetLoader
-from leap_finetune.data_loaders.ray_data_utils import (
-    _build_cache_key,
-    _save_cache,
-    _try_load_cache,
+import pyarrow as pa
+
+from leap_finetune.data_loading import ray_data_utils
+from leap_finetune.data_loading.dataset_loader import DatasetLoader
+from leap_finetune.data_loading.ray_data_utils import (
+    _build_tokenization_cache_key,
+    _load_tokenization_cache,
+    _save_tokenization_cache,
     ray_dataset_to_hf,
 )
 
@@ -14,8 +16,9 @@ class _RowShard:
     def __init__(self, rows):
         self._rows = rows
 
-    def iter_rows(self):
-        yield from self._rows
+    def iter_batches(self, batch_format):
+        assert batch_format == "pyarrow"
+        yield pa.Table.from_pylist(self._rows)
 
 
 def test_ray_dataset_to_hf_materializes_rows():
@@ -60,16 +63,16 @@ def test_cache_write_is_atomic_and_requires_success_marker(monkeypatch, tmp_path
     eval_ds = _FakeRayDataset("eval")
     key = {"dataset_path": "/data/train", "has_eval": True}
 
-    assert _try_load_cache(fingerprint) is None
+    assert _load_tokenization_cache(fingerprint) is None
 
-    _save_cache(fingerprint, train, eval_ds, key)
+    _save_tokenization_cache(fingerprint, train, eval_ds, key)
 
     cache_dir = cache_root / fingerprint
     assert (cache_dir / "_SUCCESS").exists()
     assert (cache_dir / "fingerprint.json").exists()
     assert not list(cache_root.glob(f"{fingerprint}.tmp-*"))
 
-    cached = _try_load_cache(fingerprint)
+    cached = _load_tokenization_cache(fingerprint)
     assert cached == (str(cache_dir / "train"), str(cache_dir / "eval"))
     assert loaded == ["train", "eval"]
 
@@ -84,7 +87,7 @@ def test_sft_cache_key_includes_template_hash_and_overlength_policy(tmp_path):
         test_size=None,
     )
 
-    fingerprint_v1, key_v1 = _build_cache_key(
+    fingerprint_v1, key_v1 = _build_tokenization_cache_key(
         loader,
         shuffle_seed=42,
         tokenizer_id="model",
@@ -96,7 +99,7 @@ def test_sft_cache_key_includes_template_hash_and_overlength_policy(tmp_path):
     )
 
     template.write_text("template v2")
-    fingerprint_v2, key_v2 = _build_cache_key(
+    fingerprint_v2, key_v2 = _build_tokenization_cache_key(
         loader,
         shuffle_seed=42,
         tokenizer_id="model",

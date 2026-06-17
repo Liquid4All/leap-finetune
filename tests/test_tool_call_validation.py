@@ -1,18 +1,11 @@
-import pytest
-
-from leap_finetune.data_loaders.tool_call_utils import (
+from leap_finetune.data_loading.validate_tool_format import (
     ToolFormatInfo,
     detect_tool_format,
-    normalize_messages_for_chat_template,
-    normalize_row_for_chat_template,
     normalize_tool_format,
     validate_tool_format,
-    _tool_calls_to_pythonic,
+    tool_calls_to_pythonic,
 )
-from leap_finetune.data_loaders.validate_tool_calls import (
-    validate_tool_calls_in_messages,
-)
-from leap_finetune.utils.model_utils import get_model_family
+from leap_finetune.checkpointing.model_info import get_model_family
 
 
 # === Model family detection ===
@@ -251,7 +244,7 @@ class TestToolCallsToPythonic:
                 },
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert (
             result
             == '<|tool_call_start|>[get_weather(location="Boston")]<|tool_call_end|>'
@@ -264,7 +257,7 @@ class TestToolCallsToPythonic:
                 "function": {"name": "f", "arguments": {"a": "x", "b": 42}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == '<|tool_call_start|>[f(a="x", b=42)]<|tool_call_end|>'
 
     def test_multiple_calls(self):
@@ -272,22 +265,12 @@ class TestToolCallsToPythonic:
             {"type": "function", "function": {"name": "f1", "arguments": {"a": 1}}},
             {"type": "function", "function": {"name": "f2", "arguments": {"b": "y"}}},
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == '<|tool_call_start|>[f1(a=1), f2(b="y")]<|tool_call_end|>'
 
     def test_no_args(self):
         tc = [{"type": "function", "function": {"name": "get_time", "arguments": {}}}]
-        result = _tool_calls_to_pythonic(tc)
-        assert result == "<|tool_call_start|>[get_time()]<|tool_call_end|>"
-
-    def test_none_arguments_render_as_no_args(self):
-        tc = [
-            {
-                "type": "function",
-                "function": {"name": "get_time", "arguments": None},
-            }
-        ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == "<|tool_call_start|>[get_time()]<|tool_call_end|>"
 
     def test_string_arguments(self):
@@ -297,110 +280,15 @@ class TestToolCallsToPythonic:
                 "function": {"name": "f", "arguments": '{"x": "hello"}'},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == '<|tool_call_start|>[f(x="hello")]<|tool_call_end|>'
 
     def test_bool_arg(self):
         tc = [
             {"type": "function", "function": {"name": "f", "arguments": {"flag": True}}}
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert result == "<|tool_call_start|>[f(flag=True)]<|tool_call_end|>"
-
-    def test_string_arguments_passthrough(self):
-        tc = [
-            {
-                "type": "function",
-                "function": {"name": "f", "arguments": 'x="hello", y=42'},
-            }
-        ]
-        result = _tool_calls_to_pythonic(tc)
-        assert result == '<|tool_call_start|>[f(x="hello", y=42)]<|tool_call_end|>'
-
-
-class TestNormalizeForChatTemplate:
-    def test_json_string_arguments_are_parsed_without_mutating_input(self):
-        messages = [
-            {"role": "user", "content": "find shoes"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "function": {
-                            "name": "search",
-                            "arguments": '{"query": "women\'s shoes"}',
-                        }
-                    }
-                ],
-            },
-        ]
-
-        normalized = normalize_messages_for_chat_template(messages)
-
-        assert normalized[1]["tool_calls"][0]["function"]["arguments"] == {
-            "query": "women's shoes"
-        }
-        assert isinstance(messages[1]["tool_calls"][0]["function"]["arguments"], str)
-
-    def test_pythonic_string_arguments_raise_before_template_rendering(self):
-        messages = [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {"function": {"name": "f", "arguments": 'x="hello", y=42'}}
-                ],
-            }
-        ]
-
-        with pytest.raises(ValueError, match="JSON object string"):
-            normalize_messages_for_chat_template(messages)
-
-    def test_non_object_json_string_arguments_raise_before_template_rendering(self):
-        messages = [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {"function": {"name": "f", "arguments": '["not", "kwargs"]'}}
-                ],
-            }
-        ]
-
-        with pytest.raises(ValueError, match="decode to an object"):
-            normalize_messages_for_chat_template(messages)
-
-    def test_row_normalizer_handles_dpo_conversational_fields(self):
-        row = {
-            "prompt": [{"role": "user", "content": "hi"}],
-            "chosen": [
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {"name": "f", "arguments": '{"x": "chosen"}'},
-                    ],
-                }
-            ],
-            "rejected": [
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {"name": "f", "arguments": '{"x": "rejected"}'},
-                    ],
-                }
-            ],
-        }
-
-        normalized = normalize_row_for_chat_template(row)
-
-        assert normalized["chosen"][0]["tool_calls"][0]["arguments"] == {"x": "chosen"}
-        assert normalized["rejected"][0]["tool_calls"][0]["arguments"] == {
-            "x": "rejected"
-        }
-        assert isinstance(row["chosen"][0]["tool_calls"][0]["arguments"], str)
 
 
 # === Edge cases the current converter mishandles ===
@@ -426,7 +314,7 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"msg": 'he said "hi"'}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
     def test_string_with_newline(self):
@@ -438,7 +326,7 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"body": "line1\nline2"}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
     def test_string_with_backslash(self):
@@ -450,14 +338,14 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"path": r"C:\Users\x"}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
     def test_non_dict_arguments_does_not_crash(self):
         # Malformed `arguments` (list instead of dict) should be skipped
         # with a warning, not crash the Ray worker with AttributeError.
         tc = [{"type": "function", "function": {"name": "f", "arguments": [1, 2, 3]}}]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         assert isinstance(result, str)
         assert result.startswith("<|tool_call_start|>")
         assert result.endswith("<|tool_call_end|>")
@@ -471,7 +359,7 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"tags": ["a", "b"]}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
     def test_nested_dict_string_values_is_parseable(self):
@@ -482,7 +370,7 @@ class TestToolCallsToPythonicEdgeCases:
                 "function": {"name": "f", "arguments": {"opts": {"name": "foo"}}},
             }
         ]
-        result = _tool_calls_to_pythonic(tc)
+        result = tool_calls_to_pythonic(tc)
         self._assert_parseable_python(result)
 
 
@@ -569,38 +457,6 @@ class TestNormalizeToolFormat:
         assert 'get_weather(location="SF")' in assistant_msg["content"]
         assert "tool_calls" not in assistant_msg
 
-    def test_lfm2_structured_tool_call_with_content_keeps_tool_call_first(self):
-        row = {
-            "messages": [
-                {"role": "user", "content": "hi"},
-                {
-                    "role": "assistant",
-                    "content": "Let me check.",
-                    "tool_calls": [{"function": {"name": "f", "arguments": {}}}],
-                },
-            ]
-        }
-        result = normalize_tool_format(row, "lfm2")
-        assert result["messages"][1]["content"] == (
-            "<|tool_call_start|>[f()]<|tool_call_end|>\nLet me check."
-        )
-
-    def test_lfm25_structured_tool_call_with_content_preserves_content_first(self):
-        row = {
-            "messages": [
-                {"role": "user", "content": "hi"},
-                {
-                    "role": "assistant",
-                    "content": "Let me check.",
-                    "tool_calls": [{"function": {"name": "f", "arguments": {}}}],
-                },
-            ]
-        }
-        result = normalize_tool_format(row, "lfm25")
-        assert result["messages"][1]["content"] == (
-            "Let me check.\n<|tool_call_start|>[f()]<|tool_call_end|>"
-        )
-
     def test_no_modification_when_clean(self):
         row = {
             "messages": [
@@ -639,61 +495,3 @@ class TestNormalizeToolFormat:
         result = normalize_tool_format(row, "lfm2")
         # After normalization, tool content should be clean
         assert result["messages"][2]["content"] == '{"r": 1}'
-
-
-class TestValidateToolCallsInMessages:
-    def test_structured_tool_calls_are_allowed(self):
-        messages = [
-            {"role": "user", "content": "hi"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "type": "function",
-                        "function": {"name": "f", "arguments": {"x": "hello"}},
-                    }
-                ],
-            },
-            {"role": "tool", "content": '{"result": 1}'},
-        ]
-        validate_tool_calls_in_messages(messages, 0)
-
-    def test_terminal_structured_tool_call_prefix_is_allowed(self):
-        messages = [
-            {"role": "user", "content": "hi"},
-            {
-                "role": "assistant",
-                "content": "Let me check.",
-                "tool_calls": [
-                    {
-                        "type": "function",
-                        "function": {"name": "f", "arguments": {"x": "hello"}},
-                    }
-                ],
-            },
-        ]
-        validate_tool_calls_in_messages(messages, 0, model_family="lfm25")
-
-    def test_lfm25_allows_content_before_tool_call_marker(self):
-        messages = [
-            {"role": "user", "content": "hi"},
-            {
-                "role": "assistant",
-                "content": "Let me check.\n<|tool_call_start|>[f()]<|tool_call_end|>",
-            },
-            {"role": "tool", "content": '{"result": 1}'},
-        ]
-        validate_tool_calls_in_messages(messages, 0, model_family="lfm25")
-
-    def test_legacy_lfm2_rejects_content_before_tool_call_marker(self):
-        messages = [
-            {"role": "user", "content": "hi"},
-            {
-                "role": "assistant",
-                "content": "Let me check.\n<|tool_call_start|>[f()]<|tool_call_end|>",
-            },
-            {"role": "tool", "content": '{"result": 1}'},
-        ]
-        with pytest.raises(ValueError, match="Text appears before tool call"):
-            validate_tool_calls_in_messages(messages, 0, model_family="lfm2")

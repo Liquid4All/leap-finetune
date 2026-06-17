@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from leap_finetune.utils.context_parallel import (
+from leap_finetune.distribution.context_parallel import (
     _prepend_cp_left_halo,
     compute_cp_causal_lm_loss,
     prefix_gather_attention,
@@ -91,34 +91,34 @@ def test_validate_cp_model_support_rejects_packed_hybrid_conv():
 
 
 def test_setup_context_parallel_applies_model_and_moe_partition(monkeypatch):
-    from leap_finetune.utils.training.runtime import setup_context_parallel
+    from leap_finetune.training.utils.worker_setup import setup_context_parallel
 
     calls = []
     cp_config = {"cp_group": "group", "cp_rank": 0, "cp_size": 2}
     model = nn.Module()
 
     monkeypatch.setattr(
-        "leap_finetune.utils.training.runtime.validate_cp_model_support",
+        "leap_finetune.training.utils.worker_setup.validate_cp_model_support",
         lambda patched_model, train_config: calls.append(
             ("validate_model", patched_model, train_config)
         ),
     )
     monkeypatch.setattr(
-        "leap_finetune.utils.training.runtime.validate_cp_config",
+        "leap_finetune.training.utils.worker_setup.validate_cp_config",
         lambda cp_size, max_length=None, world_size=None: calls.append(
             ("validate_config", cp_size, max_length, world_size)
         ),
     )
     monkeypatch.setattr(
-        "leap_finetune.utils.training.runtime.create_parallel_process_groups",
+        "leap_finetune.training.utils.worker_setup.create_parallel_process_groups",
         lambda cp_size: calls.append(("create_groups", cp_size)) or cp_config,
     )
     monkeypatch.setattr(
-        "leap_finetune.utils.training.runtime.apply_cp_to_model",
+        "leap_finetune.training.utils.worker_setup.apply_cp_to_model",
         lambda patched_model, config: calls.append(("apply_cp", patched_model, config)),
     )
     monkeypatch.setattr(
-        "leap_finetune.utils.training.runtime.set_moe_sequence_partition_group",
+        "leap_finetune.training.utils.worker_setup.set_moe_sequence_partition_group",
         lambda patched_model, group: calls.append(
             ("set_moe_group", patched_model, group)
         ),
@@ -156,7 +156,7 @@ def test_prefix_gather_attention_uses_contiguous_visible_prefix(monkeypatch):
         SimpleNamespace(flash_attn_func=fake_flash_attn_func),
     )
     monkeypatch.setattr(
-        "leap_finetune.utils.context_parallel._all_gather_fixed_seq",
+        "leap_finetune.distribution.context_parallel._all_gather_fixed_seq",
         lambda tensor, group: [
             torch.full_like(tensor, fill_value=rank + 1) for rank in range(4)
         ],
@@ -180,7 +180,7 @@ def test_prepend_cp_left_halo_uses_previous_rank_tail():
     attention_mask = torch.tensor([[1, 1, 1]], dtype=torch.long)
 
     with patch(
-        "leap_finetune.utils.context_parallel._all_gather_cp_halos",
+        "leap_finetune.distribution.context_parallel._all_gather_cp_halos",
         side_effect=[
             [
                 torch.tensor([[[1.0], [2.0]]]),
@@ -226,7 +226,7 @@ def test_cp_causal_lm_loss_scales_before_distributed_gradient_average(monkeypatc
         tensor.mul_(2)
 
     monkeypatch.setattr(
-        "leap_finetune.utils.context_parallel.dist.all_reduce",
+        "leap_finetune.distribution.context_parallel.dist.all_reduce",
         fake_all_reduce,
     )
 
@@ -260,7 +260,7 @@ def test_cp_causal_lm_loss_uses_num_items_in_batch_denominator(monkeypatch):
         tensor.mul_(2)
 
     monkeypatch.setattr(
-        "leap_finetune.utils.context_parallel.dist.all_reduce",
+        "leap_finetune.distribution.context_parallel.dist.all_reduce",
         fake_all_reduce,
     )
 
@@ -293,7 +293,7 @@ def test_cp_causal_lm_loss_uses_precomputed_shift_labels(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "leap_finetune.utils.context_parallel.dist.all_reduce",
+        "leap_finetune.distribution.context_parallel.dist.all_reduce",
         fake_all_reduce,
     )
 
@@ -320,7 +320,7 @@ def test_cp_causal_lm_loss_uses_precomputed_shift_labels(monkeypatch):
 def test_cp_prediction_step_splits_eval_batch_before_loss(monkeypatch, tmp_path):
     from transformers import TrainingArguments
 
-    from leap_finetune.training_loops.sft_run import LFMSFTTrainer
+    from leap_finetune.training.sft import LFMSFTTrainer
 
     def fake_all_reduce(tensor, op=None, group=None):
         tensor.mul_(2)
@@ -330,11 +330,11 @@ def test_cp_prediction_step_splits_eval_batch_before_loss(monkeypatch, tmp_path)
         output[1] = fingerprint
 
     monkeypatch.setattr(
-        "leap_finetune.utils.context_parallel.dist.all_reduce",
+        "leap_finetune.distribution.context_parallel.dist.all_reduce",
         fake_all_reduce,
     )
     monkeypatch.setattr(
-        "leap_finetune.utils.context_parallel.dist.all_gather_object",
+        "leap_finetune.distribution.context_parallel.dist.all_gather_object",
         fake_all_gather_object,
     )
 
@@ -388,7 +388,7 @@ def test_validate_cp_batch_replicated_rejects_mismatched_inputs(monkeypatch):
         output[1] = {"input_ids": ((1, 3), 999, (9, 9, 9), (9, 9, 9))}
 
     monkeypatch.setattr(
-        "leap_finetune.utils.context_parallel.dist.all_gather_object",
+        "leap_finetune.distribution.context_parallel.dist.all_gather_object",
         fake_all_gather_object,
     )
 

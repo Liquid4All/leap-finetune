@@ -6,18 +6,21 @@ from pathlib import Path
 import pytest
 import torch
 
-from leap_finetune.utils.model_utils import (
+from leap_finetune.checkpointing.hf_export import (
     HF_EXPORT_MAX_SHARD_SIZE,
-    MANUAL_SHARDED_FORMAT_VERSION,
     _canonicalize_hf_export_state_dict,
+    _reassemble_ep_expert_state_dict,
     _save_hf_pretrained_model,
-    _save_root_metadata,
     _save_root_hf_export,
+)
+from leap_finetune.checkpointing.manual_sharded import (
+    MANUAL_SHARDED_FORMAT_VERSION,
+    _save_root_metadata,
     build_manual_sharded_export_metadata_from_config,
     finalize_manual_sharded_export_metadata,
     load_manual_sharded_checkpoint_metadata,
 )
-from leap_finetune.utils.load_models import normalize_model_config_overrides
+from leap_finetune.checkpointing.model_loading import normalize_model_config_overrides
 
 
 class ConfigStub:
@@ -363,6 +366,58 @@ def test_canonicalize_hf_export_state_dict_unpacks_lfm2_moe_experts():
     )
 
 
+def test_reassemble_ep_expert_state_dict_restores_global_expert_axis(monkeypatch):
+    ep_group = object()
+    gate_up = torch.arange(2 * 4 * 3).reshape(2, 4, 3)
+    down = torch.arange(100, 100 + 2 * 3 * 2).reshape(2, 3, 2)
+    state_dict = {
+        "model.layers.2.feed_forward.experts.gate_up_proj": gate_up,
+        "model.layers.2.feed_forward.experts.down_proj": down,
+        "model.embed_tokens.weight": torch.ones(2, 3),
+    }
+
+    monkeypatch.setattr("leap_finetune.checkpointing.hf_export._global_rank", lambda: 0)
+    monkeypatch.setattr(
+        "leap_finetune.checkpointing.hf_export.dist.is_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "leap_finetune.checkpointing.hf_export.dist.is_initialized", lambda: True
+    )
+    monkeypatch.setattr(
+        "leap_finetune.checkpointing.hf_export.dist.get_world_size",
+        lambda group: 2,
+    )
+
+    def fake_all_gather(gathered, local_value, group):
+        del group
+        if local_value.numel() == 1:
+            gathered[0].copy_(local_value)
+            gathered[1].copy_(local_value)
+        else:
+            gathered[0].copy_(local_value)
+            gathered[1].copy_(local_value + 1000)
+
+    monkeypatch.setattr(
+        "leap_finetune.checkpointing.hf_export.dist.all_gather",
+        fake_all_gather,
+    )
+
+    reassembled = _reassemble_ep_expert_state_dict(state_dict, ep_group)
+    full_gate_up = reassembled["model.layers.2.feed_forward.experts.gate_up_proj"]
+    full_down = reassembled["model.layers.2.feed_forward.experts.down_proj"]
+
+    assert full_gate_up.shape == (4, 4, 3)
+    assert full_down.shape == (4, 3, 2)
+    assert torch.equal(full_gate_up[:2], gate_up)
+    assert torch.equal(full_gate_up[2:], gate_up + 1000)
+    assert torch.equal(full_down[:2], down)
+    assert torch.equal(full_down[2:], down + 1000)
+    assert (
+        reassembled["model.embed_tokens.weight"]
+        is state_dict["model.embed_tokens.weight"]
+    )
+
+
 def test_root_hf_export_uses_full_state_dict_and_hf_save_pretrained(
     tmp_path: Path,
     monkeypatch,
@@ -384,10 +439,12 @@ def test_root_hf_export_uses_full_state_dict_and_hf_save_pretrained(
         }
 
     monkeypatch.setattr(
-        "leap_finetune.utils.model_utils.get_model_state_dict",
+        "leap_finetune.checkpointing.hf_export.get_model_state_dict",
         fake_get_model_state_dict,
     )
-    monkeypatch.setattr("leap_finetune.utils.model_utils._world_barrier", lambda: None)
+    monkeypatch.setattr(
+        "leap_finetune.checkpointing.hf_export._world_barrier", lambda: None
+    )
 
     _save_root_hf_export(
         model=object(),

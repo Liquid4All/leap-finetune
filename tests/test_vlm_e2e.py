@@ -28,9 +28,11 @@ class TestVLMLoRA:
         import torch
         from transformers import TrainingArguments
 
-        from leap_finetune.training_loops.vlm_sft_run import LFMVLMTrainer
-        from leap_finetune.training_configs.vlm_sft_config import DEFAULT_LR_MULTIPLIERS
-        from leap_finetune.utils.load_models import load_vlm_model
+        from leap_finetune.checkpointing.model_loading import load_vlm_model
+        from leap_finetune.training.default_configs.vlm_sft_configs import (
+            DEFAULT_LR_MULTIPLIERS,
+        )
+        from leap_finetune.training.vlm_sft import LFMVLMTrainer
 
         model, processor = load_vlm_model("LFM2-VL-1.6B")
         args = TrainingArguments(

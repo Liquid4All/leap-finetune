@@ -1,0 +1,18 @@
+# Toy standalone eval. No dataset, training_type, training_config, or async_eval.
+
+project_name: "eval_standalone_toy"
+model_name: "LFM2-1.2B"
+
+evals:
+  max_new_tokens: 32
+  benchmarks:
+    - name: "tiny_qa"
+      path: "tests/e2e/fixtures/tiny_qa_bench.jsonl"
+      metric: "short_answer"
+      match_mode: "contains"
+
+backend:
+  type: "vllm"
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.85
+  dtype: "bfloat16"

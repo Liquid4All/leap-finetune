@@ -1,0 +1,5 @@
+{"id": "q1", "messages": [{"role": "user", "content": "What is the capital of France?"}, {"role": "assistant", "content": "Paris"}]}
+{"id": "q2", "messages": [{"role": "user", "content": "What is 2 + 2?"}, {"role": "assistant", "content": "4"}]}
+{"id": "q3", "messages": [{"role": "user", "content": "Who wrote Hamlet?"}, {"role": "assistant", "content": "Shakespeare"}]}
+{"id": "q4", "messages": [{"role": "user", "content": "What color is the sky on a clear day?"}, {"role": "assistant", "content": "blue"}]}
+{"id": "q5", "messages": [{"role": "user", "content": "What is the largest planet in our solar system?"}, {"role": "assistant", "content": "Jupiter"}]}

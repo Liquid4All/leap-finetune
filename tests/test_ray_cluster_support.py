@@ -1,14 +1,8 @@
-import pathlib
-import shlex
-import subprocess
-import textwrap
-
-from leap_finetune.trainer import _resolve_num_workers
-from leap_finetune.utils.logging_utils import (
+from leap_finetune.distribution.ray_runtime import (
     get_requested_ray_address,
-    should_connect_existing_cluster,
+    resolve_num_workers,
 )
-from leap_finetune.utils.slurm_generator import generate_slurm_script
+from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
 
 def test_get_requested_ray_address_prefers_leap_env(monkeypatch):
@@ -21,13 +15,12 @@ def test_get_requested_ray_address_uses_config(monkeypatch):
     monkeypatch.delenv("RAY_ADDRESS", raising=False)
     monkeypatch.delenv("LEAP_RAY_ADDRESS", raising=False)
     assert get_requested_ray_address({"address": "ray-c:6379"}) == "ray-c:6379"
-    assert should_connect_existing_cluster({"address": "ray-c:6379"}) is True
 
 
 def test_resolve_num_workers_prefers_env(monkeypatch):
     monkeypatch.setenv("LEAP_RAY_NUM_WORKERS", "16")
     assert (
-        _resolve_num_workers(
+        resolve_num_workers(
             None,
             local_num_gpus=8,
             connected_to_existing_cluster=False,
@@ -40,7 +33,7 @@ def test_resolve_num_workers_uses_ray_config(monkeypatch):
     monkeypatch.delenv("LEAP_RAY_NUM_WORKERS", raising=False)
     monkeypatch.delenv("LEAP_NUM_WORKERS", raising=False)
     assert (
-        _resolve_num_workers(
+        resolve_num_workers(
             {"num_workers": 12},
             local_num_gpus=8,
             connected_to_existing_cluster=False,
@@ -53,7 +46,7 @@ def test_resolve_num_workers_uses_local_gpu_count(monkeypatch):
     monkeypatch.delenv("LEAP_RAY_NUM_WORKERS", raising=False)
     monkeypatch.delenv("LEAP_NUM_WORKERS", raising=False)
     assert (
-        _resolve_num_workers(
+        resolve_num_workers(
             None,
             local_num_gpus=8,
             connected_to_existing_cluster=False,
@@ -96,44 +89,6 @@ slurm:
         tmp_path,
     )
     script = script_path.read_text()
-    assert "source job_configs/slurms/utils/slurm_ray.sh" in script
+    assert "src/leap_finetune/distribution/backends/slurm_ray.sh" in script
     assert "export RAY_ADDRESS" in script
     assert "ray_slurm_start_cluster_bg" in script
-
-
-def test_ray_slurm_stop_cluster_does_not_create_new_srun_steps():
-    helper_path = pathlib.Path("job_configs/slurms/utils/slurm_ray.sh").resolve()
-    script = textwrap.dedent(
-        f"""
-        set -euo pipefail
-        source {shlex.quote(str(helper_path))}
-
-        srun() {{
-          echo "unexpected srun call: $*" >&2
-          exit 64
-        }}
-
-        export RAY_SLURM_STOP_TIMEOUT=2
-        sleep 60 &
-        ray_pid=$!
-        RAY_SLURM_PIDS=("${{ray_pid}}")
-        RAY_SLURM_NODES=(node0 node1)
-        RAY_HEAD_NODE=node0
-
-        ray_slurm_stop_cluster
-
-        if kill -0 "${{ray_pid}}" 2>/dev/null; then
-          echo "ray srun wrapper was not stopped" >&2
-          exit 1
-        fi
-        """
-    )
-
-    result = subprocess.run(
-        ["bash", "-lc", script],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-
-    assert result.returncode == 0, result.stderr

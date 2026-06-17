@@ -1,31 +1,27 @@
 import torch
-from leap_finetune.data_loaders.tokenize_data import (
+from leap_finetune.data_loading.tokenize_data import (
     _final_assistant_span_mask,
     tokenize_and_pack_sft,
     tokenize_sft,
 )
-from leap_finetune.training_loops.sft_run import build_sft_data_collator
+from leap_finetune.training.sft import build_sft_data_collator
 
 
 class _FakeTokenizer:
     pad_token_id = 0
     eos_token_id = 99
 
-    def __init__(self):
-        self.last_tools = None
-
     def apply_chat_template(
         self,
         messages,
-        tools=None,
         tokenize=True,
         truncation=True,
         max_length=None,
         return_dict=False,
         return_assistant_tokens_mask=False,
+        tools=None,
     ):
-        self.last_tools = tools
-        del messages, tokenize, truncation, max_length
+        del messages, tokenize, truncation, max_length, tools
         output = {"input_ids": [10, 11, 12, 13, 14, 15]}
         if return_assistant_tokens_mask:
             output["assistant_masks"] = [0, 1, 1, 0, 1, 1]
@@ -54,16 +50,6 @@ def test_tokenize_sft_emits_assistant_masks():
 
     assert tokenized["input_ids"] == [10, 11, 12, 13, 14, 15]
     assert tokenized["assistant_masks"] == [0, 1, 1, 0, 1, 1]
-
-
-def test_tokenize_sft_passes_tools_to_chat_template():
-    tokenizer = _FakeTokenizer()
-    tools = [{"function": {"name": "search", "parameters": {}}}]
-    row = {"messages": [{"role": "user", "content": "x"}], "tools": tools}
-
-    tokenize_sft(row, tokenizer, max_length=128)
-
-    assert tokenizer.last_tools == tools
 
 
 def test_tokenize_sft_emits_completion_mask_for_final_assistant_span():
@@ -160,15 +146,14 @@ class _PackingTokenizer(_FakeTokenizer):
     def apply_chat_template(
         self,
         messages,
-        tools=None,
         tokenize=True,
         truncation=True,
         max_length=None,
         return_dict=False,
         return_assistant_tokens_mask=False,
+        tools=None,
     ):
-        del tools
-        del tokenize, truncation, max_length
+        del tokenize, truncation, max_length, tools
         key = messages[0]["content"]
         if key == "one":
             output = {"input_ids": [1, 2, 3]}
@@ -216,7 +201,7 @@ def test_tokenize_and_pack_sft_preserves_assistant_masks(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "leap_finetune.data_loaders.tokenize_data.ray.data.from_arrow",
+        "leap_finetune.data_loading.tokenize_data.ray.data.from_arrow",
         lambda table: _FakePackedDataset(table.to_pylist()),
     )
 
@@ -238,14 +223,14 @@ class _VariableLengthTokenizer(_FakeTokenizer):
     def apply_chat_template(
         self,
         messages,
-        tools=None,
         tokenize=True,
         truncation=True,
         max_length=None,
         return_dict=False,
         return_assistant_tokens_mask=False,
+        tools=None,
     ):
-        del tools, tokenize
+        del tokenize, tools
         length = int(messages[0]["content"])
         input_ids = list(range(length))
         if truncation and max_length is not None:

@@ -7,7 +7,6 @@ from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 
 from leap_finetune.evaluation.base import Benchmark
-from leap_finetune.utils.logging_utils import is_rank_zero
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +18,14 @@ class BenchmarkEvalCallback(TrainerCallback):
     and model eval/train toggle.
     """
 
-    def __init__(self, benchmarks: list[Benchmark]):
+    def __init__(
+        self,
+        benchmarks: list[Benchmark],
+        best_metric_config: dict[str, float] | None = None,
+    ):
         super().__init__()
         self.benchmarks = benchmarks
+        self.best_metric_config = best_metric_config or {}
 
     def on_evaluate(
         self,
@@ -100,6 +104,11 @@ class BenchmarkEvalCallback(TrainerCallback):
                 "=" * 50,
             )
 
+        metrics = kwargs.get("metrics")
+        if isinstance(metrics, dict):
+            metrics.update(all_results)
+        state.log_history.append(all_results.copy())
+
         self._log_to_wandb(all_results)
 
         if was_training:
@@ -119,6 +128,10 @@ class BenchmarkEvalCallback(TrainerCallback):
 
     @staticmethod
     def _log_to_wandb(results: dict):
+        # Lazy import avoids a circular import (training package imports the loops,
+        # which import this module).
+        from leap_finetune.training.utils.logging import is_rank_zero
+
         if not is_rank_zero():
             return
         try:

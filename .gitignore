@@ -25,12 +25,14 @@ src/*
 # Outputs and logs
 outputs/
 logs/
+job_configs/slurms/
 
 # Scripts
 scripts/
 
 # Quick testing files
 *.ipynb
+scratch/
 
 # Tokenization cache
 .cache/
@@ -38,3 +40,7 @@ scripts/
 # Test/tool caches
 .pytest_cache/
 .ruff_cache/
+tests/slurm/generated/
+
+# wandb local run dirs (offline logs, large + transient)
+wandb/

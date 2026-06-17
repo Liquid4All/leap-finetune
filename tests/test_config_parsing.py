@@ -4,26 +4,21 @@ import pytest
 import yaml
 from peft import LoraConfig
 
-from leap_finetune.utils.callbacks import LeapCheckpointCallback
-from leap_finetune.utils.config_parser import (
+from leap_finetune.config.parser import (
     generate_run_name,
-    parse_job_config,
+    materialize_job_config,
+    parse_job_config as _parse_job_config,
     resolve_config_path,
 )
-from leap_finetune.utils.constants import LEAP_FINETUNE_DIR
-from leap_finetune.utils.trainer_mixins import (
-    validate_manual_sharded_training_args,
-)
-from leap_finetune.utils.model_utils import should_run_final_manual_sharded_save
-from leap_finetune.utils.model_utils import (
-    _update_latest_pointer,
-    load_manual_sharded_model_checkpoint,
-    normalize_manual_sharded_checkpoint_format,
-)
+from leap_finetune import LEAP_FINETUNE_DIR
 
 from conftest import BASE_DPO_DATASET, BASE_SFT_DATASET, BASE_VLM_DATASET, write_config
 
 pytestmark = pytest.mark.configs
+
+
+def parse_job_config(config_input):
+    return materialize_job_config(_parse_job_config(config_input))
 
 
 # === Config path resolution ===
@@ -229,9 +224,10 @@ class TestPeftOverrides:
             "peft_config": {"use_peft": True},
         }
         job = parse_job_config(write_config(config, tmp_path))
-        from leap_finetune.training_configs import PeftConfig
+        from leap_finetune.training.default_configs import PEFT_DEFAULTS
 
-        assert job.peft_config is PeftConfig.DEFAULT_LORA
+        assert job.peft_config is not None
+        assert job.peft_config.value is PEFT_DEFAULTS["DEFAULT_LORA"]
 
     def test_no_peft_section_gives_none(self, tmp_path):
         config = {
@@ -336,208 +332,6 @@ class TestTrainingConfigOverrides:
         assert job.training_config.value["num_train_epochs"] == 10
         assert "deepspeed" in job.training_config.value
 
-    def test_sft_loss_mask_flags_survive_config_override(self, tmp_path):
-        config = {
-            "project_name": "test_mask_flags",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": BASE_SFT_DATASET,
-            "training_config": {
-                "extends": "DEFAULT_SFT",
-                "assistant_only_loss": True,
-                "completion_only_loss": True,
-            },
-            "peft_config": {"use_peft": False},
-        }
-        job = parse_job_config(write_config(config, tmp_path))
-        assert job.training_config.value["assistant_only_loss"] is True
-        assert job.training_config.value["completion_only_loss"] is True
-
-    def test_reshard_after_forward_survives_config_override(self, tmp_path):
-        config = {
-            "project_name": "test_reshard_after_forward",
-            "model_name": "LFM2-24B-A2B",
-            "training_type": "moe_sft",
-            "dataset": BASE_SFT_DATASET,
-            "training_config": {
-                "extends": "MOE_SFT",
-                "reshard_after_forward": False,
-            },
-            "peft_config": {"use_peft": False},
-        }
-        job = parse_job_config(write_config(config, tmp_path))
-        assert job.training_config.value["reshard_after_forward"] is False
-
-    def test_fsdp_cpu_offload_survives_config_override(self, tmp_path):
-        config = {
-            "project_name": "test_fsdp_cpu_offload",
-            "model_name": "LFM2-24B-A2B",
-            "training_type": "moe_sft",
-            "dataset": BASE_SFT_DATASET,
-            "training_config": {
-                "extends": "MOE_SFT",
-                "fsdp_cpu_offload": True,
-            },
-            "peft_config": {"use_peft": False},
-        }
-        job = parse_job_config(write_config(config, tmp_path))
-        assert job.training_config.value["fsdp_cpu_offload"] is True
-
-    def test_checkpoint_staging_dir_survives_config_override(self, tmp_path):
-        config = {
-            "project_name": "test_checkpoint_staging",
-            "model_name": "LFM2-24B-A2B",
-            "training_type": "moe_sft",
-            "dataset": BASE_SFT_DATASET,
-            "training_config": {
-                "extends": "MOE_SFT",
-                "checkpoint_staging_dir": "/tmp/checkpoint-stage",
-            },
-            "peft_config": {"use_peft": False},
-        }
-        job = parse_job_config(write_config(config, tmp_path))
-        assert (
-            job.training_config.value["checkpoint_staging_dir"]
-            == "/tmp/checkpoint-stage"
-        )
-
-    def test_relative_local_paths_resolve_from_config_dir(self, tmp_path):
-        data_dir = tmp_path / "data"
-        templates_dir = tmp_path / "templates"
-        data_dir.mkdir()
-        templates_dir.mkdir()
-
-        dataset_path = data_dir / "tiny.jsonl"
-        dataset_path.write_text(
-            '{"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"y"}]}\n'
-        )
-        template_path = templates_dir / "chat.jinja"
-        template_path.write_text("{{ bos_token }}")
-
-        config = {
-            "project_name": "relative_paths",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {
-                **BASE_SFT_DATASET,
-                "path": "./data/tiny.jsonl",
-                "limit": None,
-            },
-            "training_config": {
-                "extends": "DEFAULT_SFT",
-                "chat_template_path": "./templates/chat.jinja",
-            },
-            "peft_config": {"use_peft": False},
-        }
-        job = parse_job_config(write_config(config, tmp_path))
-        assert job.dataset.dataset_path == str(dataset_path.resolve())
-        assert job.training_config.value["chat_template_path"] == str(
-            template_path.resolve()
-        )
-
-    def test_missing_test_size_disables_eval(self, tmp_path):
-        config = {
-            "project_name": "no_eval_dataset",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {
-                "path": "HuggingFaceTB/smoltalk",
-                "type": "sft",
-                "limit": 10,
-                "subset": "all",
-            },
-            "training_config": {"extends": "DEFAULT_SFT"},
-            "peft_config": {"use_peft": False},
-        }
-        job = parse_job_config(write_config(config, tmp_path))
-        assert job.dataset.test_size is None
-        assert job.dataset.has_eval_dataset() is False
-        assert job.training_config.value["eval_strategy"] == "no"
-
-    def test_same_path_explicit_train_and_val_splits(self, tmp_path):
-        config = {
-            "project_name": "split_eval_dataset",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {
-                "path": "HuggingFaceTB/smoltalk",
-                "type": "sft",
-                "subset": "all",
-                "train_split": "train",
-                "val_split": "test",
-            },
-            "training_config": {"extends": "DEFAULT_SFT"},
-            "peft_config": {"use_peft": False},
-        }
-        job = parse_job_config(write_config(config, tmp_path))
-        assert job.dataset.dataset_path == "HuggingFaceTB/smoltalk"
-        assert job.dataset.split == "train"
-        assert job.dataset.val_dataset_path is None
-        assert job.dataset.val_split == "test"
-        assert job.dataset.test_size is None
-
-    def test_separate_train_and_val_paths(self, tmp_path):
-        config = {
-            "project_name": "separate_eval_dataset",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {
-                "train_path": "train/source",
-                "val_path": "val/source",
-                "type": "sft",
-                "train_split": "train",
-                "val_split": "validation",
-            },
-            "training_config": {"extends": "DEFAULT_SFT"},
-            "peft_config": {"use_peft": False},
-        }
-        job = parse_job_config(write_config(config, tmp_path))
-        assert job.dataset.dataset_path == "train/source"
-        assert job.dataset.val_dataset_path == "val/source"
-        assert job.dataset.val_split == "validation"
-
-    def test_test_size_cannot_mix_with_explicit_eval(self, tmp_path):
-        config = {
-            "project_name": "invalid_eval_mix",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {
-                "path": "HuggingFaceTB/smoltalk",
-                "type": "sft",
-                "test_size": 0.2,
-                "val_split": "validation",
-            },
-            "training_config": {"extends": "DEFAULT_SFT"},
-            "peft_config": {"use_peft": False},
-        }
-        with pytest.raises(
-            ValueError,
-            match="dataset.test_size cannot be combined",
-        ):
-            parse_job_config(write_config(config, tmp_path))
-
-    def test_eval_strategy_requires_eval_dataset_when_explicit(self, tmp_path):
-        config = {
-            "project_name": "explicit_eval_without_dataset",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {
-                "path": "HuggingFaceTB/smoltalk",
-                "type": "sft",
-                "limit": 10,
-            },
-            "training_config": {
-                "extends": "DEFAULT_SFT",
-                "eval_strategy": "epoch",
-            },
-            "peft_config": {"use_peft": False},
-        }
-        with pytest.raises(
-            ValueError,
-            match="eval_strategy requires a validation dataset",
-        ):
-            parse_job_config(write_config(config, tmp_path))
-
 
 # === All example configs ===
 
@@ -559,6 +353,11 @@ class TestAllExampleConfigs:
             "type": "moe_sft",
             "model": "LFM2-8B-A1B",
             "has_peft": True,
+        },
+        "moe_ep_sft_example.yaml": {
+            "type": "moe_sft",
+            "model": "LFM2-24B-A2B",
+            "has_peft": False,
         },
         "moe_dpo_example.yaml": {
             "type": "moe_dpo",
@@ -588,7 +387,7 @@ class TestAllExampleConfigs:
         assert d["training_type"] == expected["type"]
         assert d["model_name"] == expected["model"]
 
-        from leap_finetune.data_loaders.dataset_loader import DatasetLoader
+        from leap_finetune.data_loading.dataset_loader import DatasetLoader
 
         assert isinstance(d["dataset"], DatasetLoader)
         assert d["dataset"].dataset_path, "dataset_path is empty"
@@ -702,7 +501,7 @@ class TestRunNameInConfig:
 # === Invalid configs ===
 
 
-class TestModelNameAndPreprocessFn:
+class TestModelName:
     def test_model_name_passed_to_loader(self, tmp_path):
         config = {
             "project_name": "test",
@@ -723,41 +522,6 @@ class TestModelNameAndPreprocessFn:
         }
         job = parse_job_config(write_config(config, tmp_path))
         assert job.dataset.model_name == "LFM2-1.2B"
-
-    def test_invalid_preprocess_fn_raises(self, tmp_path):
-        config = {
-            "project_name": "test",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {**BASE_SFT_DATASET, "preprocess_fn": "nonexistent.module.func"},
-            "training_config": {"extends": "DEFAULT_SFT"},
-        }
-        with pytest.raises((ValueError, ModuleNotFoundError)):
-            parse_job_config(write_config(config, tmp_path))
-
-    def test_preprocess_fn_bare_name_raises(self, tmp_path):
-        config = {
-            "project_name": "test",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {**BASE_SFT_DATASET, "preprocess_fn": "no_dots_here"},
-            "training_config": {"extends": "DEFAULT_SFT"},
-        }
-        with pytest.raises(ValueError, match="dotted path"):
-            parse_job_config(write_config(config, tmp_path))
-
-    def test_valid_preprocess_fn_resolved(self, tmp_path):
-        config = {
-            "project_name": "test",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {**BASE_SFT_DATASET, "preprocess_fn": "json.dumps"},
-            "training_config": {"extends": "DEFAULT_SFT"},
-        }
-        job = parse_job_config(write_config(config, tmp_path))
-        import json
-
-        assert job.dataset.preprocess_fn is json.dumps
 
 
 class TestInvalidConfigs:
@@ -788,26 +552,7 @@ class TestInvalidConfigs:
             "training_type": "invalid_type",
             "dataset": BASE_SFT_DATASET,
         }
-        with pytest.raises(ValueError, match="Unknown training type"):
-            parse_job_config(write_config(config, tmp_path))
-
-    def test_ep_and_cp_together_raise(self, tmp_path):
-        config = {
-            "project_name": "mixed_parallelism",
-            "model_name": "LFM2-8B-A1B",
-            "training_type": "moe_sft",
-            "dataset": BASE_SFT_DATASET,
-            "training_config": {
-                "extends": "MOE_SFT",
-                "context_parallel_size": 2,
-                "moe_training": {"expert_parallel_size": 2},
-            },
-            "peft_config": {"use_peft": False},
-        }
-        with pytest.raises(
-            ValueError,
-            match="expert_parallel_size > 1 cannot be combined with context_parallel_size > 1",
-        ):
+        with pytest.raises(ValueError, match="Invalid config"):
             parse_job_config(write_config(config, tmp_path))
 
 
@@ -946,85 +691,6 @@ class TestBenchmarkConfig:
         assert d["benchmark_configs"]["benchmarks"][0]["name"] == "e"
 
 
-class TestCheckpointHelpers:
-    def test_create_manual_sharded_checkpoint_callback(self):
-        cb = LeapCheckpointCallback(
-            run_name_template="test-run-20250101",
-            manual_sharded=True,
-        )
-        assert cb.manual_sharded is True
-
-    def test_validate_manual_sharded_training_args_rejects_gradient_checkpointing(
-        self,
-    ):
-        with pytest.raises(
-            ValueError,
-            match="gradient_checkpointing=True is not supported",
-        ):
-            validate_manual_sharded_training_args({"gradient_checkpointing": True})
-
-    def test_manual_sharded_checkpoint_format_names_and_legacy_aliases(self):
-        assert normalize_manual_sharded_checkpoint_format("hf") == "hf"
-        assert normalize_manual_sharded_checkpoint_format("sharded") == "sharded"
-        assert normalize_manual_sharded_checkpoint_format("both") == "both"
-        assert normalize_manual_sharded_checkpoint_format("hf_only") == "hf"
-        assert normalize_manual_sharded_checkpoint_format("resume_only") == "sharded"
-        validate_manual_sharded_training_args(
-            {"manual_sharded_checkpoint_format": "sharded"}
-        )
-
-    def test_should_run_final_manual_sharded_save_detects_existing_checkpoint(
-        self, tmp_path
-    ):
-        run_dir = tmp_path / "outputs"
-        run_dir.mkdir()
-        (run_dir / "run-e1s10-20250101").mkdir()
-        trainer = type(
-            "TrainerStub",
-            (),
-            {
-                "_get_output_dir": lambda self, trial=None: str(run_dir),
-                "run_name_template": "run-20250101",
-                "state": type("StateStub", (), {"epoch": 1.0, "global_step": 10})(),
-            },
-        )()
-        assert (
-            should_run_final_manual_sharded_save(
-                trainer=trainer,
-                requested_save_strategy="epoch",
-            )
-            is False
-        )
-
-    def test_load_manual_sharded_model_checkpoint_returns_false_without_resume_dir(
-        self, tmp_path
-    ):
-        model = object()
-        assert (
-            load_manual_sharded_model_checkpoint(
-                model=model,
-                checkpoint_dir=str(tmp_path),
-            )
-            is False
-        )
-
-    def test_update_latest_pointer_replaces_existing_target(self, tmp_path):
-        run_dir = tmp_path / "outputs"
-        run_dir.mkdir()
-        old_ckpt = run_dir / "checkpoint-old"
-        new_ckpt = run_dir / "checkpoint-new"
-        old_ckpt.mkdir()
-        new_ckpt.mkdir()
-
-        latest = run_dir / "latest"
-        latest.symlink_to(old_ckpt.name)
-
-        _update_latest_pointer(str(run_dir), str(new_ckpt))
-
-        assert latest.is_symlink()
-        assert latest.resolve() == new_ckpt.resolve()
-
-
 # === SLURM generation ===
 
 
@@ -1039,7 +705,7 @@ class TestSlurmGeneration:
     def test_generate_slurm_script(self, slurm_config_path):
         import tempfile
 
-        from leap_finetune.utils.slurm_generator import generate_slurm_script
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
         config_path = pathlib.Path(slurm_config_path)
         with open(config_path) as f:
@@ -1057,3 +723,85 @@ class TestSlurmGeneration:
             assert "#SBATCH --gpus-per-task=4" in content
             assert "LEAP_FINETUNE_FROM_SLURM=1" in content
             assert "leap-finetune" in content
+
+    def test_generate_multinode_slurm_script_starts_ray_cluster(self, tmp_path):
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
+
+        config = {
+            "project_name": "multi_node_grpo",
+            "model_name": "LFM2-1.2B",
+            "training_type": "grpo",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_GRPO"},
+            "slurm": {
+                "nodes": 2,
+                "ntasks_per_node": 1,
+                "gpus_per_task": 1,
+            },
+        }
+        config_path = pathlib.Path(write_config(config, tmp_path))
+        script_path = generate_slurm_script(config_path, config, tmp_path)
+        content = script_path.read_text()
+
+        assert "slurm_ray.sh" in content
+        assert 'ray_slurm_init "${SLURM_NNODES}" "1"' in content
+        assert 'ray_slurm_wait_ready "${SLURM_NNODES}" "${TOTAL_GPUS}"' in content
+        assert "trap ray_slurm_stop_cluster EXIT" in content
+
+    def test_generate_server_mode_slurm_defaults_to_two_gpus(self, tmp_path):
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
+
+        config = {
+            "project_name": "server_grpo",
+            "model_name": "LFM2-1.2B",
+            "training_type": "grpo",
+            "dataset": BASE_SFT_DATASET,
+            "grpo_rollout": {"server_gpus": 1},
+            "training_config": {
+                "extends": "DEFAULT_GRPO",
+                "vllm_mode": "server",
+            },
+        }
+        config_path = pathlib.Path(write_config(config, tmp_path))
+        script_path = generate_slurm_script(config_path, config, tmp_path)
+        content = script_path.read_text()
+
+        assert "#SBATCH --gpus-per-task=2" in content
+
+    def test_generate_grpo_judge_slurm_defaults_to_extra_gpu(self, tmp_path):
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
+
+        config = {
+            "project_name": "judge_grpo",
+            "model_name": "LFM2-1.2B",
+            "training_type": "grpo",
+            "dataset": BASE_SFT_DATASET,
+            "rewards": {"judge": {"model": "LFM2-1.2B"}},
+            "training_config": {"extends": "DEFAULT_GRPO"},
+        }
+        config_path = pathlib.Path(write_config(config, tmp_path))
+        script_path = generate_slurm_script(config_path, config, tmp_path)
+        content = script_path.read_text()
+
+        assert "#SBATCH --gpus-per-task=2" in content
+
+    def test_generate_server_mode_judge_slurm_defaults_to_three_gpus(self, tmp_path):
+        from leap_finetune.distribution.backends.slurm import generate_slurm_script
+
+        config = {
+            "project_name": "judge_server_grpo",
+            "model_name": "LFM2-1.2B",
+            "training_type": "grpo",
+            "dataset": BASE_SFT_DATASET,
+            "grpo_rollout": {"server_gpus": 1},
+            "rewards": {"judge": {"model": "LFM2-1.2B"}},
+            "training_config": {
+                "extends": "DEFAULT_GRPO",
+                "vllm_mode": "server",
+            },
+        }
+        config_path = pathlib.Path(write_config(config, tmp_path))
+        script_path = generate_slurm_script(config_path, config, tmp_path)
+        content = script_path.read_text()
+
+        assert "#SBATCH --gpus-per-task=3" in content

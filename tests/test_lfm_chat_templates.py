@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from transformers.utils.chat_template_utils import render_jinja_template
 
-from leap_finetune.data_loaders.tool_call_utils import (
+from leap_finetune.data_loading.validate_tool_format import (
     normalize_messages_for_chat_template,
 )
 

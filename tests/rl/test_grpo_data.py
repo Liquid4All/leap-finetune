@@ -1357,3 +1357,78 @@ class TestVLMGRPOSpatialShapesAlias:
         )
         assert "pixel_values" in captured_model_inputs
         assert "pixel_attention_mask" in captured_model_inputs
+
+
+# === VLM GRPO trainer override: multi-image buffering ===
+#
+# Regression test for LFMVLMGRPOTrainer._prepare_inputs. TRL's generation-batch
+# buffering calls split_pixel_values_by_grid -> split_tensor_dict ->
+# unsplit_pixel_values_by_grid. The stock split does not recognise LFM2-VL's
+# layout, so it is a no-op and split_tensor_dict then slices the *image* axis by
+# the *sample* count. With >1 image per sample that drops images and the logprob
+# forward fails with "Image features and image tokens do not match". The
+# override splits pixel_values and its paired image-axis tensors by num_images
+# so every sample's images survive. Upstream fix: huggingface/trl#6114.
+
+
+class TestVLMGRPOMultiImageBuffering:
+    """Exercise the LFM2-VL-aware split/merge directly (no model needed)."""
+
+    def _make_batch(self, num_images, max_patches=4, dim=3):
+        total = sum(num_images)
+        # Distinct per-image values so a dropped/misordered image is detectable.
+        pixel_values = torch.arange(total * max_patches * dim, dtype=torch.float32)
+        pixel_values = pixel_values.reshape(total, max_patches, dim)
+        # prompt_ids first: split_tensor_dict reads .shape[0] off the first
+        # value to get the sample count, so it must be a sample-axis tensor.
+        return {
+            "prompt_ids": torch.arange(len(num_images) * 6).reshape(len(num_images), 6),
+            "pixel_values": pixel_values,
+            "image_sizes": torch.arange(total * 2).reshape(total, 2),
+            "pixel_attention_mask": torch.ones(total, max_patches),
+            "num_images": list(num_images),
+        }
+
+    def test_split_groups_image_axis_tensors_by_sample(self):
+        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
+
+        batch = self._make_batch([2, 3])
+        split = LFMVLMGRPOTrainer._split_pixel_values_by_grid(batch)
+
+        # pixel_values + every paired image-axis tensor become per-sample lists.
+        for key in ("pixel_values", "image_sizes", "pixel_attention_mask"):
+            assert isinstance(split[key], list)
+            assert [t.shape[0] for t in split[key]] == [2, 3], (
+                f"{key} must be split by num_images, not sample count"
+            )
+
+    def test_round_trip_reconstructs_original(self):
+        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
+
+        batch = self._make_batch([2, 3])
+        split = LFMVLMGRPOTrainer._split_pixel_values_by_grid(batch)
+        merged = LFMVLMGRPOTrainer._unsplit_pixel_values_by_grid(split)
+
+        for key in ("pixel_values", "image_sizes", "pixel_attention_mask"):
+            assert torch.equal(merged[key], batch[key])
+
+    def test_buffering_preserves_all_images(self):
+        """The end-to-end path TRL runs: split -> split_tensor_dict -> unsplit.
+
+        With one chunk per sample, every chunk must carry exactly that
+        sample's images. Pre-fix, pixel_values stayed a (5, ...) tensor and
+        the image axis was sliced by sample count, dropping images.
+        """
+        from trl.trainer.utils import split_tensor_dict
+
+        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
+
+        batch = self._make_batch([2, 3])
+        split = LFMVLMGRPOTrainer._split_pixel_values_by_grid(batch)
+        chunks = split_tensor_dict(split, num_chunks=2)
+        rebuilt = [LFMVLMGRPOTrainer._unsplit_pixel_values_by_grid(c) for c in chunks]
+
+        assert [c["pixel_values"].shape[0] for c in rebuilt] == [2, 3]
+        # Sample 0 keeps the first 2 images, sample 1 the last 3 — in order.
+        assert torch.equal(rebuilt[0]["pixel_values"], batch["pixel_values"][:2])
+        assert torch.equal(rebuilt[1]["pixel_values"], batch["pixel_values"][2:])

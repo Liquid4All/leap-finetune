@@ -61,6 +61,10 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
       ``pixel_values`` slicing (which assumes ``(B, C, H, W)``,
       incompatible with LFM2-VL's patch-concatenated layout) and
       forwards ``spatial_shapes`` under the correct kwarg name.
+    * Multi-image buffering: teaches TRL's generation-batch reshape
+      about LFM2-VL's image-axis-indexed tensors so >1 image per
+      sample survives buffering (see ``_prepare_inputs``). Removable
+      once https://github.com/huggingface/trl/pull/6114 ships.
 
     Unlike VLM SFT we do NOT subclass ``RayDataLoaderMixin``: GRPO's
     ``RepeatSampler`` must go through accelerate's per-rank
@@ -98,6 +102,75 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
     def log(self, logs: dict[str, float], *args, **kwargs) -> None:
         log_per_group_lrs(self.optimizer, self._optimizer_group_names, logs)
         super().log(logs, *args, **kwargs)
+
+    # Image-axis tensors LFM2-VL pairs with ``pixel_values`` (one row per
+    # image). ``spatial_shapes`` is the processor's native name; ``image_sizes``
+    # is the alias TRL threads it under (see _aliasing_spatial_shapes_as_image_sizes).
+    _LFM_IMAGE_AXIS_KEYS = ("image_sizes", "spatial_shapes", "pixel_attention_mask")
+
+    def _prepare_inputs(self, generation_batch):
+        """Reshape the generation batch with LFM2-VL-aware pixel splitting.
+
+        TRL's buffering (``GRPOTrainer._prepare_inputs``) calls
+        ``split_pixel_values_by_grid`` -> ``split_tensor_dict`` ->
+        ``unsplit_pixel_values_by_grid`` to slice the generation batch
+        into per-step buffers. ``split_pixel_values_by_grid`` does not
+        recognise LFM2-VL's layout, so it is a no-op and
+        ``split_tensor_dict`` then slices the *image* axis by the
+        *sample* count. With one image per sample the axes coincide, but
+        with multiple images per sample all but one sample's images are
+        dropped and the logprob forward fails with "Image features and
+        image tokens do not match".
+
+        We scope-swap our LFM2-VL-aware split/merge into TRL's module
+        namespace for the duration of the super() call, mirroring the
+        ``_aliasing_spatial_shapes_as_image_sizes`` pattern, rather than
+        mutating TRL's globals at import. Removable once
+        https://github.com/huggingface/trl/pull/6114 ships.
+        """
+        import trl.trainer.grpo_trainer as grpo_mod
+
+        original = (
+            grpo_mod.split_pixel_values_by_grid,
+            grpo_mod.unsplit_pixel_values_by_grid,
+        )
+        grpo_mod.split_pixel_values_by_grid = self._split_pixel_values_by_grid
+        grpo_mod.unsplit_pixel_values_by_grid = self._unsplit_pixel_values_by_grid
+        try:
+            return super()._prepare_inputs(generation_batch)
+        finally:
+            (
+                grpo_mod.split_pixel_values_by_grid,
+                grpo_mod.unsplit_pixel_values_by_grid,
+            ) = original
+
+    @staticmethod
+    def _split_pixel_values_by_grid(batch):
+        """Split ``pixel_values`` and its paired image-axis tensors by image.
+
+        LFM2-VL indexes ``pixel_values`` and ``_LFM_IMAGE_AXIS_KEYS`` by
+        image, so split them by ``num_images`` into per-sample lists;
+        ``split_tensor_dict`` then slices those lists by sample.
+        """
+        num_images = batch.get("num_images")
+        if num_images is None:
+            return batch
+        result = dict(batch)
+        for key in ("pixel_values", *LFMVLMGRPOTrainer._LFM_IMAGE_AXIS_KEYS):
+            value = batch.get(key)
+            if isinstance(value, torch.Tensor):
+                result[key] = list(torch.split(value, num_images, dim=0))
+        return result
+
+    @staticmethod
+    def _unsplit_pixel_values_by_grid(batch):
+        """Merge the per-sample lists produced by ``_split_pixel_values_by_grid``."""
+        merged = dict(batch)
+        for key in ("pixel_values", *LFMVLMGRPOTrainer._LFM_IMAGE_AXIS_KEYS):
+            value = merged.get(key)
+            if isinstance(value, list):
+                merged[key] = torch.cat(value, dim=0)
+        return merged
 
     def _generate_and_score_completions(self, inputs):
         """Lift images from ``prompt`` content into a top-level ``images`` key.

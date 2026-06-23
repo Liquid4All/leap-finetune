@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -68,7 +69,13 @@ class _FakeWandb:
             pass
 
 
-def _make_sidecar(tmp_path, *, failure_overrides=None, with_benchmarks=False):
+def _make_sidecar(
+    tmp_path,
+    *,
+    failure_overrides=None,
+    with_benchmarks=False,
+    cfg_overrides=None,
+):
     from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
     from leap_finetune.evaluation.sidecar_callback import SidecarEvalCallback
 
@@ -79,10 +86,13 @@ def _make_sidecar(tmp_path, *, failure_overrides=None, with_benchmarks=False):
     }
     if failure_overrides:
         failure.update(failure_overrides)
+    raw_cfg = {"mode": "sidecar", "failure": failure}
+    if cfg_overrides:
+        raw_cfg.update(cfg_overrides)
 
     return SidecarEvalCallback(
         benchmarks=[MagicMock(name="bench1")] if with_benchmarks else [],
-        cfg=AsyncEvalConfig.from_dict({"mode": "sidecar", "failure": failure}),
+        cfg=AsyncEvalConfig.from_dict(raw_cfg),
         benchmark_configs={"benchmarks": []},
         output_dir=str(tmp_path),
         wandb_run_id=None,
@@ -106,7 +116,11 @@ def _patch_submit_prereqs(monkeypatch, *, ckpt_root):
     monkeypatch.setattr(
         sc,
         "render_sbatch_script",
-        lambda **kw: MagicMock(script_path=ckpt_root / "fake.sh"),
+        lambda **kw: SimpleNamespace(
+            script_path=ckpt_root / "fake.sh",
+            log_out=ckpt_root / "fake.out",
+            log_err=ckpt_root / "fake.err",
+        ),
     )
     monkeypatch.setattr(sc, "_clean_subprocess_env", lambda: {})
     monkeypatch.setattr(sc, "time", MagicMock(sleep=lambda seconds: None))
@@ -149,6 +163,20 @@ def _patch_reserved_server(monkeypatch, cb):
     import leap_finetune.distribution.vllm_server as vllm_server
 
     monkeypatch.setattr(vllm_server, "wait_for_vllm_health", lambda *a, **kw: None)
+
+
+def _start_state_run(tmp_path, monkeypatch, run_id: str):
+    from leap_finetune.state import RunTracker
+
+    state_dir = tmp_path / ".lft"
+    monkeypatch.setenv("LFT_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("LFT_RUN_ID", run_id)
+    return RunTracker.start(
+        config_path=None,
+        config_dict={"project_name": run_id, "training_type": "sft"},
+        output_path=tmp_path,
+        state_dir=state_dir,
+    )
 
 
 def test_standalone_eval_config_materializes_relative_paths(tmp_path):
@@ -300,125 +328,162 @@ def test_sbatch_script_uses_active_environment_without_uv_lock(tmp_path):
     assert "trap 'rm -f" in content
 
 
-def test_sidecar_submit_retry_does_not_leak_markers(tmp_path, monkeypatch):
+def test_sidecar_submit_retries_and_records_submission(tmp_path, monkeypatch):
     import leap_finetune.evaluation.sidecar_callback as sc
 
-    cb = _make_sidecar(tmp_path)
+    tracker = _start_state_run(tmp_path, monkeypatch, "sidecar-submit")
+    cb = _make_sidecar(tmp_path, with_benchmarks=True)
     _patch_submit_prereqs(monkeypatch, ckpt_root=tmp_path)
+    monkeypatch.setattr(
+        "leap_finetune.evaluation.sidecar_callback.is_rank_zero",
+        lambda: True,
+    )
 
+    attempts = []
     results = iter(
         [
             _FakeCompletedProcess(1, stderr="busy"),
             _FakeCompletedProcess(0, "Submitted batch job 999\n"),
         ]
     )
-    monkeypatch.setattr(sc.subprocess, "run", lambda *a, **kw: next(results))
-    assert (
-        cb._submit(_make_model_mock(), MagicMock(global_step=7), MagicMock()) == "999"
-    )
-    assert (tmp_path / "_async_eval" / ".in_flight.step_7").read_text() == "999:7"
-
-    fail_dir = tmp_path / "fail"
-    failing_cb = _make_sidecar(fail_dir)
-    _patch_submit_prereqs(monkeypatch, ckpt_root=fail_dir)
     monkeypatch.setattr(
         sc.subprocess,
         "run",
-        lambda *a, **kw: _FakeCompletedProcess(1, stderr="permanent failure"),
+        lambda *a, **kw: attempts.append(a) or next(results),
     )
 
-    with pytest.raises(RuntimeError, match="after 3 attempt"):
-        failing_cb._submit(_make_model_mock(), MagicMock(global_step=11), MagicMock())
-    assert not list((fail_dir / "_async_eval").glob(".in_flight.step_*"))
+    cb.on_step_end(
+        MagicMock(),
+        SimpleNamespace(global_step=7),
+        SimpleNamespace(should_evaluate=True),
+        model=_make_model_mock(),
+    )
+
+    run = tracker.load()
+    last_eval = run["progress"]["last_eval"]
+    assert len(attempts) == 2
+    assert last_eval["status"] == "submitted"
+    assert last_eval["source"] == "async_sidecar_submit"
+    assert last_eval["step"] == 7
+    assert last_eval["backend"] == "slurm"
+    assert last_eval["backend_id"] == "999"
+    assert "async_eval_step_7_stdout" in run["log_refs"]
 
 
-def test_sidecar_orphan_markers_disable_callback(tmp_path, monkeypatch):
+def test_sidecar_repeated_submission_failures_stop_future_submissions(
+    tmp_path, monkeypatch
+):
     import leap_finetune.evaluation.sidecar_callback as sc
 
+    tracker = _start_state_run(tmp_path, monkeypatch, "sidecar-failure")
     cb = _make_sidecar(
         tmp_path,
-        failure_overrides={"max_consecutive": 2},
+        failure_overrides={"max_consecutive": 2, "max_submit_attempts": 1},
         with_benchmarks=True,
     )
-    eval_dir = cb._eval_dir
-    for step, jobid in [(100, 111), (200, 222), (300, 333)]:
-        (eval_dir / f".in_flight.step_{step}").write_text(f"{jobid}:{step}")
+    _patch_submit_prereqs(monkeypatch, ckpt_root=tmp_path)
+    monkeypatch.setattr(
+        "leap_finetune.evaluation.sidecar_callback.is_rank_zero",
+        lambda: True,
+    )
 
+    attempts = []
     monkeypatch.setattr(
         sc.subprocess,
         "run",
-        lambda *a, **kw: _FakeCompletedProcess(0, "FAILED\n"),
+        lambda *a, **kw: attempts.append(a)
+        or _FakeCompletedProcess(1, stderr="permanent failure"),
     )
 
-    cb._sweep_stale_markers()
+    for step in (1, 2, 3):
+        cb.on_step_end(
+            MagicMock(),
+            SimpleNamespace(global_step=step),
+            SimpleNamespace(should_evaluate=True),
+            model=_make_model_mock(),
+        )
 
-    assert cb._consecutive_failures == 3
-    assert cb._disabled is True
-    assert not list(eval_dir.glob(".in_flight.step_*"))
-
-
-def test_sidecar_queue_uses_per_step_markers(tmp_path):
-    from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
-    from leap_finetune.evaluation.sidecar_callback import (
-        _MARKER_GLOB,
-        SidecarEvalCallback,
-    )
-
-    cb = SidecarEvalCallback(
-        benchmarks=[MagicMock(name="bench1")],
-        cfg=AsyncEvalConfig.from_dict({"mode": "sidecar", "on_overlap": "queue"}),
-        benchmark_configs={"benchmarks": []},
-        output_dir=str(tmp_path),
-        wandb_run_id=None,
-    )
-    eval_dir = cb._eval_dir
-    (eval_dir / ".in_flight.step_1000").write_text("111:1000")
-    (eval_dir / ".in_flight.step_2000").write_text("222:2000")
-
-    (eval_dir / ".in_flight.step_1000").unlink()
-
-    in_flight = list(eval_dir.glob(_MARKER_GLOB))
-    assert len(in_flight) == 1
-    assert in_flight[0].name == ".in_flight.step_2000"
+    failed_records = [
+        record
+        for record in tracker.load()["history"]["evals"]
+        if record["status"] == "failed"
+    ]
+    assert len(attempts) == 2
+    assert [record["step"] for record in failed_records] == [1, 2]
+    assert failed_records[-1]["source"] == "async_sidecar_submit"
 
 
-def test_reserved_failure_accounting_and_in_flight_skip(tmp_path, monkeypatch):
-    from leap_finetune.evaluation.reserved_callback import _EvalResult
-
-    cb = _make_reserved(tmp_path, [MagicMock(name="bench1")], max_consecutive=2)
-    for step in range(3):
-        cb._account_result(_EvalResult(step=step, metrics={}, ok=True))
-    assert cb._consecutive_failures == 0
-
-    cb._account_result(_EvalResult(step=10, metrics={}, ok=False))
-    cb._account_result(_EvalResult(step=11, metrics={}, ok=False))
-    assert cb._disabled is True
-
-    skip_cb = _make_reserved(tmp_path / "skip", [MagicMock(name="bench1")])
+def test_reserved_skips_new_submission_while_eval_is_in_flight(tmp_path, monkeypatch):
+    tracker = _start_state_run(tmp_path, monkeypatch, "reserved-overlap")
+    cb = _make_reserved(tmp_path, [MagicMock(name="bench1")])
     fake_ckpt = tmp_path / "ckpt"
     fake_ckpt.mkdir()
-    monkeypatch.setattr(skip_cb, "_ensure_thread", lambda: None)
-    monkeypatch.setattr(skip_cb, "_save_checkpoint", lambda model, state: fake_ckpt)
+    saved_steps = []
+    monkeypatch.setattr(cb, "_ensure_thread", lambda: None)
+    monkeypatch.setattr(
+        cb,
+        "_save_checkpoint",
+        lambda model, state: saved_steps.append(state.global_step) or fake_ckpt,
+    )
     monkeypatch.setattr(
         "leap_finetune.evaluation.reserved_callback.is_rank_zero",
         lambda: True,
     )
 
-    skip_cb.on_evaluate(
+    cb.on_evaluate(
         MagicMock(),
-        MagicMock(global_step=1),
+        SimpleNamespace(global_step=1),
         MagicMock(),
         model=MagicMock(),
     )
-    skip_cb._input_q.get_nowait()
-    skip_cb.on_evaluate(
+    cb.on_evaluate(
         MagicMock(),
-        MagicMock(global_step=2),
+        SimpleNamespace(global_step=2),
         MagicMock(),
         model=MagicMock(),
     )
 
-    assert skip_cb._input_q.empty()
+    evals = tracker.load()["history"]["evals"]
+    assert saved_steps == [1]
+    assert len(evals) == 1
+    assert evals[0]["status"] == "submitted"
+    assert evals[0]["source"] == "async_reserved"
+
+
+def test_reserved_result_drain_records_completed_and_failed_state(
+    tmp_path, monkeypatch
+):
+    tracker = _start_state_run(tmp_path, monkeypatch, "reserved-results")
+    cb = _make_reserved(tmp_path, [MagicMock(name="bench1")], max_consecutive=1)
+    monkeypatch.setattr(
+        "leap_finetune.evaluation.reserved_callback.is_rank_zero",
+        lambda: True,
+    )
+
+    cb._output_q.put(
+        SimpleNamespace(
+            step=10,
+            metrics={"benchmark/b1/score": 0.5},
+            ok=True,
+        )
+    )
+    cb.on_log(MagicMock(), SimpleNamespace(global_step=10), MagicMock())
+    completed = tracker.load()["progress"]["last_eval"]
+
+    cb._output_q.put(
+        SimpleNamespace(
+            step=11,
+            metrics={},
+            ok=False,
+        )
+    )
+    cb.on_log(MagicMock(), SimpleNamespace(global_step=11), MagicMock())
+    failed = tracker.load()["progress"]["last_eval"]
+
+    assert completed["status"] == "completed"
+    assert completed["metrics"]["benchmark/b1/score"] == pytest.approx(0.5)
+    assert failed["status"] == "failed"
+    assert failed["source"] == "async_reserved"
 
 
 def test_reserved_cycle_classifies_real_failures(tmp_path, monkeypatch):

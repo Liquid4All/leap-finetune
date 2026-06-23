@@ -210,20 +210,18 @@ dataset:
   subset: "all"
 
 training_config:
-  extends: "DEFAULT_SFT"
   num_train_epochs: 3
   per_device_train_batch_size: 2
   learning_rate: 2e-5
 
 peft_config:
-  extends: "DEFAULT_LORA"
   use_peft: true
 ```
 
-`training_config.extends` inherits from a base config such as `DEFAULT_SFT`,
-`DEFAULT_DPO`, or `DEFAULT_VLM_SFT`; fields in your YAML override the base.
-`peft_config.extends` works the same way for LoRA defaults such as
-`DEFAULT_LORA` and `DEFAULT_VLM_LORA`.
+`training_type` selects the default trainer profile. `training_config` only
+contains fields you want to override. If `peft_config.use_peft` is true, LoRA
+defaults are selected from `training_type` and any PEFT fields you set override
+those defaults.
 
 Launch training:
 
@@ -314,14 +312,15 @@ uv run --with-editable . python launch_training.py
 Every CLI or `run_config(...)` launch writes a gitignored `.lft/` directory in
 the current working directory, or `LFT_STATE_DIR` if set.
 
-- `.lft/state.json` stores factual run state: run ID, status, kind, config
-  path, backend, backend ID, output dir, timestamps, and standalone eval
-  metrics.
+- `.lft/state.json` stores factual run state: run ID, status/phase, config
+  path, backend metadata, output dir, heartbeat, latest step/log/eval,
+  compact metric history, checkpoint history, and log references.
 - `.lft/memory.md` is for non-discrete experiment judgment: why a run was
   tried, what it means, and what to try next. Reference run IDs instead of
   copying metrics or config details into memory.
 
 ```bash
+uv run leap-finetune runs report
 uv run leap-finetune runs list
 uv run leap-finetune runs show <run_id>
 uv run leap-finetune runs sync <run_id>
@@ -329,9 +328,11 @@ uv run leap-finetune memory add "Next try lower LR; run was stable but underfit.
 uv run leap-finetune memory show
 ```
 
-`runs sync` currently checks SLURM state when a run has a SLURM job ID. Modal
-and KubeRay commands record the submitted backend ID; use the backend's own log
-commands for live logs.
+`runs report` is the fastest way to compare recent runs. It shows status,
+phase, heartbeat age, step/max step, latest loss, latest eval summary, and
+available log refs. `runs sync` checks scheduler/backend status and merges
+remote state when a recorded `remote_state_dir` is readable from the current
+machine.
 
 ## Execution Backends
 
@@ -770,7 +771,7 @@ normalized from `min_score`/`max_score` to `[0, 1]`.
 
 ### vLLM Rollouts
 
-`DEFAULT_GRPO` and `DEFAULT_VLM_GRPO` set `use_vllm: true` and
+The `grpo` and `vlm_grpo` defaults set `use_vllm: true` and
 `vllm_mode: "colocate"`. Colocate mode runs vLLM inside each training worker.
 Server mode starts `trl vllm-serve` on driver GPUs before Ray initializes.
 Configure GPU counts, not device ids:
@@ -785,7 +786,6 @@ grpo_rollout:
   gpu_memory_utilization: 0.9
 
 training_config:
-  extends: "DEFAULT_GRPO"
   vllm_mode: "server"
   vllm_server_host: "auto"
   vllm_server_port: 8000
@@ -996,10 +996,10 @@ the merged checkpoint.
 
 ## Advanced Configuration
 
-Default base configs live in
+Default trainer profiles live in
 [`src/leap_finetune/training/default_configs/`](./src/leap_finetune/training/default_configs/)
-and are auto-discovered. New configs added to those files are immediately
-available via `extends` in YAML.
+and are selected by `training_type`. YAML `training_config` values are user
+overrides, not named inheritance.
 
 [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is installed by the
 default CUDA group. Enable it with `use_liger_kernel: true` in

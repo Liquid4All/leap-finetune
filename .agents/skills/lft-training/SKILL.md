@@ -34,13 +34,19 @@ description: Train LFMs with leap-finetune SFT, DPO, GRPO, VLM, or MoE configs. 
    `vlm_grpo`, `moe_sft`, `moe_dpo`, or expert-parallel MoE.
 2. Start from the closest config in `job_configs/` and make the smallest
    config change that expresses the experiment.
-3. Use `training_config.extends` and `peft_config.extends` instead of
-   duplicating default fields.
-4. Keep dataset paths, output paths, and large artifacts outside git.
-5. For local training, run `uv run leap-finetune <config>`.
-6. After launch, use `uv run leap-finetune runs list` to find the run record.
-7. If behavior changes config validation or materialization, add a non-GPU
-   config test.
+3. Let `training_type` select defaults. Put only user overrides in
+   `training_config`; enable LoRA with `peft_config.use_peft: true` and add
+   only PEFT fields that differ from the default for that training type.
+4. Keep config validation in Pydantic models; parser/materialization code
+   should resolve paths/defaults and avoid duplicate checks.
+5. Keep dataset paths, output paths, and large artifacts outside git.
+6. For local training, run `uv run leap-finetune <config>`.
+7. After launch, use `uv run leap-finetune runs report` to find progress,
+   latest log/eval/checkpoint, and log refs.
+8. If adding a new Trainer path or callback, make sure it uses
+   `LFTStateCallback` or the shared state helpers.
+9. Add config tests only for materialized behavior or launch payloads, not for
+   Pydantic validator/default constant assertions.
 
 ## Expected Output
 
@@ -49,6 +55,8 @@ description: Train LFMs with leap-finetune SFT, DPO, GRPO, VLM, or MoE configs. 
 - The validation or test command that should be run before a real GPU job.
 - Notes on output/checkpoint paths when they affect follow-up work.
 - The run ID when a job was launched or submitted.
+- State updates for progress, evals, checkpoints, and log refs when the change
+  affects logging.
 
 ## Verification
 

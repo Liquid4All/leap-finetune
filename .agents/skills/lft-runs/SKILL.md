@@ -28,12 +28,14 @@ description: Inspect and update leap-finetune local run state and experiment mem
 
 ## Steps
 
-1. Start with `uv run leap-finetune runs list`.
-2. For a specific run, use `uv run leap-finetune runs show <run_id>`.
-3. For SLURM-backed runs, use `uv run leap-finetune runs sync <run_id>` before
+1. Start with `uv run leap-finetune runs report`.
+2. For a specific run, use `uv run leap-finetune runs show <run_id>` or
+   `uv run leap-finetune runs show latest`.
+3. For remote-backed runs, use `uv run leap-finetune runs sync <run_id>` before
    reporting status.
-4. Treat `.lft/state.json` as factual state: run ID, status, kind, backend,
-   backend ID, config path, output dir, metrics, and timestamps.
+4. Treat `.lft/state.json` as factual state: run ID, status/phase, heartbeat,
+   step, latest log/eval/checkpoint, bounded metric history, backend metadata,
+   output paths, and log refs.
 5. Use `.lft/memory.md` only for non-discrete reasoning: why an experiment was
    tried, what result means, what to try next, or why a run should be ignored.
 6. When adding memory, reference the run or eval ID instead of duplicating its
@@ -46,6 +48,7 @@ uv run leap-finetune memory add "Lower LR looked more stable; next try 5e-6 with
 ## Expected Output
 
 - A concise run status summary with run IDs and backend IDs.
+- Latest progress/eval/checkpoint facts from state before reading raw logs.
 - A referenced memory note only when judgment or follow-up reasoning is needed.
 - No duplicated config snapshots, metrics tables, or copied scheduler logs in
   `memory.md`.
@@ -54,5 +57,6 @@ uv run leap-finetune memory add "Lower LR looked more stable; next try 5e-6 with
 
 ```bash
 uv run leap-finetune runs list
+uv run leap-finetune runs report
 uv run leap-finetune memory show
 ```

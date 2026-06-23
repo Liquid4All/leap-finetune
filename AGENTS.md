@@ -19,6 +19,7 @@ default assumption for repo changes.
 - Run explicit training command: `uv run leap-finetune run job_configs/sft_example.yaml`
 - Run standalone eval: `uv run leap-finetune job_configs/eval_standalone_example.yaml --output results.json`
 - Generate SLURM script: `uv run leap-finetune slurm job_configs/sft_example_with_slurm.yaml`
+- Inspect recent run progress: `uv run leap-finetune runs report`
 - Inspect local runs: `uv run leap-finetune runs list`
 - Export GGUF: `uv run leap-export-gguf /path/to/checkpoint --output-dir /path/to/gguf`
 - Run core non-GPU tests: `uv run pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe`
@@ -28,10 +29,19 @@ default assumption for repo changes.
 - Use repo skills in `.agents/skills/` for multi-step Leap workflows.
 - Prefer editing YAML configs, reward recipes, eval configs, and dataset
   validation code over adding broad new abstractions.
+- Keep config semantics in the Pydantic models. Do not duplicate model field
+  validation in parser/materialization code unless it depends on resolved
+  runtime state.
+- Keep tests focused on durable behavior: config materialization, launch
+  payloads, data/eval contracts, state updates, and regression-prone runtime
+  edges. Do not add tests that only assert Pydantic validators, static default
+  constants, or one-time implementation details.
 - Keep generated data, checkpoints, exported models, and run outputs out of
   git.
-- Use `.lft/state.json` for factual run/eval state and `.lft/memory.md` only
-  for non-discrete experiment reasoning that references run IDs.
+- Use `.lft/state.json` for factual run/eval state, including phase,
+  heartbeat, latest step/log/eval, checkpoint history, backend metadata, and
+  log refs. Use `.lft/memory.md` only for non-discrete reasoning that
+  references run IDs.
 - For training or eval changes, add or update a focused test when the behavior
   can be checked without a GPU.
 - For GPU-only behavior, add a small config, fixture, or documented smoke path
@@ -58,7 +68,7 @@ default assumption for repo changes.
 ## Useful Files
 
 - `README.md`: user-facing setup, CLI, backend, dataset, GRPO, eval, and export guide.
-- `.lft/state.json` and `.lft/memory.md`: local, gitignored run state and experiment memory.
+- `.lft/state.json` and `.lft/memory.md`: local, gitignored run state and reasoning memory.
 - `job_configs/`: starter YAML configs for SFT, DPO, GRPO, VLM, MoE, Modal, SLURM, and evals.
 - `rewards/README.md`: reward primitives, task recipes, judge rewards, and custom reward contract.
 - `src/leap_finetune/evaluation/README.md`: eval config and metric contract.

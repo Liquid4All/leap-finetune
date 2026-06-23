@@ -36,9 +36,11 @@ description: Create, modify, and run leap-finetune eval suites and metrics. Use 
    for standalone VLM evals.
 5. For async evals, choose `sync`, `sidecar`, or `reserved` based on available
    GPUs and queue behavior.
-6. After standalone eval, inspect `uv run leap-finetune runs show <run_id>` for
-   recorded metrics.
-7. When adding a metric, register it in the metric dispatch and the relevant
+6. After standalone or training eval, inspect `uv run leap-finetune runs report`
+   and `uv run leap-finetune runs show <run_id>` for recorded metrics/log refs.
+7. New eval modes must write compact eval status/results through the shared
+   state helpers in addition to any W&B/Trackio logging.
+8. When adding a metric, register it in the metric dispatch and the relevant
    text or VLM config factory.
 
 ## Expected Output
@@ -46,6 +48,8 @@ description: Create, modify, and run leap-finetune eval suites and metrics. Use 
 - An `evals:` block, standalone eval config, metric change, or fixture update.
 - The exact standalone eval command when applicable.
 - The run ID and metrics location for standalone evals.
+- State entries for eval submitted/running/completed/failed status where
+  relevant.
 - The smallest relevant eval test command.
 - Any async eval operational notes, especially for SLURM sidecar behavior.
 

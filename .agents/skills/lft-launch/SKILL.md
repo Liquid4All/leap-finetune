@@ -39,8 +39,11 @@ description: Launch leap-finetune jobs locally, on SLURM, Modal, or KubeRay. Use
    `modal app logs` / `modal app stop` commands.
 5. For KubeRay, check namespace, image, worker replicas, GPUs per worker, and
    output PVC.
-6. After submission, inspect state with `uv run leap-finetune runs list`.
-7. Add backend tests for generated configs, resource planning, or command
+6. After submission, inspect state with `uv run leap-finetune runs report` and
+   `uv run leap-finetune runs show <run_id>`.
+7. New backend paths must propagate `LFT_RUN_ID` and `LFT_STATE_DIR`, and record
+   backend IDs, remote state dirs, and log refs in state.
+8. Add backend tests for generated configs, resource planning, or command
    output when behavior changes.
 
 ## Expected Output
@@ -49,6 +52,8 @@ description: Launch leap-finetune jobs locally, on SLURM, Modal, or KubeRay. Use
 - The exact launch, dry-run, monitor, or stop command.
 - The run ID plus backend ID when the job was submitted.
 - Whether the job is attached or detached.
+- The state/log location the agent should inspect before polling raw backend
+  logs.
 - The focused backend test or SLURM generation check.
 
 ## Verification

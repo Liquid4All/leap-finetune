@@ -22,6 +22,7 @@ from leap_finetune.evaluation import (
     make_eval_callback,
 )
 from leap_finetune.rl.rewards import resolve_reward_specs
+from leap_finetune.state.callback import add_lft_state_callback
 from leap_finetune.training.default_configs.grpo_configs import GRPO_EXCLUDED_KEYS
 from leap_finetune.training.peft.peft import (
     apply_peft_to_model,
@@ -174,6 +175,7 @@ def grpo_run(training_config: dict) -> None:
                 )
             )
 
+    add_lft_state_callback(trainer, run_name_template=run_name_template)
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)
 

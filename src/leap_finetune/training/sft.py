@@ -17,6 +17,7 @@ from leap_finetune.evaluation import (
     create_llm_benchmarks_from_config,
     make_eval_callback,
 )
+from leap_finetune.state.callback import add_lft_state_callback
 from leap_finetune.training.utils.logging import (
     finish_tracker,
     get_wandb_run_id,
@@ -133,6 +134,7 @@ def sft_run(training_config: dict) -> None:
                 )
             )
 
+    add_lft_state_callback(trainer, run_name_template=run_name_template)
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)
 

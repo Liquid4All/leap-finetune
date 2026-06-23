@@ -5,9 +5,16 @@ from leap_finetune.state.store import (
     list_runs,
     load_run,
     read_memory,
+    record_backend_submission,
+    record_checkpoint,
+    record_eval_result,
     render_run,
     render_run_list,
+    render_runs_report,
     sync_run,
+    update_log_refs,
+    update_run_fields,
+    update_run_progress,
 )
 
 __all__ = [
@@ -17,7 +24,14 @@ __all__ = [
     "list_runs",
     "load_run",
     "read_memory",
+    "record_backend_submission",
+    "record_checkpoint",
+    "record_eval_result",
     "render_run",
     "render_run_list",
+    "render_runs_report",
     "sync_run",
+    "update_log_refs",
+    "update_run_fields",
+    "update_run_progress",
 ]

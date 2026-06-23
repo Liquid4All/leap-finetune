@@ -25,6 +25,7 @@ from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
     create_llm_benchmarks_from_config,
 )
+from leap_finetune.state.callback import add_lft_state_callback
 from leap_finetune.training.moe_utils.metrics import MoEMetricsCallback
 from leap_finetune.training.utils.logging import (
     finish_tracker,
@@ -319,6 +320,11 @@ def moe_dpo_run(training_config: dict) -> None:
         benchmarks = create_llm_benchmarks_from_config(benchmark_configs, tokenizer)
         if benchmarks:
             trainer.add_callback(BenchmarkEvalCallback(benchmarks))
+    add_lft_state_callback(
+        trainer,
+        run_name_template=run_name_template,
+        manual_sharded=(use_ep or use_fsdp2),
+    )
     trainer = prepare_trainer(trainer)
 
     if dist.is_available() and dist.is_initialized():

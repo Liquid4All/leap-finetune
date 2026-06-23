@@ -79,6 +79,11 @@ def test_eval_run_writes_state_and_memory_stays_separate(
     monkeypatch.setattr("sys.argv", ["leap-finetune", "runs", "list"])
     main()
     assert run["id"] in capsys.readouterr().out
+    monkeypatch.setattr("sys.argv", ["leap-finetune", "runs", "report"])
+    main()
+    report = capsys.readouterr().out
+    assert run["id"] in report
+    assert "last_eval" in report
 
     monkeypatch.setattr(
         "sys.argv",
@@ -146,3 +151,108 @@ def test_remote_submission_writes_backend_state(tmp_path, monkeypatch):
     assert run["kind"] == "train"
     assert run["backend"] == "modal"
     assert run["backend_id"] == "ap-test"
+
+
+def test_state_v2_defaults_and_progress_history(tmp_path):
+    from leap_finetune.state import (
+        RunTracker,
+        list_runs,
+        load_run,
+        record_checkpoint,
+        record_eval_result,
+        render_runs_report,
+        update_run_progress,
+    )
+
+    legacy_state = {
+        "version": 1,
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "runs": [
+            {
+                "id": "legacy-run",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+                "status": "running",
+                "kind": "train",
+                "metrics": {},
+            }
+        ],
+    }
+    _state_file().parent.mkdir(parents=True, exist_ok=True)
+    _state_file().write_text(json.dumps(legacy_state))
+
+    legacy = list_runs()[0]
+    assert legacy["phase"] == "training"
+    assert legacy["progress"]["last_log"] is None
+    assert legacy["history"]["logs"] == []
+    assert legacy["log_refs"] == {}
+
+    tracker = RunTracker.start(
+        config_path=None,
+        config_dict={"training_type": "sft", "dataset": BASE_SFT_DATASET},
+        output_path=tmp_path / "out",
+    )
+    for step in range(250):
+        update_run_progress(
+            tracker.id,
+            step=step,
+            max_steps=300,
+            log={"loss": 1.0 / (step + 1), "nested": {"ignored": True}},
+        )
+    record_eval_result(
+        tracker.id,
+        step=249,
+        metrics={
+            "benchmark/tiny_qa/score": 0.75,
+            "benchmark/tool_call/accuracy": 0.5,
+        },
+        source="benchmark",
+    )
+    record_checkpoint(tracker.id, path=tmp_path / "out" / "checkpoint-249", step=249)
+
+    run = load_run(tracker.id)
+    assert len(run["history"]["logs"]) == 200
+    assert run["progress"]["step"] == 249
+    assert run["progress"]["max_steps"] == 300
+    assert run["progress"]["last_log"]["metrics"]["loss"] == pytest.approx(1 / 250)
+    assert "nested" not in run["progress"]["last_log"]["metrics"]
+    assert run["progress"]["last_eval"]["metrics"]["benchmark/tiny_qa/score"] == 0.75
+    assert run["progress"]["last_checkpoint"]["path"].endswith("checkpoint-249")
+    assert "benchmark/tool_call/accuracy" in run["history"]["evals"][-1]["metrics"]
+    assert tracker.id in render_runs_report([run])
+
+
+def test_lft_state_callback_records_trainer_events(tmp_path):
+    from transformers import TrainingArguments
+    from transformers.trainer_callback import TrainerControl, TrainerState
+
+    from leap_finetune.state import RunTracker, load_run
+    from leap_finetune.state.callback import LFTStateCallback
+
+    tracker = RunTracker.start(
+        config_path=None,
+        config_dict={"training_type": "sft", "dataset": BASE_SFT_DATASET},
+        output_path=tmp_path / "out",
+    )
+    callback = LFTStateCallback(run_id=tracker.id)
+    args = TrainingArguments(
+        output_dir=str(tmp_path / "out"),
+        max_steps=10,
+        report_to=[],
+    )
+    state = TrainerState(global_step=3, epoch=0.5, max_steps=10)
+    control = TrainerControl()
+
+    callback.on_train_begin(args, state, control)
+    callback.on_log(args, state, control, logs={"loss": 0.4, "tokens": 128})
+    callback.on_evaluate(args, state, control, metrics={"eval_loss": 0.3})
+    callback.on_save(args, state, control)
+    callback.on_train_end(args, state, control)
+
+    run = load_run(tracker.id)
+    assert run["status"] == "completed"
+    assert run["phase"] == "completed"
+    assert run["progress"]["max_steps"] == 10
+    assert run["history"]["logs"][-1]["metrics"]["loss"] == 0.4
+    assert run["history"]["evals"][-1]["metrics"]["eval_loss"] == 0.3
+    assert run["history"]["checkpoints"][-1]["step"] == 3

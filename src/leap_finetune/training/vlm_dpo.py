@@ -13,6 +13,7 @@ from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
     create_vlm_benchmarks_from_config,
 )
+from leap_finetune.state.callback import add_lft_state_callback
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_loading import load_vlm_model
 from leap_finetune.training.default_configs.vlm_sft_configs import (
@@ -250,6 +251,7 @@ def vlm_dpo_run(training_config: dict) -> None:
                 )
             )
 
+    add_lft_state_callback(trainer, run_name_template=run_name_template)
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)
 

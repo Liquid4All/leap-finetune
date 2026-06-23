@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import os
 import shlex
 from dataclasses import dataclass
 
@@ -83,6 +84,13 @@ def render_sbatch_script(
         + " \\\n    ".join(shlex.quote(a) for a in runner_args)
     )
 
+    state_exports = []
+    for key in ("LFT_RUN_ID", "LFT_STATE_DIR"):
+        value = os.environ.get(key)
+        if value:
+            state_exports.append(f"export {key}={shlex.quote(value)}")
+    state_exports_block = "\n".join(state_exports)
+
     sbatch_directives = [
         f"#SBATCH --job-name={shlex.quote(job_name)}",
         "#SBATCH --nodes=1",
@@ -131,6 +139,7 @@ fi
 # "CUDA unknown error - setting available devices to zero" on engine boot).
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export TOKENIZERS_PARALLELISM=false
+{state_exports_block}
 
 {runner_cmd}
 """

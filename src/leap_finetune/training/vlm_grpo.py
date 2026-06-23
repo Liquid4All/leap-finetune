@@ -23,6 +23,7 @@ from leap_finetune.evaluation import (
     make_eval_callback,
 )
 from leap_finetune.rl.rewards import resolve_reward_specs
+from leap_finetune.state.callback import add_lft_state_callback
 from leap_finetune.training.default_configs.grpo_configs import VLM_GRPO_EXCLUDED_KEYS
 from leap_finetune.training.default_configs.vlm_sft_configs import (
     DEFAULT_LR_MULTIPLIERS,
@@ -520,6 +521,7 @@ def vlm_grpo_run(training_config: dict) -> None:
                 )
             )
 
+    add_lft_state_callback(trainer, run_name_template=run_name_template)
     trainer = prepare_trainer(trainer)
     run_training_safely(trainer, resume_from_checkpoint=resume_from)
 

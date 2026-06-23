@@ -1,3 +1,4 @@
+import os
 import sys
 from datetime import datetime
 
@@ -143,7 +144,7 @@ def _print_config_summary(config_dict: dict, kuberay_cfg: dict) -> None:
     if train_cfg.get("num_train_epochs"):
         table.add_row("Epochs", str(train_cfg["num_train_epochs"]))
     if peft_cfg.get("use_peft"):
-        table.add_row("PEFT", f"Enabled ({peft_cfg.get('extends', 'custom')})")
+        table.add_row("PEFT", "Enabled")
 
     panel = Panel(
         table,
@@ -188,6 +189,7 @@ def _submit(config_dict: dict, kuberay_cfg: dict) -> dict:
     configmap_name = f"{job_name}-config"
 
     submission_config, output_dir = _build_submission_config(config_dict, kuberay_cfg)
+    remote_state_dir = kuberay_cfg.get("state_dir", f"{output_dir}/.lft")
     config_str = yaml.safe_dump(submission_config, sort_keys=False)
 
     _load_kubernetes_config(config)
@@ -233,6 +235,9 @@ def _submit(config_dict: dict, kuberay_cfg: dict) -> dict:
         "status": "submitted",
         "job_name": job_name,
         "namespace": namespace,
+        "output_dir": output_dir,
+        "output_pvc": kuberay_cfg.get("output_pvc"),
+        "remote_state_dir": remote_state_dir,
     }
 
 
@@ -249,10 +254,22 @@ def _generate_rayjob_manifest(
 
     env_list = [
         {"name": "OUTPUT_DIR", "value": output_dir},
+        {
+            "name": "LFT_STATE_DIR",
+            "value": kuberay_cfg.get("state_dir", f"{output_dir}/.lft"),
+        },
         {"name": "RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE", "value": "1"},
     ]
+    run_id = os.environ.get("LFT_RUN_ID")
+    if run_id:
+        env_list.append({"name": "LFT_RUN_ID", "value": run_id})
     for key, value in kuberay_cfg.get("env", {}).items():
-        env_list.append({"name": key, "value": str(value)})
+        for item in env_list:
+            if item["name"] == key:
+                item["value"] = str(value)
+                break
+        else:
+            env_list.append({"name": key, "value": str(value)})
 
     volume_mounts = [
         {"name": "config", "mountPath": "/tmp/config.yaml", "subPath": "config.yaml"},

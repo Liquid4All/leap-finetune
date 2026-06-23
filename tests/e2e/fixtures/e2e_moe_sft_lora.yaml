@@ -1,6 +1,6 @@
 project_name: "e2e_moe_sft_lora"
 model_name: "LFM2-8B-A1B"
-training_type: "sft"
+training_type: "moe_sft"
 
 dataset:
   path: "HuggingFaceTB/smoltalk"
@@ -10,7 +10,6 @@ dataset:
   subset: "all"
 
 training_config:
-  extends: "MOE_SFT"
   num_train_epochs: 1
   per_device_train_batch_size: 1
   learning_rate: 5e-5
@@ -19,5 +18,4 @@ training_config:
   logging_steps: 5
 
 peft_config:
-  extends: "MOE_LORA"
   use_peft: true

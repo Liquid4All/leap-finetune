@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -11,38 +12,25 @@ from peft import LoraConfig
 from pydantic import ValidationError
 
 from leap_finetune import LEAP_FINETUNE_DIR
-from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 from leap_finetune.config.job_config import (
     DatasetConfig,
     EvalRunConfig,
     EvalSuiteConfig,
     JobConfig,
-    ResolvedJobConfig,
-    _ResolvedConfigValue,
+    MaterializedJobConfig,
 )
 from leap_finetune.data_loading.dataset_loader import DatasetLoader
-from leap_finetune.training.default_configs import PEFT_DEFAULTS, TRAINING_DEFAULTS
+from leap_finetune.training.default_configs import (
+    DEFAULT_LORA,
+    DEFAULT_VLM_LORA,
+    MOE_LORA,
+    TRAINING_TYPE_DEFAULTS,
+)
 
 logger = logging.getLogger(__name__)
 
 _REWARD_SEP = "::"
 _REWARDS_DIR = LEAP_FINETUNE_DIR / "rewards"
-
-TRAINING_TYPE_TO_CONFIG = {
-    "sft": "DEFAULT_SFT",
-    "dpo": "DEFAULT_DPO",
-    "vlm_sft": "DEFAULT_VLM_SFT",
-    "vlm_dpo": "DEFAULT_VLM_DPO",
-    "moe_sft": "MOE_SFT",
-    "moe_dpo": "MOE_DPO",
-    "grpo": "DEFAULT_GRPO",
-    "vlm_grpo": "DEFAULT_VLM_GRPO",
-}
-DATASET_TYPE_ALIASES = {
-    "moe_sft": "sft",
-    "moe_dpo": "dpo",
-}
-VALID_DATASET_TYPES = {"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo"}
 
 
 def resolve_config_path(config_input: str | pathlib.Path) -> pathlib.Path:
@@ -138,14 +126,6 @@ def _resolve_reward_paths_to_absolute(
     return rewards_cfg
 
 
-def _require_known_training_type(training_type: str) -> None:
-    if training_type not in TRAINING_TYPE_TO_CONFIG:
-        raise ValueError(
-            f"Unknown training type: {training_type}. "
-            f"Available: {list(TRAINING_TYPE_TO_CONFIG)}"
-        )
-
-
 def generate_run_name(
     model_name: str,
     training_type: str,
@@ -223,41 +203,18 @@ def parse_eval_config(config_input: str | pathlib.Path) -> EvalRunConfig:
         raise ValueError(f"Invalid eval config: {e}") from e
 
 
-def _resolve_training_type(
-    raw_training_type: str,
-    model_name: str,
-    train_config_dict: dict[str, Any],
-) -> str:
-    if raw_training_type not in ("sft", "dpo"):
-        return raw_training_type
-    if not is_moe_model_from_name(model_name):
-        return raw_training_type
-
-    base_config = train_config_dict.get("extends") or train_config_dict.get("base")
-    uses_moe_config = isinstance(base_config, str) and base_config.startswith("MOE_")
-    if uses_moe_config or "moe_training" in train_config_dict:
-        return f"moe_{raw_training_type}"
-    return raw_training_type
-
-
 def _build_dataset_loader(
     dataset_cfg: DatasetConfig,
     *,
     config_dir: pathlib.Path,
     model_name: str,
 ) -> DatasetLoader:
-    ds_type = DATASET_TYPE_ALIASES.get(dataset_cfg.type, dataset_cfg.type)
-    if ds_type not in VALID_DATASET_TYPES:
-        raise ValueError(
-            f"Invalid dataset type: '{ds_type}'. Must be one of: {sorted(VALID_DATASET_TYPES)}"
-        )
+    ds_type = dataset_cfg.type
 
     dataset_path_env = os.getenv("DATASET_PATH")
     effective_train_path = (
         dataset_path_env or dataset_cfg.train_path or dataset_cfg.path
     )
-    if not effective_train_path:
-        raise ValueError("dataset.path or dataset.train_path is required")
 
     effective_train_path = _resolve_local_path(
         effective_train_path,
@@ -298,73 +255,56 @@ def _build_dataset_loader(
     )
 
 
-def _build_training_defaults(
-    train_config_dict: dict[str, Any],
+def _merge_config_defaults(
+    defaults: dict[str, Any],
+    overrides: dict[str, Any],
+) -> dict[str, Any]:
+    merged = deepcopy(defaults)
+    for key, value in overrides.items():
+        if value is None:
+            merged.pop(key, None)
+        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_config_defaults(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _build_training_config(
     training_type: str,
-):
-    _require_known_training_type(training_type)
-    train_config_dict = train_config_dict.copy()
-    base_config_name = train_config_dict.pop("extends", None) or train_config_dict.pop(
-        "base", None
-    )
-
-    if base_config_name:
-        if base_config_name not in TRAINING_DEFAULTS:
-            available = list(TRAINING_DEFAULTS.keys())
-            raise ValueError(
-                f"Unknown base config: {base_config_name}. Available: {available}"
-            )
-        base_train_config = TRAINING_DEFAULTS[base_config_name]
-    else:
-        base_train_config = TRAINING_DEFAULTS[TRAINING_TYPE_TO_CONFIG[training_type]]
-
-    for float_key in ("learning_rate", "weight_decay"):
-        if float_key in train_config_dict and isinstance(
-            train_config_dict[float_key], str
-        ):
-            train_config_dict[float_key] = float(train_config_dict[float_key])
-
-    resolved_train_config = base_train_config.copy()
-    resolved_train_config.update(
-        {k: v for k, v in train_config_dict.items() if v is not None}
-    )
-    return _ResolvedConfigValue(resolved_train_config), train_config_dict
+    overrides: dict[str, Any],
+) -> dict[str, Any]:
+    defaults = TRAINING_TYPE_DEFAULTS[training_type].model_dump(exclude_unset=True)
+    return _merge_config_defaults(defaults, overrides)
 
 
-def _build_peft_defaults(peft_dict: dict[str, Any] | None):
-    peft_dict = peft_dict.copy() if peft_dict else {}
-    use_peft = peft_dict.get("use_peft")
+def _default_peft_config(training_type: str) -> LoraConfig:
+    if training_type.startswith("vlm_"):
+        return DEFAULT_VLM_LORA
+    if training_type.startswith("moe_"):
+        return MOE_LORA
+    return DEFAULT_LORA
+
+
+def _build_peft_config(
+    peft_dict: dict[str, Any] | None,
+    *,
+    training_type: str,
+) -> tuple[LoraConfig | None, bool | None]:
+    if peft_dict is None:
+        return None, None
+
+    peft_overrides = dict(peft_dict)
+    use_peft = peft_overrides.pop("use_peft", True)
     if use_peft is False:
-        return None, use_peft
+        return None, False
 
-    base_peft_name = peft_dict.pop("extends", None) or peft_dict.pop("base", None)
-    peft_dict.pop("use_peft", None)
-
-    if not base_peft_name:
-        peft_config = (
-            _ResolvedConfigValue(PEFT_DEFAULTS["DEFAULT_LORA"])
-            if use_peft is True
-            else None
-        )
-        return peft_config, use_peft
-
-    if base_peft_name not in PEFT_DEFAULTS:
-        available = list(PEFT_DEFAULTS.keys())
-        raise ValueError(
-            f"Unknown base PEFT config: {base_peft_name}. Available: {available}"
-        )
-
-    base_config_value = PEFT_DEFAULTS[base_peft_name]
-    if base_config_value is None:
-        return None, use_peft
-
+    base_config = _default_peft_config(training_type)
     base_dict = (
-        base_config_value.to_dict()
-        if hasattr(base_config_value, "to_dict")
-        else dict(base_config_value)
+        base_config.to_dict() if hasattr(base_config, "to_dict") else dict(base_config)
     )
-    base_dict.update({k: v for k, v in peft_dict.items() if v is not None})
-    return _ResolvedConfigValue(LoraConfig(**base_dict)), use_peft
+    base_dict.update({k: v for k, v in peft_overrides.items() if v is not None})
+    return LoraConfig(**base_dict), True
 
 
 def _resolve_output_dir(
@@ -470,7 +410,7 @@ def _create_output_dir(
         return fallback_dir
 
 
-def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
+def materialize_job_config(job_config: JobConfig) -> MaterializedJobConfig:
     config_dir = pathlib.Path(job_config.config_dir or pathlib.Path.cwd()).resolve()
     model_name = job_config.model_name
 
@@ -480,17 +420,9 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
         model_name=model_name,
     )
 
-    train_config_dict = job_config.training_config.model_dump(exclude_none=True)
-    training_type = _resolve_training_type(
-        job_config.training_type,
-        model_name,
-        train_config_dict,
-    )
-    final_training_config, train_config_overrides = _build_training_defaults(
-        train_config_dict,
-        training_type,
-    )
-    final_train_values = final_training_config.value
+    training_type = job_config.training_type
+    train_config_overrides = job_config.training_config.model_dump(exclude_unset=True)
+    final_train_values = _build_training_config(training_type, train_config_overrides)
     final_train_values["chat_template_path"] = _resolve_local_path(
         final_train_values.get("chat_template_path"),
         base_dir=config_dir,
@@ -501,11 +433,14 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
     )
 
     peft_dict = (
-        job_config.peft_config.model_dump(exclude_none=True)
+        job_config.peft_config.model_dump(exclude_unset=True)
         if job_config.peft_config
         else None
     )
-    peft_config, use_peft = _build_peft_defaults(peft_dict)
+    peft_config, use_peft = _build_peft_config(
+        peft_dict,
+        training_type=training_type,
+    )
     project_name = job_config.resolved_job_name
 
     run_name = generate_run_name(
@@ -565,15 +500,14 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
     _validate_parallelism_config(
         final_train_values,
         training_type,
-        model_name,
     )
 
-    return ResolvedJobConfig(
+    return MaterializedJobConfig(
         job_name=project_name,
         model_name=model_name,
         training_type=training_type,
         dataset=dataset,
-        training_config=final_training_config,
+        training_config=final_train_values,
         peft_config=peft_config,
         benchmark_configs=benchmark_configs,
         model_config=job_config.model_overrides,
@@ -588,7 +522,7 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
     )
 
 
-def normalized_job_config_dict(
+def job_config_to_submission_dict(
     job_config: JobConfig,
     *,
     base_dir: pathlib.Path | None = None,
@@ -600,6 +534,11 @@ def normalized_job_config_dict(
         by_alias=True,
         exclude_none=True,
     )
+    payload["training_config"] = job_config.training_config.model_dump(
+        exclude_unset=True
+    )
+    if job_config.peft_config is not None:
+        payload["peft_config"] = job_config.peft_config.model_dump(exclude_unset=True)
     dataset_cfg = payload.get("dataset", {})
     for key in ("path", "train_path", "val_path", "image_root"):
         if isinstance(dataset_cfg.get(key), str):
@@ -634,7 +573,6 @@ def normalized_job_config_dict(
 def _validate_parallelism_config(
     training_config: dict[str, Any],
     training_type: str,
-    model_name: str,
 ) -> None:
     if (training_config.get("context_parallel_size", 1) or 1) > 1:
         raise ValueError("context_parallel_size is not supported in the EP-only branch")
@@ -643,11 +581,7 @@ def _validate_parallelism_config(
     if not moe_config:
         return
 
-    effective_training_type = training_type
-    if training_type in ("sft", "dpo") and is_moe_model_from_name(model_name):
-        effective_training_type = f"moe_{training_type}"
-
-    if effective_training_type in ("moe_sft", "moe_dpo"):
+    if training_type in ("moe_sft", "moe_dpo"):
         # EP forward path ignores capacity dropping; reject for both so it isn't a silent no-op.
         capacity_factor = moe_config.get("capacity_factor")
         token_drop_policy = moe_config.get("token_drop_policy")
@@ -661,7 +595,7 @@ def _validate_parallelism_config(
     if ep_size <= 1:
         return
 
-    if effective_training_type not in ("moe_sft", "moe_dpo"):
+    if training_type not in ("moe_sft", "moe_dpo"):
         raise ValueError(
             f"expert_parallel_size={ep_size} requires training_type 'moe_sft' or 'moe_dpo', "
             f"got '{training_type}'"
@@ -671,13 +605,13 @@ def _validate_parallelism_config(
         raise ValueError(f"expert_parallel_size must be a power of 2, got {ep_size}")
 
 
-def print_job_config_summary(job_config: ResolvedJobConfig) -> None:
+def print_job_config_summary(job_config: MaterializedJobConfig) -> None:
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
 
-    config_value = job_config.training_config.value
-    peft_value = job_config.peft_config.value if job_config.peft_config else None
+    config_value = job_config.training_config
+    peft_value = job_config.peft_config
 
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("Property", style="bold cyan", min_width=18)

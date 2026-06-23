@@ -10,7 +10,6 @@ from ray.train.torch import TorchConfig, TorchTrainer
 from torch import cuda
 
 from leap_finetune import RUNTIME_DIR
-from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 from leap_finetune.checkpointing.model_loading import _resolve_model_id, load_tokenizer
 from leap_finetune.checkpointing.callback import hydrate_missing_ray_metrics
 from leap_finetune.data_loading.dataset_loader import DatasetLoader
@@ -52,11 +51,6 @@ def ray_trainer(job_config: dict) -> None:
     # ==== 1. Resolve runtime ====
     # Pick the train loop, connect to local/external Ray, and decide worker count.
     training_type = job_config["training_type"]
-
-    if training_type in ("sft", "dpo") and is_moe_model_from_name(
-        job_config["model_name"]
-    ):
-        training_type = f"moe_{training_type}"
 
     output_dir = job_config["training_config"]["output_dir"]
 

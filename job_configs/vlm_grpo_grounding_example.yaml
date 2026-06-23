@@ -35,7 +35,6 @@ rewards:
   recipe: "tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"
 
 training_config:
-  extends: "DEFAULT_VLM_GRPO"
 
   # --- core optimization ---
   num_train_epochs: 1

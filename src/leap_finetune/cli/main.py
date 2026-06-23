@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import pathlib
 import sys
@@ -77,11 +78,13 @@ def _parse_cli_args():
             parser.add_argument("command", choices=["runs"])
             parser.add_argument(
                 "action",
-                choices=["list", "show", "sync"],
+                choices=["list", "show", "sync", "report"],
                 nargs="?",
                 default="list",
             )
             parser.add_argument("run_id", nargs="?")
+            parser.add_argument("--json", action="store_true", help="Emit JSON")
+            parser.add_argument("--limit", type=int, default=20)
             args = parser.parse_args()
             command_args = vars(args)
         elif sys.argv[1] == "memory":
@@ -229,24 +232,40 @@ def _backend_id(result: dict[str, Any]) -> str | None:
 
 
 def _record_remote_submission(tracker, result: dict[str, Any]) -> None:
-    tracker.update(
-        status=str(result.get("status") or "submitted"),
+    metadata = {
+        key: value
+        for key, value in result.items()
+        if key not in {"backend", "status", "log_refs"}
+    }
+    tracker.submitted(
         backend=str(result["backend"]),
         backend_id=_backend_id(result),
+        metadata=metadata,
+        log_refs=result.get("log_refs"),
     )
+    if result.get("status") and result["status"] != "submitted":
+        tracker.update(status=str(result["status"]))
 
 
 @contextmanager
-def _run_id_env(run_id: str):
-    previous = os.environ.get("LFT_RUN_ID")
+def _run_state_env(run_id: str, state_dir: str | pathlib.Path | None = None):
+    previous_run_id = os.environ.get("LFT_RUN_ID")
+    previous_state_dir = os.environ.get("LFT_STATE_DIR")
     os.environ["LFT_RUN_ID"] = run_id
+    if state_dir is not None:
+        os.environ["LFT_STATE_DIR"] = str(state_dir)
     try:
         yield
     finally:
-        if previous is None:
+        if previous_run_id is None:
             os.environ.pop("LFT_RUN_ID", None)
         else:
-            os.environ["LFT_RUN_ID"] = previous
+            os.environ["LFT_RUN_ID"] = previous_run_id
+        if state_dir is not None:
+            if previous_state_dir is None:
+                os.environ.pop("LFT_STATE_DIR", None)
+            else:
+                os.environ["LFT_STATE_DIR"] = previous_state_dir
 
 
 def _run_model_dump(config) -> dict[str, Any]:
@@ -291,7 +310,7 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
                 output_path=output_path,
             )
             try:
-                with _run_id_env(tracker.id):
+                with _run_state_env(tracker.id, tracker.state_dir):
                     remote_result = _dispatch_remote_backends(
                         config_path_arg,
                         config_dict=dispatch_config,
@@ -305,8 +324,8 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
 
     from leap_finetune.config import EvalRunConfig, JobConfig
     from leap_finetune.config.parser import (
+        job_config_to_submission_dict,
         materialize_job_config,
-        normalized_job_config_dict,
         parse_eval_config,
         parse_job_config,
         print_job_config_summary,
@@ -323,7 +342,7 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
         from leap_finetune.evaluation.runner import run_eval_config as _run_eval_config
 
         try:
-            with _run_id_env(tracker.id):
+            with _run_state_env(tracker.id, tracker.state_dir):
                 result = _run_eval_config(config_path, output_path=output_path)
         except BaseException as exc:
             _fail_tracker(tracker, exc)
@@ -333,7 +352,7 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
 
     if isinstance(config_path, JobConfig):
         parsed_job = config_path
-        config_dict = normalized_job_config_dict(parsed_job)
+        config_dict = job_config_to_submission_dict(parsed_job)
         tracker = RunTracker.start(
             config_path=None,
             config_dict=config_dict,
@@ -344,7 +363,7 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
 
     if isinstance(config_path, JobConfig):
         try:
-            with _run_id_env(tracker.id):
+            with _run_state_env(tracker.id, tracker.state_dir):
                 remote_result = _dispatch_remote_backends(
                     config_path_arg,
                     config_dict=config_dict,
@@ -373,7 +392,7 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
                     output_path=output_path,
                 )
             try:
-                with _run_id_env(tracker.id):
+                with _run_state_env(tracker.id, tracker.state_dir):
                     result = _run_eval_config(eval_config, output_path=output_path)
             except BaseException as exc:
                 _fail_tracker(tracker, exc)
@@ -405,7 +424,7 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
         if isinstance(job_config.dataset, DatasetLoader):
             job_config.dataset.quick_validate()
 
-        job_config_dict = job_config.to_dict()
+        job_config_dict = vars(job_config).copy()
         output_dir = job_config_dict.get("training_config", {}).get("output_dir")
         if tracker is None:
             tracker = RunTracker.start(
@@ -423,7 +442,7 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
         raise ValueError(f"Issue parsing configuration: {e}") from e
 
     try:
-        with _run_id_env(tracker.id):
+        with _run_state_env(tracker.id, tracker.state_dir):
             ray_trainer(job_config_dict)
         tracker.completed()
     except BaseException as exc:
@@ -432,22 +451,47 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
 
 
 def _handle_runs_command(args: dict[str, Any]) -> None:
-    from leap_finetune.state import list_runs, load_run, render_run, render_run_list
+    from leap_finetune.state import (
+        list_runs,
+        load_run,
+        render_run,
+        render_run_list,
+        render_runs_report,
+    )
     from leap_finetune.state import sync_run
 
     action = args["action"]
     run_id = args.get("run_id")
     if action == "list":
-        print(render_run_list(list_runs()))
+        runs = list_runs()
+        if args.get("json"):
+            print(json.dumps(runs, indent=2))
+        else:
+            print(render_run_list(runs))
+        return
+    if action == "report":
+        runs = [load_run(run_id)] if run_id else list_runs()
+        if args.get("json"):
+            print(json.dumps(runs, indent=2))
+        else:
+            print(render_runs_report(runs, limit=args.get("limit")))
         return
     if not run_id:
         print(f"Usage: leap-finetune runs {action} <run_id>")
         sys.exit(1)
     if action == "show":
-        print(render_run(load_run(run_id)))
+        run = load_run(run_id)
+        if args.get("json"):
+            print(json.dumps(run, indent=2))
+        else:
+            print(render_run(run))
         return
     if action == "sync":
-        print(render_run(sync_run(run_id)))
+        run = sync_run(run_id)
+        if args.get("json"):
+            print(json.dumps(run, indent=2))
+        else:
+            print(render_run(run))
         return
 
 

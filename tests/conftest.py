@@ -191,7 +191,7 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
 
         job_config = parse_job_config(config_path)
         job_config = materialize_job_config(job_config)
-        job_config_dict = job_config.to_dict()
+        job_config_dict = vars(job_config).copy()
         return ray_trainer(job_config_dict)
     finally:
         if previous_output_dir is None:

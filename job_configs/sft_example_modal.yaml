@@ -10,7 +10,6 @@ dataset:
   subset: "all"
 
 training_config:
-  extends: "DEFAULT_SFT"
   num_train_epochs: 3
   per_device_train_batch_size: 2
   learning_rate: 2e-5
@@ -18,7 +17,6 @@ training_config:
   trackio_space_id: "username/my-dashboard"  # required if tracker is "trackio"
 
 peft_config:
-  extends: "DEFAULT_LORA"
   use_peft: true
 
 modal:

@@ -62,7 +62,7 @@ class TestExampleSmoke:
         }
         assert materialized.training_type == expected_type
         assert materialized.dataset is not None
-        assert isinstance(materialized.to_dict()["training_config"], dict)
+        assert isinstance(materialized.training_config, dict)
 
 
 class TestDirectPythonConfig:
@@ -88,7 +88,7 @@ class TestDirectPythonConfig:
         )
 
         materialized = materialize_job_config(job)
-        resolved = materialized.training_config.value
+        resolved = materialized.training_config
         assert materialized.job_name == "py_job"
         assert resolved["training_type"] == "sft"
         assert resolved["num_train_epochs"] == 4
@@ -395,20 +395,7 @@ class TestFocusedValidation:
             "/tests/e2e/fixtures/tiny_qa_bench.jsonl"
         )
 
-    def test_invalid_dataset_path_combination_rejected(self, tmp_path):
-        config = {
-            "project_name": "bad",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {
-                **BASE_SFT_DATASET,
-                "train_path": "other-dataset",
-            },
-        }
-        with pytest.raises(ValueError, match="dataset.path or dataset.train_path"):
-            parse_job_config(write_config(config, tmp_path))
-
-    def test_unknown_extends_rejected(self, tmp_path):
+    def test_named_training_inheritance_is_rejected(self, tmp_path):
         config = {
             "project_name": "bad",
             "model_name": "LFM2-1.2B",
@@ -416,9 +403,8 @@ class TestFocusedValidation:
             "dataset": BASE_SFT_DATASET,
             "training_config": {"extends": "NOT_A_REAL_PROFILE"},
         }
-        parsed = parse_job_config(write_config(config, tmp_path))
-        with pytest.raises(ValueError, match="Unknown base config"):
-            materialize_job_config(parsed)
+        with pytest.raises(ValueError, match="training_config no longer supports"):
+            parse_job_config(write_config(config, tmp_path))
 
     def test_eval_strategy_uses_default_split_when_test_size_omitted(self, tmp_path):
         # Offline training types get the default 0.2 eval split when no explicit
@@ -439,9 +425,9 @@ class TestFocusedValidation:
         }
         parsed = parse_job_config(write_config(config, tmp_path))
         materialized = materialize_job_config(parsed)
-        assert materialized.training_config.value["eval_strategy"] == "steps"
+        assert materialized.training_config["eval_strategy"] == "steps"
 
-    def test_training_type_defaults_apply_without_extends(self, tmp_path):
+    def test_training_type_defaults_apply(self, tmp_path):
         config = {
             "project_name": "dpo_defaults",
             "model_name": "LFM2-1.2B",
@@ -451,7 +437,7 @@ class TestFocusedValidation:
         }
         parsed = parse_job_config(write_config(config, tmp_path))
         materialized = materialize_job_config(parsed)
-        resolved = materialized.training_config.value
+        resolved = materialized.training_config
         assert resolved["training_type"] == "dpo"
         assert resolved["beta"] == 0.1
         assert resolved["num_train_epochs"] == 5
@@ -473,16 +459,16 @@ class TestFocusedValidation:
         assert "fsdp_config" not in stripped
         assert "deepspeed" in train_config
 
-    def test_peft_extends_still_works(self, tmp_path):
+    def test_peft_defaults_apply_with_direct_overrides(self, tmp_path):
         config = {
             "project_name": "peft",
             "model_name": "LFM2-1.2B",
             "training_type": "sft",
             "dataset": BASE_SFT_DATASET,
-            "training_config": {"extends": "DEFAULT_SFT"},
-            "peft_config": {"extends": "DEFAULT_LORA", "use_peft": True, "r": 32},
+            "training_config": {},
+            "peft_config": {"use_peft": True, "r": 32},
         }
         parsed = parse_job_config(write_config(config, tmp_path))
         materialized = materialize_job_config(parsed)
         assert materialized.peft_config is not None
-        assert materialized.peft_config.value.r == 32
+        assert materialized.peft_config.r == 32

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import contextlib
 import logging
 from typing import Any
 
 import torch
 from ray.train.huggingface.transformers import prepare_trainer
+
+from leap_finetune.distribution.ray_runtime import normalize_amd_visible_devices
+
+normalize_amd_visible_devices()
+
 from trl import GRPOConfig, GRPOTrainer
 
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback

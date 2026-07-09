@@ -22,12 +22,15 @@ from leap_finetune.distribution.ray_runtime import (
     build_scaling_config,
     get_ray_env_vars,
     get_requested_ray_address,
+    normalize_amd_visible_devices,
+    resolve_local_ray_num_cpus,
     resolve_local_object_store_memory,
     resolve_num_workers,
     select_object_spilling_dir,
     select_ray_temp_dir,
     worker_process_setup_hook,
 )
+from leap_finetune.distribution.ray_result_compat import hydrate_missing_ray_metrics
 from leap_finetune.distribution.vllm_server import (
     launch_vllm_server,
     resolve_server_host,
@@ -61,6 +64,7 @@ def ray_trainer(job_config: dict) -> None:
     ray_config = job_config.get("ray_config")
     ray_address = get_requested_ray_address(ray_config)
     connect_existing_cluster = ray_address is not None
+    normalize_amd_visible_devices()
     local_num_gpus = cuda.device_count()
     training_config = job_config["training_config"]
     is_grpo = training_type in ("grpo", "vlm_grpo")
@@ -145,6 +149,7 @@ def ray_trainer(job_config: dict) -> None:
         export_judge_runtime_config(None)
 
     if not ray.is_initialized():
+        normalize_amd_visible_devices()
         ray_temp_dir = select_ray_temp_dir(os.path.expanduser("~/tmp-ray"))
         runtime_env = RuntimeEnv(
             working_dir=str(RUNTIME_DIR),
@@ -164,14 +169,19 @@ def ray_trainer(job_config: dict) -> None:
             spill_dir = select_object_spilling_dir(ray_temp_dir)
 
             object_store_mem = resolve_local_object_store_memory()
+            ray_num_cpus = resolve_local_ray_num_cpus()
 
-            ray.init(
-                address="local",
-                runtime_env=runtime_env,
-                _temp_dir=ray_temp_dir,
-                object_spilling_directory=spill_dir,
-                object_store_memory=object_store_mem,
-            )
+            ray_init_kwargs = {
+                "address": "local",
+                "runtime_env": runtime_env,
+                "_temp_dir": ray_temp_dir,
+                "object_spilling_directory": spill_dir,
+                "object_store_memory": object_store_mem,
+            }
+            if ray_num_cpus is not None:
+                ray_init_kwargs["num_cpus"] = ray_num_cpus
+
+            ray.init(**ray_init_kwargs)
 
         # Also suppress on driver (must be after ray.init)
         worker_process_setup_hook()
@@ -356,6 +366,8 @@ def ray_trainer(job_config: dict) -> None:
             ray.shutdown()
         except Exception:
             pass
+
+    result = hydrate_missing_ray_metrics(result, output_dir)
 
     print_next_steps_panel(output_dir)
 

@@ -722,6 +722,9 @@ class TestSlurmGeneration:
             assert "#SBATCH --job-name=sft_training" in content
             assert "#SBATCH --gpus-per-task=4" in content
             assert "LEAP_FINETUNE_FROM_SLURM=1" in content
+            assert 'export HIP_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES}"' in content
+            assert "unset ROCR_VISIBLE_DEVICES" in content
+            assert "unset CUDA_VISIBLE_DEVICES" in content
             assert "leap-finetune" in content
 
     def test_generate_multinode_slurm_script_starts_ray_cluster(self, tmp_path):

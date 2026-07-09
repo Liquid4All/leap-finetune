@@ -93,7 +93,7 @@ export RAY_TMPDIR=\${TMPDIR}/ray
 export OUTPUT_DIR=${OUTPUT_DIR}
 export PYTHONUNBUFFERED=1
 
-uv run pytest ${PYTEST_ARGS}
+python -m pytest ${PYTEST_ARGS}
 
 echo "================================================"
 echo "E2E TESTS DONE"

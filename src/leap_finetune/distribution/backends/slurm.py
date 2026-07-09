@@ -139,6 +139,16 @@ def _render_export_block(is_multinode: bool) -> str:
     lines = [
         "export LEAP_FINETUNE_FROM_SLURM=1",
         "export PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}",
+        (
+            'if [[ -n "${ROCR_VISIBLE_DEVICES:-}" && '
+            '-z "${HIP_VISIBLE_DEVICES:-}" ]]; then'
+        ),
+        '  export HIP_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES}"',
+        "fi",
+        'if [[ -n "${HIP_VISIBLE_DEVICES:-}" ]]; then',
+        "  unset ROCR_VISIBLE_DEVICES",
+        "  unset CUDA_VISIBLE_DEVICES",
+        "fi",
     ]
 
     if is_multinode:

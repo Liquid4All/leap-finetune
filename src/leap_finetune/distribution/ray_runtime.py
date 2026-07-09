@@ -5,10 +5,24 @@ from pathlib import Path
 import psutil
 
 
+def normalize_amd_visible_devices() -> None:
+    """Make ROCm GPU visibility compatible with Ray's AMD accelerator manager."""
+    rocr_visible = os.environ.get("ROCR_VISIBLE_DEVICES")
+    if "HIP_VISIBLE_DEVICES" not in os.environ and rocr_visible is not None:
+        os.environ["HIP_VISIBLE_DEVICES"] = rocr_visible
+
+    if "HIP_VISIBLE_DEVICES" in os.environ:
+        os.environ.pop("ROCR_VISIBLE_DEVICES", None)
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+
+
 def worker_process_setup_hook() -> None:
     """Configure logging and cache directories when Ray starts a worker process."""
     import logging
     import warnings
+
+    normalize_amd_visible_devices()
+    patch_ray_rocm_torch_device_helpers()
 
     logging.getLogger("ray.data").setLevel(logging.ERROR)
     logging.getLogger("ray.train").setLevel(logging.ERROR)
@@ -21,8 +35,73 @@ def worker_process_setup_hook() -> None:
             Path(path).mkdir(parents=True, exist_ok=True)
 
 
+def patch_ray_rocm_torch_device_helpers() -> None:
+    """Make Ray Train's device helper compatible with per-worker ROCm visibility.
+
+    Ray 2.51 narrows ``HIP_VISIBLE_DEVICES`` to one physical GPU per worker, but
+    Ray Train v2's torch context still selects ``cuda:<local_rank>``. For ranks
+    greater than zero that is out of range inside a single-visible-GPU process.
+    Within the narrowed ROCm process, the assigned accelerator is always
+    addressable as ``cuda:0``.
+    """
+    hip_visible = os.environ.get("HIP_VISIBLE_DEVICES")
+    if not hip_visible:
+        return
+    visible_ids = [token for token in hip_visible.split(",") if token]
+    if len(visible_ids) != 1:
+        return
+
+    import torch
+
+    def _get_rocm_worker_devices():
+        if torch.cuda.is_available():
+            return [torch.device("cuda:0")]
+        return [torch.device("cpu")]
+
+    _get_rocm_worker_devices._leap_rocm_patch = True  # type: ignore[attr-defined]
+
+    def _get_rocm_worker_device():
+        return _get_rocm_worker_devices()[0]
+
+    _get_rocm_worker_device._leap_rocm_patch = True  # type: ignore[attr-defined]
+
+    try:
+        import ray.air._internal.torch_utils as torch_utils
+
+        torch_utils.get_devices = _get_rocm_worker_devices
+    except ImportError:
+        pass
+
+    try:
+        import ray.train.torch as ray_train_torch
+
+        ray_train_torch.get_devices = _get_rocm_worker_devices
+        ray_train_torch.get_device = _get_rocm_worker_device
+    except ImportError:
+        pass
+
+    try:
+        import ray.train.torch.train_loop_utils as train_loop_utils
+
+        train_loop_utils.get_devices = _get_rocm_worker_devices
+        train_loop_utils.get_device = _get_rocm_worker_device
+    except ImportError:
+        pass
+
+    try:
+        import ray.train.v2.torch.train_loop_utils as v2_train_loop_utils
+
+        v2_train_loop_utils.get_devices = _get_rocm_worker_devices
+        v2_train_loop_utils.get_device = _get_rocm_worker_device
+        v2_train_loop_utils.get_devices_distributed = _get_rocm_worker_devices
+    except ImportError:
+        pass
+
+
 def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
     """Environment variables passed to Ray workers."""
+    normalize_amd_visible_devices()
+
     torch_extensions_dir = os.path.join(ray_temp_dir, "torch_extensions")
     triton_cache_dir = os.path.join(ray_temp_dir, "triton_cache")
     env_vars = {
@@ -50,6 +129,7 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "NCCL_SOCKET_IFNAME",
         "GLOO_SOCKET_IFNAME",
         "NCCL_SOCKET_FAMILY",
+        "HIP_VISIBLE_DEVICES",
         "LEAP_JUDGE_LLM_CONFIG",
     ):
         value = os.environ.get(key)
@@ -75,6 +155,9 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
     if env_tmp:
         Path(env_tmp).mkdir(parents=True, exist_ok=True)
         return env_tmp
+    slurm_tmp = _slurm_ray_temp_candidate()
+    if slurm_tmp:
+        candidates.append(slurm_tmp)
     if preferred:
         candidates.append(preferred)
     home_default = str(Path.home() / "tmp-ray")
@@ -104,6 +187,14 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
             continue
 
     return best_path
+
+
+def _slurm_ray_temp_candidate() -> str | None:
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if not job_id:
+        return None
+    safe_job_id = "".join(ch for ch in job_id if ch.isalnum() or ch in ("_", "-"))
+    return f"/tmp/r{safe_job_id}" if safe_job_id else None
 
 
 def _paths_with_free_space(
@@ -180,6 +271,25 @@ def resolve_num_workers(
         return cluster_gpus
 
     return local_num_gpus
+
+
+def resolve_local_ray_num_cpus() -> int | None:
+    """Return the CPU count Ray should advertise for a local Slurm allocation."""
+    raw = os.environ.get("LEAP_RAY_NUM_CPUS")
+    if raw:
+        return int(raw)
+
+    for key in ("SLURM_CPUS_ON_NODE", "SLURM_CPUS_PER_TASK"):
+        raw = os.environ.get(key)
+        if raw:
+            return int(raw)
+
+    cpus_per_gpu = os.environ.get("SLURM_CPUS_PER_GPU")
+    gpus_per_task = os.environ.get("SLURM_GPUS_PER_TASK")
+    if cpus_per_gpu and gpus_per_task:
+        return int(cpus_per_gpu) * int(gpus_per_task)
+
+    return None
 
 
 def build_scaling_config(

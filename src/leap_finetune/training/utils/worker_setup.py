@@ -1,3 +1,5 @@
+import os
+
 import ray.train
 import torch
 from ray.train.torch import get_device as get_ray_torch_device
@@ -22,11 +24,24 @@ def _pin_ray_worker_cuda_device() -> None:
     if not torch.cuda.is_available():
         return
 
+    if _is_single_visible_rocm_worker():
+        os.environ["LOCAL_RANK"] = "0"
+        os.environ["ACCELERATE_TORCH_DEVICE"] = "cuda:0"
+        torch.cuda.set_device(0)
+        return
+
     worker_device = get_ray_torch_device()
     if worker_device.type != "cuda":
         return
 
     torch.cuda.set_device(worker_device)
+
+
+def _is_single_visible_rocm_worker() -> bool:
+    hip_visible = os.environ.get("HIP_VISIBLE_DEVICES")
+    if not hip_visible:
+        return False
+    return len([token for token in hip_visible.split(",") if token]) == 1
 
 
 def setup_training_worker() -> None:
@@ -38,7 +53,10 @@ def setup_training_worker() -> None:
 def get_ray_train_eval_datasets():
     """Fetch Ray train/eval shards and convert them to HF datasets."""
     train_ds_ray = ray.train.get_dataset_shard("train")
-    eval_ds_ray = ray.train.get_dataset_shard("eval")
+    try:
+        eval_ds_ray = ray.train.get_dataset_shard("eval")
+    except KeyError:
+        eval_ds_ray = None
     train_dataset = ray_dataset_to_hf(train_ds_ray)
     eval_dataset = ray_dataset_to_hf(eval_ds_ray) if eval_ds_ray is not None else None
     return train_dataset, eval_dataset

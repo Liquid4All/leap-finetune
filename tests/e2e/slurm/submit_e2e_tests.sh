@@ -89,13 +89,23 @@ source .venv/bin/activate
 
 export TMPDIR=${TMP_ROOT}/leap-e2e-\${SLURM_JOB_ID:-manual}
 mkdir -p "\${TMPDIR}"
-export RAY_TMPDIR=\${TMPDIR}/ray
+if [[ -n "\${ROCR_VISIBLE_DEVICES:-}" && -z "\${HIP_VISIBLE_DEVICES:-}" ]]; then
+    export HIP_VISIBLE_DEVICES="\${ROCR_VISIBLE_DEVICES}"
+fi
+if [[ -n "\${HIP_VISIBLE_DEVICES:-}" ]]; then
+    unset ROCR_VISIBLE_DEVICES
+    unset CUDA_VISIBLE_DEVICES
+fi
+
+export RAY_TMPDIR=/tmp/r\${SLURM_JOB_ID:-manual}
+mkdir -p "\${RAY_TMPDIR}"
 export TORCH_EXTENSIONS_DIR=\${TMPDIR}/torch_extensions
 export TRITON_CACHE_DIR=\${TMPDIR}/triton_cache
 export OUTPUT_DIR=${OUTPUT_DIR}
 export PYTHONUNBUFFERED=1
+export RAY_DATA_DISABLE_PROGRESS_BARS=1
 
-pytest ${PYTEST_ARGS}
+python -m pytest ${PYTEST_ARGS}
 
 echo "================================================"
 echo "E2E TESTS DONE"

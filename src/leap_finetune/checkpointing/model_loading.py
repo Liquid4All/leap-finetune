@@ -31,8 +31,7 @@ def _get_attn_implementation() -> str:
 
     if _requires_flash_attn_2():
         raise RuntimeError(
-            "LEAP_REQUIRE_FLASH_ATTN_2 is set, but flash-attn is not usable: "
-            f"{reason}"
+            f"LEAP_REQUIRE_FLASH_ATTN_2 is set, but flash-attn is not usable: {reason}"
         )
 
     logger.warning("flash-attn not available (%s), falling back to sdpa", reason)

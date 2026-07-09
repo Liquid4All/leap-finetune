@@ -16,10 +16,43 @@ buckets:
 uv run pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe
 ```
 
+On AMD / ROCm environments that were synced with
+`uv sync --no-group cuda --group rocm`, avoid a bare `uv run` because it can
+re-sync default CUDA dependencies. Use the activated environment instead:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe
+```
+
 ## GPU Smoke Tests
 
 ```bash
 uv run pytest tests/e2e --dense --moe --vlm
+```
+
+For ROCm:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/e2e --dense --moe --vlm
+```
+
+## FA2 Validation
+
+Normal tests may fall back to SDPA. FA2 profile validation should install
+`flash-attn` from a wheel and require runtime selection:
+
+```bash
+uv sync --group flash-attn --no-build-package flash-attn
+LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
+```
+
+For ROCm:
+
+```bash
+uv sync --no-group cuda --group rocm --no-build-package flash-attn
+LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
 ```
 
 ## SLURM

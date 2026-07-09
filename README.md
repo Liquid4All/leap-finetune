@@ -59,14 +59,50 @@ AMD / ROCm clusters should use the ROCm group instead:
 uv sync --no-group cuda --group rocm
 ```
 
-The ROCm group is lockfile-managed and uses vLLM's ROCm wheel index for vLLM
-plus the matching `torch`, `torchvision`, `torchaudio`, `flash-attn`, and
-`triton` stack. The pinned ROCm vLLM wheels are Python 3.12 Linux wheels, so
-use the repo's `.python-version` when creating AMD environments.
+Both profiles are lockfile-managed. CUDA is the default profile and pins
+`vllm==0.22.0`, which currently resolves to the matching Torch 2.11 / CUDA 13
+wheel stack. ROCm uses direct URLs from a validated vLLM ROCm wheel set for
+`vllm==0.22.0+rocm722` plus the matching `torch`, `torchvision`, `torchaudio`,
+`flash-attn`, and `triton` stack. Ray is pinned to `2.51.1` for both profiles.
+The pinned ROCm vLLM wheels are Python 3.12 Linux wheels, so use the repo's
+`.python-version` when creating AMD environments. After a ROCm sync, run
+commands through the activated `.venv`, repeat the ROCm group flags, or add
+`--no-sync` when you know the environment is current. Bare `uv run ...` uses
+the default dependency groups and can try to reconcile the environment back to
+CUDA.
 
-If `flash-attn` was built against a different Torch/CUDA ABI, errors such as
-`flash_attn_2_cuda... undefined symbol` usually mean the environment needs to
-be rebuilt:
+No environment variables are required for installation. On clusters where the
+default uv cache is slow, quota-limited, or backed by node-local scratch, you can
+prefix either install command with `UV_CACHE_DIR=.uv-cache` to keep uv's package
+cache in the repo.
+
+```bash
+source .venv/bin/activate
+leap-finetune job_configs/sft_example_with_slurm.yaml
+
+# or, without activation:
+uv run --no-group cuda --group rocm leap-finetune job_configs/sft_example_with_slurm.yaml
+```
+
+### FlashAttention 2 Validation
+
+The normal runtime probes FlashAttention 2 and falls back to SDPA if FA2 is not
+usable. To validate a CUDA or ROCm FA2 profile, install with binary-only FA2
+resolution and require FA2 at runtime:
+
+```bash
+# CUDA FA2 validation
+uv sync --group flash-attn --no-build-package flash-attn
+LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
+
+# ROCm FA2 validation
+uv sync --no-group cuda --group rocm --no-build-package flash-attn
+LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
+```
+
+If a cluster has no compatible `flash-attn` wheel, do not treat a source build
+as the default supported install path. Use a known-good wheel source for the
+cluster, or rebuild explicitly as an escape hatch:
 
 ```bash
 uv cache clean flash-attn
@@ -74,8 +110,8 @@ rm -rf .venv
 MAX_JOBS=1 uv sync
 ```
 
-Run this on a machine with a CUDA toolkit and enough build memory available if
-uv needs to rebuild `flash-attn` from source.
+Run this on a machine with the matching CUDA or ROCm toolchain and enough build
+memory available if uv needs to rebuild `flash-attn` from source.
 
 ## Quickstart
 

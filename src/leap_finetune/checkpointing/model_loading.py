@@ -21,29 +21,43 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH = (
     _REPO_ROOT / "job_configs" / "chat_templates" / "lfm2_5_chat_template.jinja"
 )
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def _get_attn_implementation() -> str:
-    if _is_flash_attn_2_usable():
+    usable, reason = _flash_attn_2_status()
+    if usable:
         return "flash_attention_2"
-    logger.warning("flash-attn not available, falling back to sdpa")
+
+    if _requires_flash_attn_2():
+        raise RuntimeError(
+            "LEAP_REQUIRE_FLASH_ATTN_2 is set, but flash-attn is not usable: "
+            f"{reason}"
+        )
+
+    logger.warning("flash-attn not available (%s), falling back to sdpa", reason)
     return "sdpa"
 
 
 def _is_flash_attn_2_usable() -> bool:
+    usable, _ = _flash_attn_2_status()
+    return usable
+
+
+def _requires_flash_attn_2() -> bool:
+    return os.getenv("LEAP_REQUIRE_FLASH_ATTN_2", "").lower() in _TRUE_VALUES
+
+
+def _flash_attn_2_status() -> tuple[bool, str]:
     if not is_flash_attn_2_available():
-        return False
+        return False, "Transformers does not report flash-attn 2 as available"
 
     try:
         from flash_attn import flash_attn_func, flash_attn_varlen_func  # noqa: F401
     except Exception as exc:
-        logger.warning(
-            "flash-attn is installed but failed to import (%s); falling back to sdpa",
-            exc,
-        )
-        return False
+        return False, f"flash-attn import failed: {exc}"
 
-    return True
+    return True, "flash-attn 2 is usable"
 
 
 def _resolve_model_id(model_name: str) -> str:

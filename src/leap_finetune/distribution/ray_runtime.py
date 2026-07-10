@@ -5,15 +5,29 @@ from pathlib import Path
 import psutil
 
 
+def _is_rocm_torch() -> bool:
+    try:
+        import torch
+    except ImportError:
+        return False
+    return bool(getattr(torch.version, "hip", None))
+
+
 def normalize_amd_visible_devices() -> None:
     """Make ROCm GPU visibility compatible with Ray's AMD accelerator manager."""
+    if not _is_rocm_torch():
+        # Some mixed clusters expose ROCR_VISIBLE_DEVICES even for CUDA jobs.
+        # Do not let that make Ray workers look like ROCm processes.
+        os.environ.pop("ROCR_VISIBLE_DEVICES", None)
+        os.environ.pop("HIP_VISIBLE_DEVICES", None)
+        return
+
     rocr_visible = os.environ.get("ROCR_VISIBLE_DEVICES")
     if "HIP_VISIBLE_DEVICES" not in os.environ and rocr_visible is not None:
         os.environ["HIP_VISIBLE_DEVICES"] = rocr_visible
 
-    if "HIP_VISIBLE_DEVICES" in os.environ:
-        os.environ.pop("ROCR_VISIBLE_DEVICES", None)
-        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    os.environ.pop("ROCR_VISIBLE_DEVICES", None)
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 
 
 def worker_process_setup_hook() -> None:
@@ -44,6 +58,9 @@ def patch_ray_rocm_torch_device_helpers() -> None:
     Within the narrowed ROCm process, the assigned accelerator is always
     addressable as ``cuda:0``.
     """
+    if not _is_rocm_torch():
+        return
+
     hip_visible = os.environ.get("HIP_VISIBLE_DEVICES")
     if not hip_visible:
         return

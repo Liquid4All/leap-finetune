@@ -54,6 +54,8 @@ OUTPUT_DIR="${OUTPUT_DIR:-/lambdafs/alay/test-results}"
 TMP_ROOT="${TMP_ROOT:-/lambdafs/alay/tmp}"
 PYTEST_ARGS="${PYTEST_ARGS:-tests/test_dense_e2e.py tests/test_moe_e2e.py tests/test_vlm_e2e.py --dense --moe --vlm}"
 EXTRA_SBATCH_DIRECTIVES="${EXTRA_SBATCH_DIRECTIVES:-}"
+VENV_ACTIVATE="${VIRTUAL_ENV:-${ROOT_DIR}/.venv}/bin/activate"
+ROOT_VENV_ACTIVATE="${ROOT_DIR}/.venv/bin/activate"
 
 mkdir -p "${SLURM_DIR}" "${ROOT_DIR}/logs" "${OUTPUT_DIR}" "${TMP_ROOT}"
 
@@ -85,11 +87,33 @@ EOF
 set -euo pipefail
 
 cd ${ROOT_DIR}
-source .venv/bin/activate
+VENV_ACTIVATE=${VENV_ACTIVATE}
+if [[ ! -f "\${VENV_ACTIVATE}" ]]; then
+  VENV_ACTIVATE=${ROOT_VENV_ACTIVATE}
+fi
+source "\${VENV_ACTIVATE}"
 
 export TMPDIR=${TMP_ROOT}/leap-e2e-\${SLURM_JOB_ID:-manual}
 mkdir -p "\${TMPDIR}"
+if python - <<'PY' >/dev/null 2>&1
+import sys
+import torch
+sys.exit(0 if getattr(torch.version, "hip", None) else 1)
+PY
+then
+  if [[ -n "\${ROCR_VISIBLE_DEVICES:-}" && -z "\${HIP_VISIBLE_DEVICES:-}" ]]; then
+    export HIP_VISIBLE_DEVICES="\${ROCR_VISIBLE_DEVICES}"
+  fi
+    unset ROCR_VISIBLE_DEVICES
+    unset CUDA_VISIBLE_DEVICES
+else
+    unset ROCR_VISIBLE_DEVICES
+    unset HIP_VISIBLE_DEVICES
+fi
+
 export RAY_TMPDIR=\${TMPDIR}/ray
+export TORCH_EXTENSIONS_DIR=\${TMPDIR}/torch_extensions
+export TRITON_CACHE_DIR=\${TMPDIR}/triton_cache
 export OUTPUT_DIR=${OUTPUT_DIR}
 export PYTHONUNBUFFERED=1
 

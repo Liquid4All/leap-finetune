@@ -4,6 +4,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+import leap_finetune.distribution.ray_runtime as ray_runtime
 from leap_finetune.distribution.ray_runtime import (
     _slurm_ray_temp_candidate,
     get_requested_ray_address,
@@ -85,6 +86,7 @@ def test_resolve_local_ray_num_cpus_uses_slurm_allocation(monkeypatch):
 
 
 def test_normalize_amd_visible_devices_prefers_hip(monkeypatch):
+    monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: True)
     monkeypatch.setenv("ROCR_VISIBLE_DEVICES", "3")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
@@ -97,6 +99,7 @@ def test_normalize_amd_visible_devices_prefers_hip(monkeypatch):
 
 
 def test_normalize_amd_visible_devices_drops_cuda_when_hip_is_set(monkeypatch):
+    monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: True)
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "2")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
@@ -104,6 +107,19 @@ def test_normalize_amd_visible_devices_drops_cuda_when_hip_is_set(monkeypatch):
 
     assert os.environ["HIP_VISIBLE_DEVICES"] == "2"
     assert "CUDA_VISIBLE_DEVICES" not in os.environ
+
+
+def test_normalize_amd_visible_devices_ignores_rocr_on_cuda(monkeypatch):
+    monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: False)
+    monkeypatch.setenv("ROCR_VISIBLE_DEVICES", "3")
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "2")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
+
+    normalize_amd_visible_devices()
+
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
+    assert "ROCR_VISIBLE_DEVICES" not in os.environ
+    assert "HIP_VISIBLE_DEVICES" not in os.environ
 
 
 def test_patch_ray_rocm_torch_device_helpers_for_single_visible_hip(monkeypatch):
@@ -122,6 +138,7 @@ def test_patch_ray_rocm_torch_device_helpers_for_single_visible_hip(monkeypatch)
     original_v2_get_devices_distributed = v2_train_loop_utils.get_devices_distributed
 
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "2")
+    monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: True)
     try:
         patch_ray_rocm_torch_device_helpers()
         assert getattr(torch_utils.get_devices, "_leap_rocm_patch", False)
@@ -145,6 +162,7 @@ def test_patch_ray_rocm_torch_device_helpers_ignores_multi_visible_hip(monkeypat
 
     original_torch_utils_get_devices = torch_utils.get_devices
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0,1,2,3")
+    monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: True)
 
     patch_ray_rocm_torch_device_helpers()
 
@@ -152,6 +170,7 @@ def test_patch_ray_rocm_torch_device_helpers_ignores_multi_visible_hip(monkeypat
 
 
 def test_ray_env_vars_passthrough_hip_visible_devices(monkeypatch, tmp_path):
+    monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: True)
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
     monkeypatch.setenv("ROCR_VISIBLE_DEVICES", "2")

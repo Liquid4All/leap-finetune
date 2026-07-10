@@ -53,23 +53,21 @@ CUDA / NVIDIA clusters use the default dependency groups:
 uv sync
 ```
 
-AMD / ROCm clusters should use the ROCm group instead:
+AMD / ROCm clusters use the ROCm project:
 
 ```bash
-uv sync --no-group cuda --group rocm
+uv sync --project envs/rocm
 ```
 
-Both profiles are lockfile-managed. CUDA is the default profile and pins
-`vllm==0.22.0`, which currently resolves to the matching Torch 2.11 / CUDA 13
-wheel stack. ROCm uses direct URLs from a validated vLLM ROCm wheel set for
-`vllm==0.22.0+rocm722` plus the matching `torch`, `torchvision`, `torchaudio`,
-`flash-attn`, and `triton` stack. Ray is pinned to `2.51.1` for both profiles.
-The pinned ROCm vLLM wheels are Python 3.12 Linux wheels, so use the repo's
-`.python-version` when creating AMD environments. After a ROCm sync, run
-commands through the activated `.venv`, repeat the ROCm group flags, or add
-`--no-sync` when you know the environment is current. Bare `uv run ...` uses
-the default dependency groups and can try to reconcile the environment back to
-CUDA.
+Both profiles are lockfile-managed but intentionally split. CUDA is the root
+project and pins `vllm==0.22.0`, which resolves to the matching Torch 2.11 /
+CUDA 13 wheel stack. ROCm lives under [`envs/rocm`](./envs/rocm/) and uses
+direct URLs from a validated vLLM ROCm wheel set for `vllm==0.22.0+rocm722`
+plus the matching `torch`, `torchvision`, `torchaudio`, `flash-attn`, and
+`triton` stack. Ray is pinned to `2.51.1` for both profiles. The pinned ROCm
+vLLM wheels are Python 3.12 Linux wheels, so use the repo's `.python-version`
+when creating AMD environments. Bare `uv run ...` uses the root CUDA profile;
+use `uv run --project envs/rocm ...` for ROCm commands.
 
 No environment variables are required for installation. On clusters where the
 default uv cache is slow, quota-limited, or backed by node-local scratch, you can
@@ -80,8 +78,8 @@ cache in the repo.
 source .venv/bin/activate
 leap-finetune job_configs/sft_example_with_slurm.yaml
 
-# or, without activation:
-uv run --no-group cuda --group rocm leap-finetune job_configs/sft_example_with_slurm.yaml
+# ROCm, without activation:
+uv run --project envs/rocm leap-finetune job_configs/sft_example_with_slurm.yaml
 ```
 
 ### FlashAttention 2 Validation
@@ -92,11 +90,11 @@ resolution and require FA2 at runtime:
 
 ```bash
 # CUDA FA2 validation
-uv sync --group flash-attn --no-build-package flash-attn
+uv sync --group flash-attn
 LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
 
 # ROCm FA2 validation
-uv sync --no-group cuda --group rocm --no-build-package flash-attn
+uv sync --project envs/rocm
 LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
 ```
 

@@ -139,15 +139,20 @@ def _render_export_block(is_multinode: bool) -> str:
     lines = [
         "export LEAP_FINETUNE_FROM_SLURM=1",
         "export PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}",
-        (
-            'if [[ -n "${ROCR_VISIBLE_DEVICES:-}" && '
-            '-z "${HIP_VISIBLE_DEVICES:-}" ]]; then'
-        ),
-        '  export HIP_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES}"',
-        "fi",
-        'if [[ -n "${HIP_VISIBLE_DEVICES:-}" ]]; then',
+        "if python - <<'PY' >/dev/null 2>&1",
+        "import sys",
+        "import torch",
+        "sys.exit(0 if getattr(torch.version, 'hip', None) else 1)",
+        "PY",
+        "then",
+        '  if [[ -n "${ROCR_VISIBLE_DEVICES:-}" && -z "${HIP_VISIBLE_DEVICES:-}" ]]; then',
+        '    export HIP_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES}"',
+        "  fi",
         "  unset ROCR_VISIBLE_DEVICES",
         "  unset CUDA_VISIBLE_DEVICES",
+        "else",
+        "  unset ROCR_VISIBLE_DEVICES",
+        "  unset HIP_VISIBLE_DEVICES",
         "fi",
     ]
 
@@ -178,6 +183,23 @@ def _render_export_block(is_multinode: bool) -> str:
             lines.append(f"export {key}={shlex.quote(value)}")
 
     return "\n".join(lines)
+
+
+def _render_venv_activation_block(project_root: pathlib.Path) -> str:
+    root_activate = project_root / ".venv" / "bin" / "activate"
+    active_venv = os.environ.get("VIRTUAL_ENV")
+    active_activate = (
+        pathlib.Path(active_venv) / "bin" / "activate" if active_venv else root_activate
+    )
+    return "\n".join(
+        [
+            f"VENV_ACTIVATE={shlex.quote(str(active_activate))}",
+            'if [[ ! -f "${VENV_ACTIVATE}" ]]; then',
+            f"  VENV_ACTIVATE={shlex.quote(str(root_activate))}",
+            "fi",
+            'source "${VENV_ACTIVATE}"',
+        ]
+    )
 
 
 def generate_slurm_script(
@@ -256,7 +278,7 @@ cd {project_root}
 
 set -euo pipefail
 
-source .venv/bin/activate
+{_render_venv_activation_block(project_root)}
 
 {setup_block}
 {_render_export_block(is_multinode=int(slurm_settings["nodes"]) > 1)}

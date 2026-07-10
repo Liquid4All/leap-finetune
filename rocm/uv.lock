@@ -1699,7 +1699,7 @@ wheels = [
 [[package]]
 name = "leap-finetune"
 version = "0.1.0"
-source = { editable = "../../" }
+source = { editable = "../" }
 dependencies = [
     { name = "accelerate", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "bitsandbytes", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
@@ -1791,7 +1791,7 @@ rocm = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "leap-finetune", editable = "../../" }]
+requires-dist = [{ name = "leap-finetune", editable = "../" }]
 
 [package.metadata.requires-dev]
 dev = [

@@ -17,10 +17,11 @@ uv run pytest tests/config tests/distribution tests/evaluation tests/rl tests/mo
 ```
 
 On AMD / ROCm environments, use the ROCm project so CUDA and ROCm locks remain
-separate:
+separate. Set this once in your shell, module, or direnv config:
 
 ```bash
-uv run --project envs/rocm python -m pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe
+export UV_PROJECT=rocm
+uv run python -m pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe
 ```
 
 ## GPU Smoke Tests
@@ -32,7 +33,7 @@ uv run pytest tests/e2e --dense --moe --vlm
 For ROCm:
 
 ```bash
-uv run --project envs/rocm python -m pytest tests/e2e --dense --moe --vlm
+UV_PROJECT=rocm uv run python -m pytest tests/e2e --dense --moe --vlm
 ```
 
 ## FA2 Validation
@@ -48,7 +49,7 @@ LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_lo
 For ROCm:
 
 ```bash
-uv sync --project envs/rocm
+UV_PROJECT=rocm uv sync
 LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
 ```
 

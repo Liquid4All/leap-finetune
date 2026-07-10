@@ -53,33 +53,48 @@ CUDA / NVIDIA clusters use the default dependency groups:
 uv sync
 ```
 
-AMD / ROCm clusters use the ROCm project:
+AMD / ROCm clusters use the ROCm project. For the cleanest repeated use, set
+the backend once in your shell, module, or direnv config:
 
 ```bash
-uv sync --project envs/rocm
+export UV_PROJECT=rocm
+uv sync
 ```
 
 Both profiles are lockfile-managed but intentionally split. CUDA is the root
-project and pins `vllm==0.22.0`, which resolves to the matching Torch 2.11 /
-CUDA 13 wheel stack. ROCm lives under [`envs/rocm`](./envs/rocm/) and uses
-direct URLs from a validated vLLM ROCm wheel set for `vllm==0.22.0+rocm722`
-plus the matching `torch`, `torchvision`, `torchaudio`, `flash-attn`, and
-`triton` stack. Ray is pinned to `2.51.1` for both profiles. The pinned ROCm
-vLLM wheels are Python 3.12 Linux wheels, so use the repo's `.python-version`
-when creating AMD environments. Bare `uv run ...` uses the root CUDA profile;
-use `uv run --project envs/rocm ...` for ROCm commands.
+project by default and pins `vllm==0.22.0`, which resolves to the matching Torch
+2.11 / CUDA 13 wheel stack. ROCm lives under [`rocm`](./rocm/) and uses direct
+URLs from a validated vLLM ROCm wheel set for `vllm==0.22.0+rocm722` plus the
+matching `torch`, `torchvision`, `torchaudio`, `flash-attn`, and `triton`
+stack. Ray is pinned to `2.51.1` for both profiles. The pinned ROCm vLLM wheels
+are Python 3.12 Linux wheels, so use the repo's `.python-version` when creating
+AMD environments.
 
-No environment variables are required for installation. On clusters where the
-default uv cache is slow, quota-limited, or backed by node-local scratch, you can
-prefix either install command with `UV_CACHE_DIR=.uv-cache` to keep uv's package
-cache in the repo.
+`UV_PROJECT` can also be used explicitly for either backend. Choose one:
+
+```bash
+export UV_PROJECT=cuda  # optional; bare root uv is already CUDA
+export UV_PROJECT=rocm
+```
+
+The top-level `cuda` path is an alias to the root project, so
+`UV_PROJECT=cuda` uses the same CUDA lock as bare `uv sync`.
+
+After `UV_PROJECT` is set by your cluster environment, normal commands stay the
+same: `uv sync`, `uv run ...`, and the SLURM helpers all use the selected
+backend project.
+
+No hardware-specific environment variables are required for installation. On
+clusters where the default uv cache is slow, quota-limited, or backed by
+node-local scratch, you can prefix either install command with
+`UV_CACHE_DIR=.uv-cache` to keep uv's package cache in the repo.
 
 ```bash
 source .venv/bin/activate
 leap-finetune job_configs/sft_example_with_slurm.yaml
 
-# ROCm, without activation:
-uv run --project envs/rocm leap-finetune job_configs/sft_example_with_slurm.yaml
+# ROCm, after `export UV_PROJECT=rocm`:
+uv run leap-finetune job_configs/sft_example_with_slurm.yaml
 ```
 
 ### FlashAttention 2 Validation
@@ -94,7 +109,7 @@ uv sync --group flash-attn
 LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
 
 # ROCm FA2 validation
-uv sync --project envs/rocm
+UV_PROJECT=rocm uv sync
 LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
 ```
 

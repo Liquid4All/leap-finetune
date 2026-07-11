@@ -10,7 +10,7 @@ dependencies = [
 [tool.uv]
 package = false
 no-build-isolation-package = ["flash-attn"]
-default-groups = ["dev", "rocm"]
+default-groups = ["dev", "rocm-core", "rocm-fa2", "rocm-vllm"]
 environments = [
     "python_version == '3.12' and sys_platform == 'linux'",
 ]
@@ -32,18 +32,22 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.11.13",
 ]
-rocm = [
+rocm-core = [
     # Direct URLs freeze the validated ROCm wheel set. The vLLM ROCm simple
     # index is mutable and can advertise a newer torch/aiter stack for the same
     # package names.
-    "amd-aiter @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/amd_aiter-0.1.13-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=72c6644dc895587b69d94ae3e94012c4506aa8f261adee2f8fb034360a2c7c73; sys_platform == 'linux'",
-    "amdsmi @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/amdsmi-26.2.2%2B671d39a71e-py3-none-any.whl#sha256=db08928ff31c7c92c5a8555c1bfd8851575c8fdb5bc9a540f910d58ba94b6f5d; sys_platform == 'linux'",
-    "flash-attn @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/flash_attn-2.8.3-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=72bf51493106a01ac85d96493bdef3637f099c607fe2a1326f86d7b8436c89cf; sys_platform == 'linux'",
-    "torch @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/torch-2.10.0%2Bgit8514f05-cp312-cp312-manylinux_2_35_x86_64.whl#sha256=12f34bcd752decca2d7a89066d8dd6725f283fa846eeae50edab8c596880c5fc; sys_platform == 'linux'",
-    "torchaudio @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/torchaudio-2.9.0%2Beaa9e4e-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=d15a3854246a552bdb0909aa5ee2f89cea076b0a8b17b1227d0d41d900cca1bb; sys_platform == 'linux'",
-    "torchvision @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/torchvision-0.24.1%2Bd801a34-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=4793e928854e3372b97c03efd08e2ef3de39e83dcd322432006ea3bdb355b973; sys_platform == 'linux'",
-    "triton @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/triton-3.6.0-cp312-cp312-manylinux_2_35_x86_64.whl#sha256=694fd4bf8eea55c01ad8ae440fd524b6c1e34545f4539dee29eae952b5309d40; sys_platform == 'linux'",
-    "triton-kernels @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/triton_kernels-1.0.0-py3-none-any.whl#sha256=e986910a20025c26949f9ce2bd9985bc2fcf070b2c680e972a21bb5a0fce1032; sys_platform == 'linux'",
+    "torch @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/torch-2.10.0%2Bgit8514f05-cp312-cp312-manylinux_2_35_x86_64.whl#sha256=12f34bcd752decca2d7a89066d8dd6725f283fa846eeae50edab8c596880c5fc; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchaudio @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/torchaudio-2.9.0%2Beaa9e4e-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=d15a3854246a552bdb0909aa5ee2f89cea076b0a8b17b1227d0d41d900cca1bb; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchvision @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/torchvision-0.24.1%2Bd801a34-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=4793e928854e3372b97c03efd08e2ef3de39e83dcd322432006ea3bdb355b973; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "triton @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/triton-3.6.0-cp312-cp312-manylinux_2_35_x86_64.whl#sha256=694fd4bf8eea55c01ad8ae440fd524b6c1e34545f4539dee29eae952b5309d40; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "triton-kernels @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/triton_kernels-1.0.0-py3-none-any.whl#sha256=e986910a20025c26949f9ce2bd9985bc2fcf070b2c680e972a21bb5a0fce1032; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     "liger-kernel>=0.6.2; sys_platform == 'linux'",
-    "vllm @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/vllm-0.22.0%2Brocm722-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=69fec9238c0d3e0f6aae34e5a7405477eaf7ffc5fe37ed6b3edde5567d17fbb6; sys_platform == 'linux'",
+]
+rocm-fa2 = [
+    "flash-attn @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/flash_attn-2.8.3-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=72bf51493106a01ac85d96493bdef3637f099c607fe2a1326f86d7b8436c89cf; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+rocm-vllm = [
+    "amd-aiter @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/amd_aiter-0.1.13-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=72c6644dc895587b69d94ae3e94012c4506aa8f261adee2f8fb034360a2c7c73; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "amdsmi @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/amdsmi-26.2.2%2B671d39a71e-py3-none-any.whl#sha256=db08928ff31c7c92c5a8555c1bfd8851575c8fdb5bc9a540f910d58ba94b6f5d; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "vllm @ https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/vllm-0.22.0%2Brocm722-cp312-cp312-manylinux_2_34_x86_64.whl#sha256=69fec9238c0d3e0f6aae34e5a7405477eaf7ffc5fe37ed6b3edde5567d17fbb6; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]

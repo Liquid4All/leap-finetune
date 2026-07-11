@@ -38,19 +38,19 @@ UV_PROJECT=rocm uv run python -m pytest tests/e2e --dense --moe --vlm
 
 ## FA2 Validation
 
-Normal tests may fall back to SDPA. FA2 profile validation should install
-`flash-attn` from a wheel and require runtime selection:
+Normal tests may fall back to SDPA. FA2 validation should inspect the active
+environment and can require runtime selection:
 
 ```bash
-uv sync --group flash-attn
-LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
+uv sync
+uv run leap-finetune env fa2-status --require
 ```
 
 For ROCm:
 
 ```bash
 UV_PROJECT=rocm uv sync
-LEAP_REQUIRE_FLASH_ATTN_2=1 python -c 'from leap_finetune.checkpointing.model_loading import _get_attn_implementation; assert _get_attn_implementation() == "flash_attention_2"'
+UV_PROJECT=rocm uv run leap-finetune env fa2-status --require
 ```
 
 ## SLURM

@@ -1,6 +1,7 @@
 import logging
 import os
 import pathlib
+import warnings
 
 import torch
 from transformers import (
@@ -22,6 +23,7 @@ _LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH = (
     _REPO_ROOT / "job_configs" / "chat_templates" / "lfm2_5_chat_template.jinja"
 )
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_ATTN_FALLBACK_WARNING_EMITTED = False
 
 
 def _get_attn_implementation() -> str:
@@ -34,12 +36,22 @@ def _get_attn_implementation() -> str:
             f"LEAP_REQUIRE_FLASH_ATTN_2 is set, but flash-attn is not usable: {reason}"
         )
 
-    logger.warning("flash-attn not available (%s), falling back to sdpa", reason)
+    _warn_flash_attn_2_fallback(reason)
     return "sdpa"
 
 
 def _requires_flash_attn_2() -> bool:
     return os.getenv("LEAP_REQUIRE_FLASH_ATTN_2", "").lower() in _TRUE_VALUES
+
+
+def _warn_flash_attn_2_fallback(reason: str) -> None:
+    global _ATTN_FALLBACK_WARNING_EMITTED
+    if _ATTN_FALLBACK_WARNING_EMITTED:
+        return
+    _ATTN_FALLBACK_WARNING_EMITTED = True
+    message = f"FlashAttention 2 not available ({reason}); falling back to SDPA."
+    logger.warning(message)
+    warnings.warn(message, RuntimeWarning, stacklevel=2)
 
 
 def _flash_attn_2_status() -> tuple[bool, str]:

@@ -48,9 +48,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv]
-# External flash-attn is optional because vLLM pins the CUDA stack tightly.
+# The default CUDA profile installs a pinned FA2 wheel. Model loading still
+# probes the import at runtime and falls back to SDPA if FA2 is not usable.
 no-build-isolation-package = ["flash-attn"]
-default-groups = ["dev", "cuda"]
+default-groups = ["dev", "cuda", "flash-attn"]
 environments = [
     "python_version == '3.12' and sys_platform == 'darwin'",
     "python_version == '3.12' and sys_platform == 'linux'",
@@ -86,8 +87,8 @@ exclude = ["src/leap_finetune/quantization/gguf"]
 [dependency-groups]
 cuda = [
     "liger-kernel>=0.6.2; sys_platform == 'linux'",
-    # Keep CUDA vLLM pinned. External flash-attn remains opt-in below; vLLM
-    # uses its own kernels for GRPO in the default CUDA install path.
+    # Keep CUDA vLLM pinned. FA2 is installed by default through the separate
+    # flash-attn group so it can be disabled with `--no-group flash-attn`.
     "vllm==0.22.0; sys_platform == 'linux'",
 ]
 dev = [
@@ -96,7 +97,7 @@ dev = [
     "ruff>=0.11.13",
 ]
 flash-attn = [
-    # Optional HF FA2 support for the default CUDA 13 / Torch 2.11 stack.
+    # HF FA2 support for the default CUDA 13 / Torch 2.11 stack.
     # Model loading still probes the import at runtime and falls back to SDPA.
-    "flash-attn @ https://github.com/adithyaxx/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu13torch2.11cxx11abiTRUE-cp312-cp312-linux_x86_64.whl#sha256=eea423825f3e12818b98b2078e2cb5ce6fe6b73d22612316d2a55fad4701938f; sys_platform == 'linux'",
+    "flash-attn @ https://github.com/adithyaxx/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu13torch2.11cxx11abiTRUE-cp312-cp312-linux_x86_64.whl#sha256=eea423825f3e12818b98b2078e2cb5ce6fe6b73d22612316d2a55fad4701938f; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]

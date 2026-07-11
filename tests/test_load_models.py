@@ -35,8 +35,10 @@ class DummyModel:
 def test_sdpa_when_flash_attn_metadata_missing(monkeypatch):
     monkeypatch.delenv("LEAP_REQUIRE_FLASH_ATTN_2", raising=False)
     monkeypatch.setattr(model_loading, "is_flash_attn_2_available", lambda: False)
+    monkeypatch.setattr(model_loading, "_ATTN_FALLBACK_WARNING_EMITTED", False)
 
-    assert model_loading._get_attn_implementation() == "sdpa"
+    with pytest.warns(RuntimeWarning, match="falling back to SDPA"):
+        assert model_loading._get_attn_implementation() == "sdpa"
 
 
 def test_sdpa_when_flash_attn_import_fails(monkeypatch):
@@ -50,8 +52,10 @@ def test_sdpa_when_flash_attn_import_fails(monkeypatch):
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(model_loading, "_ATTN_FALLBACK_WARNING_EMITTED", False)
 
-    assert model_loading._get_attn_implementation() == "sdpa"
+    with pytest.warns(RuntimeWarning, match="broken extension"):
+        assert model_loading._get_attn_implementation() == "sdpa"
 
 
 def test_required_flash_attn_fails_when_metadata_missing(monkeypatch):

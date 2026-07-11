@@ -8,9 +8,9 @@ from typing import cast
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import PreTrainedTokenizerBase
 
-from leap_finetune.distribution.ray_runtime import normalize_amd_visible_devices
+from leap_finetune.distribution.ray_runtime import normalize_visible_devices
 
-normalize_amd_visible_devices()
+normalize_visible_devices()
 
 from trl import GRPOConfig, GRPOTrainer
 

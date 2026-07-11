@@ -4,11 +4,11 @@ from types import MappingProxyType
 from typing import Callable
 
 from leap_finetune.distribution.ray_runtime import (
-    normalize_amd_visible_devices,
+    normalize_visible_devices,
     patch_ray_rocm_torch_device_helpers,
 )
 
-normalize_amd_visible_devices()
+normalize_visible_devices()
 patch_ray_rocm_torch_device_helpers()
 
 _TRAINING_LOOP_TARGETS = MappingProxyType(

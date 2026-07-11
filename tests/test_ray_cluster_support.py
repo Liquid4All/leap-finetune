@@ -5,21 +5,23 @@ import sys
 from types import SimpleNamespace
 
 import leap_finetune.distribution.ray_runtime as ray_runtime
+from leap_finetune.checkpointing.callback import (
+    LEAP_RAY_FINAL_METRICS_FILE,
+    hydrate_missing_ray_metrics,
+)
 from leap_finetune.distribution.ray_runtime import (
     _slurm_ray_temp_candidate,
     get_requested_ray_address,
     get_ray_env_vars,
-    normalize_amd_visible_devices,
+    is_single_visible_rocm_worker,
+    normalize_uv_project_path,
+    normalize_visible_devices,
     patch_ray_rocm_torch_device_helpers,
     resolve_local_ray_num_cpus,
     resolve_num_workers,
     select_ray_temp_dir,
 )
 from leap_finetune.distribution.backends.slurm import generate_slurm_script
-from leap_finetune.distribution.ray_result_compat import (
-    LEAP_RAY_FINAL_METRICS_FILE,
-    hydrate_missing_ray_metrics,
-)
 from leap_finetune import LEAP_FINETUNE_DIR
 
 
@@ -85,41 +87,54 @@ def test_resolve_local_ray_num_cpus_uses_slurm_allocation(monkeypatch):
     assert resolve_local_ray_num_cpus() == 56
 
 
-def test_normalize_amd_visible_devices_prefers_hip(monkeypatch):
+def test_normalize_visible_devices_prefers_hip_on_rocm(monkeypatch):
     monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: True)
     monkeypatch.setenv("ROCR_VISIBLE_DEVICES", "3")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
 
-    normalize_amd_visible_devices()
+    normalize_visible_devices()
 
     assert os.environ["HIP_VISIBLE_DEVICES"] == "3"
     assert "ROCR_VISIBLE_DEVICES" not in os.environ
     assert "CUDA_VISIBLE_DEVICES" not in os.environ
 
 
-def test_normalize_amd_visible_devices_drops_cuda_when_hip_is_set(monkeypatch):
+def test_normalize_visible_devices_drops_cuda_when_hip_is_set_on_rocm(monkeypatch):
     monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: True)
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "2")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
-    normalize_amd_visible_devices()
+    normalize_visible_devices()
 
     assert os.environ["HIP_VISIBLE_DEVICES"] == "2"
     assert "CUDA_VISIBLE_DEVICES" not in os.environ
 
 
-def test_normalize_amd_visible_devices_ignores_rocr_on_cuda(monkeypatch):
+def test_normalize_visible_devices_ignores_rocr_on_cuda(monkeypatch):
     monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: False)
     monkeypatch.setenv("ROCR_VISIBLE_DEVICES", "3")
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "2")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
 
-    normalize_amd_visible_devices()
+    normalize_visible_devices()
 
     assert os.environ["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
     assert "ROCR_VISIBLE_DEVICES" not in os.environ
     assert "HIP_VISIBLE_DEVICES" not in os.environ
+
+
+def test_normalize_uv_project_path_makes_relative_project_absolute(
+    monkeypatch, tmp_path
+):
+    project_dir = tmp_path / "rocm"
+    project_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("UV_PROJECT", "rocm")
+
+    normalize_uv_project_path()
+
+    assert os.environ["UV_PROJECT"] == str(project_dir)
 
 
 def test_patch_ray_rocm_torch_device_helpers_for_single_visible_hip(monkeypatch):
@@ -155,6 +170,15 @@ def test_patch_ray_rocm_torch_device_helpers_for_single_visible_hip(monkeypatch)
         v2_train_loop_utils.get_devices_distributed = (
             original_v2_get_devices_distributed
         )
+
+
+def test_is_single_visible_rocm_worker(monkeypatch):
+    monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: True)
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "2")
+    assert is_single_visible_rocm_worker()
+
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0,1")
+    assert not is_single_visible_rocm_worker()
 
 
 def test_patch_ray_rocm_torch_device_helpers_ignores_multi_visible_hip(monkeypatch):
@@ -202,7 +226,7 @@ def test_grpo_modules_normalize_rocm_before_trl_import():
     training_dir = Path(LEAP_FINETUNE_DIR) / "src" / "leap_finetune" / "training"
     for module in ("grpo.py", "vlm_grpo.py"):
         source = (training_dir / module).read_text()
-        assert source.index("normalize_amd_visible_devices()") < source.index(
+        assert source.index("normalize_visible_devices()") < source.index(
             "from trl import"
         )
 

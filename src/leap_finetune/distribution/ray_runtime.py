@@ -13,8 +13,8 @@ def _is_rocm_torch() -> bool:
     return bool(getattr(torch.version, "hip", None))
 
 
-def normalize_amd_visible_devices() -> None:
-    """Make ROCm GPU visibility compatible with Ray's AMD accelerator manager."""
+def normalize_visible_devices() -> None:
+    """Normalize accelerator visibility for the active Torch backend."""
     if not _is_rocm_torch():
         # Some mixed clusters expose ROCR_VISIBLE_DEVICES even for CUDA jobs.
         # Do not let that make Ray workers look like ROCm processes.
@@ -30,12 +30,29 @@ def normalize_amd_visible_devices() -> None:
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 
 
+def normalize_uv_project_path(base_dir: str | os.PathLike | None = None) -> None:
+    """Make UV_PROJECT absolute before Ray changes process working dirs."""
+    uv_project = os.environ.get("UV_PROJECT")
+    if not uv_project:
+        return
+
+    project_path = Path(uv_project).expanduser()
+    if project_path.is_absolute():
+        return
+
+    base_path = Path(base_dir) if base_dir is not None else Path.cwd()
+    absolute_path = (base_path / project_path).resolve()
+    if absolute_path.exists():
+        os.environ["UV_PROJECT"] = str(absolute_path)
+
+
 def worker_process_setup_hook() -> None:
     """Configure logging and cache directories when Ray starts a worker process."""
     import logging
     import warnings
 
-    normalize_amd_visible_devices()
+    normalize_uv_project_path()
+    normalize_visible_devices()
     patch_ray_rocm_torch_device_helpers()
 
     logging.getLogger("ray.data").setLevel(logging.ERROR)
@@ -61,11 +78,7 @@ def patch_ray_rocm_torch_device_helpers() -> None:
     if not _is_rocm_torch():
         return
 
-    hip_visible = os.environ.get("HIP_VISIBLE_DEVICES")
-    if not hip_visible:
-        return
-    visible_ids = [token for token in hip_visible.split(",") if token]
-    if len(visible_ids) != 1:
+    if not is_single_visible_rocm_worker():
         return
 
     import torch
@@ -117,7 +130,8 @@ def patch_ray_rocm_torch_device_helpers() -> None:
 
 def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
     """Environment variables passed to Ray workers."""
-    normalize_amd_visible_devices()
+    normalize_uv_project_path()
+    normalize_visible_devices()
 
     torch_extensions_dir = os.path.join(ray_temp_dir, "torch_extensions")
     triton_cache_dir = os.path.join(ray_temp_dir, "triton_cache")
@@ -163,6 +177,16 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         env_vars["WANDB_MODE"] = wandb_mode if wandb_mode else "offline"
 
     return env_vars
+
+
+def is_single_visible_rocm_worker() -> bool:
+    """Return true when a ROCm worker process can address only cuda:0."""
+    if not _is_rocm_torch():
+        return False
+    hip_visible = os.environ.get("HIP_VISIBLE_DEVICES")
+    if not hip_visible:
+        return False
+    return len([token for token in hip_visible.split(",") if token]) == 1
 
 
 def select_ray_temp_dir(preferred: str | None = None) -> str:

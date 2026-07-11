@@ -12,6 +12,7 @@ from torch import cuda
 from leap_finetune import RUNTIME_DIR
 from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 from leap_finetune.checkpointing.model_loading import _resolve_model_id, load_tokenizer
+from leap_finetune.checkpointing.callback import hydrate_missing_ray_metrics
 from leap_finetune.data_loading.dataset_loader import DatasetLoader
 from leap_finetune.data_loading.ray_data_utils import create_ray_datasets
 from leap_finetune.distribution.data_sharding import ExpertParallelDataConfig
@@ -22,7 +23,8 @@ from leap_finetune.distribution.ray_runtime import (
     build_scaling_config,
     get_ray_env_vars,
     get_requested_ray_address,
-    normalize_amd_visible_devices,
+    normalize_uv_project_path,
+    normalize_visible_devices,
     resolve_local_ray_num_cpus,
     resolve_local_object_store_memory,
     resolve_num_workers,
@@ -30,7 +32,6 @@ from leap_finetune.distribution.ray_runtime import (
     select_ray_temp_dir,
     worker_process_setup_hook,
 )
-from leap_finetune.distribution.ray_result_compat import hydrate_missing_ray_metrics
 from leap_finetune.distribution.vllm_server import (
     launch_vllm_server,
     resolve_server_host,
@@ -60,11 +61,12 @@ def ray_trainer(job_config: dict) -> None:
     output_dir = job_config["training_config"]["output_dir"]
 
     set_seed(42)
+    normalize_uv_project_path()
 
     ray_config = job_config.get("ray_config")
     ray_address = get_requested_ray_address(ray_config)
     connect_existing_cluster = ray_address is not None
-    normalize_amd_visible_devices()
+    normalize_visible_devices()
     local_num_gpus = cuda.device_count()
     training_config = job_config["training_config"]
     is_grpo = training_type in ("grpo", "vlm_grpo")
@@ -149,7 +151,7 @@ def ray_trainer(job_config: dict) -> None:
         export_judge_runtime_config(None)
 
     if not ray.is_initialized():
-        normalize_amd_visible_devices()
+        normalize_visible_devices()
         ray_temp_dir = select_ray_temp_dir(os.path.expanduser("~/tmp-ray"))
         runtime_env = RuntimeEnv(
             working_dir=str(RUNTIME_DIR),

@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from ray import train
 from transformers import TrainingArguments
@@ -10,14 +11,26 @@ from leap_finetune.checkpointing.paths import (
     current_checkpoint_output_dir,
     rename_standard_checkpoint,
 )
-from leap_finetune.distribution.ray_result_compat import (
-    LEAP_RAY_FINAL_METRICS_FILE,
-    json_default,
-)
+
+LEAP_RAY_FINAL_METRICS_FILE = ".leap_ray_final_metrics.json"
+
+
+def _json_default(value: Any) -> Any:
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:
+            pass
+    return str(value)
 
 
 def persist_rank_zero_metrics(output_dir: str | os.PathLike, metrics: dict) -> None:
-    """Persist latest callback metrics for Ray 2.51 Train V2 result hydration."""
+    """Persist final metrics for Ray Train results that omit metrics."""
     try:
         if train.get_context().get_world_rank() != 0:
             return
@@ -28,10 +41,25 @@ def persist_rank_zero_metrics(output_dir: str | os.PathLike, metrics: dict) -> N
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = metrics_path.with_suffix(f"{metrics_path.suffix}.tmp")
     tmp_path.write_text(
-        json.dumps(metrics, default=json_default, sort_keys=True),
+        json.dumps(metrics, default=_json_default, sort_keys=True),
         encoding="utf-8",
     )
     os.replace(tmp_path, metrics_path)
+
+
+def hydrate_missing_ray_metrics(result, output_dir: str):
+    """Fill Ray Train results from callback metrics when Ray omits them."""
+    if result is None or getattr(result, "metrics", None) is not None:
+        return result
+
+    metrics_path = Path(output_dir) / LEAP_RAY_FINAL_METRICS_FILE
+    if not metrics_path.exists():
+        return result
+
+    with metrics_path.open(encoding="utf-8") as f:
+        result.metrics = json.load(f)
+
+    return result
 
 
 def report_ray_metrics(metrics: dict, output_dir: str | os.PathLike) -> None:

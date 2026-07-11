@@ -38,11 +38,6 @@ def _get_attn_implementation() -> str:
     return "sdpa"
 
 
-def _is_flash_attn_2_usable() -> bool:
-    usable, _ = _flash_attn_2_status()
-    return usable
-
-
 def _requires_flash_attn_2() -> bool:
     return os.getenv("LEAP_REQUIRE_FLASH_ATTN_2", "").lower() in _TRUE_VALUES
 

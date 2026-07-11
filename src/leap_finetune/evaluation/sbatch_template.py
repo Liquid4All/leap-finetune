@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 import pathlib
 import shlex
 from dataclasses import dataclass
 
 from leap_finetune import LEAP_FINETUNE_DIR
+from leap_finetune.distribution.backends.slurm import render_venv_activation_block
 
 # ==== Sidecar Sbatch Rendering ====
 
@@ -15,23 +15,6 @@ class SidecarSubmission:
     script_path: pathlib.Path
     log_out: pathlib.Path
     log_err: pathlib.Path
-
-
-def _render_venv_activation_block() -> str:
-    root_activate = LEAP_FINETUNE_DIR / ".venv" / "bin" / "activate"
-    active_venv = os.environ.get("VIRTUAL_ENV")
-    active_activate = (
-        pathlib.Path(active_venv) / "bin" / "activate" if active_venv else root_activate
-    )
-    return "\n".join(
-        [
-            f"VENV_ACTIVATE={shlex.quote(str(active_activate))}",
-            'if [[ ! -f "${VENV_ACTIVATE}" ]]; then',
-            f"  VENV_ACTIVATE={shlex.quote(str(root_activate))}",
-            "fi",
-            'source "${VENV_ACTIVATE}"',
-        ]
-    )
 
 
 def render_sbatch_script(
@@ -137,7 +120,7 @@ if [ -n "${{LEAP_CUDA_MODULE:-}}" ] && command -v module >/dev/null 2>&1; then
     module load "$LEAP_CUDA_MODULE" 2>/dev/null || true
 fi
 
-{_render_venv_activation_block()}
+{render_venv_activation_block(LEAP_FINETUNE_DIR)}
 
 # User-level secrets (WANDB_API_KEY, HF_TOKEN, HF_HOME, ...).
 if [ -f "$HOME/.env" ]; then

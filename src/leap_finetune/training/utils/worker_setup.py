@@ -6,6 +6,7 @@ from ray.train.torch import get_device as get_ray_torch_device
 
 from leap_finetune.data_loading.ray_data_utils import ray_dataset_to_hf
 from leap_finetune.checkpointing.model_loading import load_model
+from leap_finetune.distribution.ray_runtime import is_single_visible_rocm_worker
 from leap_finetune.training.utils.logging import init_tracker, is_rank_zero
 
 
@@ -24,7 +25,7 @@ def _pin_ray_worker_cuda_device() -> None:
     if not torch.cuda.is_available():
         return
 
-    if _is_single_visible_rocm_worker():
+    if is_single_visible_rocm_worker():
         os.environ["LOCAL_RANK"] = "0"
         os.environ["ACCELERATE_TORCH_DEVICE"] = "cuda:0"
         torch.cuda.set_device(0)
@@ -35,13 +36,6 @@ def _pin_ray_worker_cuda_device() -> None:
         return
 
     torch.cuda.set_device(worker_device)
-
-
-def _is_single_visible_rocm_worker() -> bool:
-    hip_visible = os.environ.get("HIP_VISIBLE_DEVICES")
-    if not hip_visible:
-        return False
-    return len([token for token in hip_visible.split(",") if token]) == 1
 
 
 def setup_training_worker() -> None:

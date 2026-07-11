@@ -185,7 +185,8 @@ def _render_export_block(is_multinode: bool) -> str:
     return "\n".join(lines)
 
 
-def _render_venv_activation_block(project_root: pathlib.Path) -> str:
+def render_venv_activation_block(project_root: pathlib.Path) -> str:
+    """Render shell that activates the current backend venv when available."""
     root_activate = project_root / ".venv" / "bin" / "activate"
     active_venv = os.environ.get("VIRTUAL_ENV")
     active_activate = (
@@ -278,7 +279,7 @@ cd {project_root}
 
 set -euo pipefail
 
-{_render_venv_activation_block(project_root)}
+{render_venv_activation_block(project_root)}
 
 {setup_block}
 {_render_export_block(is_multinode=int(slurm_settings["nodes"]) > 1)}

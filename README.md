@@ -55,14 +55,29 @@ CUDA / NVIDIA clusters use the root project and default dependency groups:
 uv sync
 ```
 
-AMD / ROCm clusters use the ROCm project. The environment variable is
-`UV_PROJECT`, not `UV_EXPORT`. For repeated use, set it once in your shell,
+AMD / ROCm clusters use the ROCm project. Set `UV_PROJECT` once in your shell,
 module, or direnv config:
 
 ```bash
 export UV_PROJECT=rocm
 uv sync
 ```
+
+After `UV_PROJECT` is set, normal commands stay the same: `uv sync`,
+`uv run ...`, and the SLURM helpers all use the selected backend project.
+
+```bash
+source .venv/bin/activate
+leap-finetune job_configs/sft_example_with_slurm.yaml
+
+# ROCm, after `export UV_PROJECT=rocm`:
+uv run leap-finetune job_configs/sft_example_with_slurm.yaml
+```
+
+<details>
+<summary>Backend install details</summary>
+
+The environment variable is `UV_PROJECT`, not `UV_EXPORT`.
 
 The default install paths both try pinned accelerator wheels:
 
@@ -76,7 +91,7 @@ Ray is pinned to `2.51.1` for both profiles. The pinned accelerator wheels are
 Python 3.12 Linux x86_64 wheels, so use the repo's `.python-version` when
 creating GPU environments.
 
-`UV_PROJECT` can also be used explicitly for either backend. Choose one:
+`UV_PROJECT` can also be used explicitly for either backend:
 
 ```bash
 export UV_PROJECT=cuda  # optional; bare root uv is already CUDA
@@ -86,30 +101,18 @@ export UV_PROJECT=rocm
 The top-level `cuda` path is an alias to the root project, so
 `UV_PROJECT=cuda` uses the same CUDA lock as bare `uv sync`.
 
-After `UV_PROJECT` is set by your cluster environment, normal commands stay the
-same: `uv sync`, `uv run ...`, and the SLURM helpers all use the selected
-backend project.
-
 No hardware-specific environment variables are required for installation. On
 clusters where the default uv cache is slow, quota-limited, or backed by
 node-local scratch, you can prefix either install command with
 `UV_CACHE_DIR=.uv-cache` to keep uv's package cache in the repo.
 
-```bash
-source .venv/bin/activate
-leap-finetune job_configs/sft_example_with_slurm.yaml
-
-# ROCm, after `export UV_PROJECT=rocm`:
-uv run leap-finetune job_configs/sft_example_with_slurm.yaml
-```
+</details>
 
 ### FlashAttention 2
 
-The default CUDA and ROCm install paths try to install pinned FA2 wheels. If a
-pinned wheel cannot be resolved or installed, `uv sync` fails at install time;
-use the no-FA2 install path below. If FA2 installs but does not import or cannot
-be selected at runtime, training emits an explicit warning and falls back to
-SDPA:
+The default CUDA and ROCm install paths try to install pinned FA2 wheels. If FA2
+installs but does not import or cannot be selected at runtime, training emits an
+explicit warning and falls back to SDPA:
 
 ```text
 FlashAttention 2 not available (...); falling back to SDPA.
@@ -132,7 +135,11 @@ uv run leap-finetune env fa2-status --require
 CUDA/HIP version, accelerator visibility, installed `flash-attn` version,
 selected attention implementation, and the reason FA2 is or is not usable.
 
-To install without FA2 first, then repair FA2 separately:
+<details>
+<summary>Install without FA2 or repair FA2 separately</summary>
+
+If a pinned FA2 wheel cannot be resolved or installed, `uv sync` fails at install
+time. Install without the pinned FA2 group first, then repair FA2 separately:
 
 ```bash
 # CUDA without pinned FA2
@@ -162,6 +169,8 @@ ROCm GRPO/vLLM support requires the full `rocm-vllm` profile and therefore a
 compatible ROCm FA2 stack. If that stack cannot resolve on a target cluster, use
 the SDPA fallback for non-vLLM training until a matching vLLM/FA2 wheel set is
 available.
+
+</details>
 
 ## Quickstart
 

@@ -1,4 +1,5 @@
 import logging
+import os
 import socket
 from functools import lru_cache
 
@@ -15,6 +16,7 @@ from leap_finetune.distribution.rank_groups import (
 logger = logging.getLogger(__name__)
 
 CP_CONV_LEFT_HALO = 2
+ALLOW_SDPA_CP_FALLBACK_ENV = "LEAP_CP_ALLOW_SDPA_FALLBACK"
 
 
 def dist_barrier(group: dist.ProcessGroup | None = None) -> None:
@@ -195,11 +197,17 @@ def _get_flash_attn_func():
         from flash_attn import flash_attn_func
     except Exception as exc:
         logger.warning(
-            "flash-attn failed to import (%s); using torch SDPA for CP attention",
+            "flash-attn failed to import (%s); CP attention requires flash-attn "
+            "unless %s=1 is set for debugging",
             exc,
+            ALLOW_SDPA_CP_FALLBACK_ENV,
         )
         return None
     return flash_attn_func
+
+
+def _allow_torch_sdpa_cp_fallback() -> bool:
+    return os.environ.get(ALLOW_SDPA_CP_FALLBACK_ENV) == "1"
 
 
 def _torch_lower_right_sdpa(
@@ -231,7 +239,12 @@ def _cp_attention(
     flash_attn_func = _get_flash_attn_func()
     if flash_attn_func is not None:
         return flash_attn_func(q, k, v, causal=True)
-    return _torch_lower_right_sdpa(q, k, v)
+    if _allow_torch_sdpa_cp_fallback():
+        return _torch_lower_right_sdpa(q, k, v)
+    raise RuntimeError(
+        "Context parallel attention requires a working flash-attn install. "
+        f"Set {ALLOW_SDPA_CP_FALLBACK_ENV}=1 only for local/debug tests."
+    )
 
 
 def prefix_gather_attention(
@@ -773,8 +786,8 @@ def validate_cp_config(
 
     if cp_size > 1 and not _cp_attention_backend_available():
         raise RuntimeError(
-            "Context parallelism requires either usable flash-attn or "
-            "torch.nn.attention.bias.causal_lower_right SDPA support."
+            "Context parallelism requires usable flash-attn. "
+            f"Set {ALLOW_SDPA_CP_FALLBACK_ENV}=1 only for local/debug tests."
         )
 
     # Batch splitting pads sequence-like tensors to a CP-compatible multiple at runtime,
@@ -790,6 +803,8 @@ def validate_cp_config(
 def _cp_attention_backend_available() -> bool:
     if _get_flash_attn_func() is not None:
         return True
+    if not _allow_torch_sdpa_cp_fallback():
+        return False
     try:
         from torch.nn.attention.bias import causal_lower_right  # noqa: F401
     except Exception:

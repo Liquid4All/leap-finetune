@@ -106,9 +106,10 @@ class LFMMoeSFTTrainer(
 
     def get_train_dataloader(self):
         sampler_generator = None
-        if self.cp_config is not None and self.cp_config.get("cp_size", 1) > 1:
+        cp_config = getattr(self, "cp_config", None)
+        if cp_config is not None and cp_config.get("cp_size", 1) > 1:
             sampler_generator = torch.Generator().manual_seed(
-                42 + int(self.cp_config.get("dp_rank", 0))
+                42 + int(cp_config.get("dp_rank", 0))
             )
         elif self.ep_config is not None:
             sampler_generator = torch.Generator().manual_seed(

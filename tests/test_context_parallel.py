@@ -68,7 +68,28 @@ def test_split_batch_for_cp_preserves_local_padding_mask_copy():
 
 
 def test_validate_cp_config_allows_non_divisible_max_length_with_runtime_padding():
-    with patch("transformers.utils.is_flash_attn_2_available", return_value=True):
+    with patch(
+        "leap_finetune.distribution.context_parallel._get_flash_attn_func",
+        return_value=object(),
+    ):
+        validate_cp_config(cp_size=2, max_length=7, world_size=4)
+
+
+def test_validate_cp_config_requires_flash_attn_by_default():
+    with patch(
+        "leap_finetune.distribution.context_parallel._get_flash_attn_func",
+        return_value=None,
+    ):
+        with pytest.raises(RuntimeError, match="requires usable flash-attn"):
+            validate_cp_config(cp_size=2, max_length=7, world_size=4)
+
+
+def test_validate_cp_config_allows_sdpa_debug_fallback(monkeypatch):
+    monkeypatch.setenv("LEAP_CP_ALLOW_SDPA_FALLBACK", "1")
+    with patch(
+        "leap_finetune.distribution.context_parallel._get_flash_attn_func",
+        return_value=None,
+    ):
         validate_cp_config(cp_size=2, max_length=7, world_size=4)
 
 
@@ -172,7 +193,22 @@ def test_prefix_gather_attention_uses_contiguous_visible_prefix(monkeypatch):
     assert captured["v_shape"] == (1, 6, 2, 4)
 
 
+def test_prefix_gather_attention_requires_flash_attn_by_default(monkeypatch):
+    monkeypatch.setattr(
+        "leap_finetune.distribution.context_parallel._get_flash_attn_func",
+        lambda: None,
+    )
+
+    q = torch.randn(1, 2, 2, 4)
+    k = torch.randn(1, 2, 2, 4)
+    v = torch.randn(1, 2, 2, 4)
+
+    with pytest.raises(RuntimeError, match="requires a working flash-attn"):
+        prefix_gather_attention(q, k, v, cp_group="group", cp_rank=0, cp_size=1)
+
+
 def test_prefix_gather_attention_falls_back_to_torch_lower_right_sdpa(monkeypatch):
+    monkeypatch.setenv("LEAP_CP_ALLOW_SDPA_FALLBACK", "1")
     monkeypatch.setattr(
         "leap_finetune.distribution.context_parallel._get_flash_attn_func",
         lambda: None,

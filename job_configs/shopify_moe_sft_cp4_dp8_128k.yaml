@@ -1,0 +1,64 @@
+project_name: "shopify_long_context_moe_sft_cp4_dp8"
+model_name: "LFM2-24B-A2B"
+training_type: "moe_sft"
+
+model_config:
+  rope_scaling:
+    rope_type: "yarn"
+    factor: 4.0
+    original_max_position_embeddings: 32768
+    beta_fast: 32
+    beta_slow: 1
+  max_position_embeddings: 131072
+
+dataset:
+  path: "/home/alay/context-parallelism/outputs/datasets/shopify_long_context_under120k/train"
+  type: "sft"
+  val_path: "/home/alay/context-parallelism/outputs/datasets/shopify_long_context_under120k/validation"
+  cache_dataset: true
+
+ray:
+  num_workers: 32
+
+training_config:
+  extends: "MOE_SFT"
+  max_length: 131072
+  max_steps: 1000
+  num_train_epochs: 1
+  packing: false
+  padding_free: false
+  drop_overlength: true
+  assistant_only_loss: true
+  context_parallel_size: 4
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 1e-5
+  warmup_ratio: 0.2
+  logging_steps: 10
+  save_strategy: "steps"
+  save_steps: 200
+  eval_strategy: "steps"
+  eval_steps: 200
+  manual_sharded_checkpoint_format: "hf"
+
+  moe_training:
+    aux_loss_coef: 0.01
+    z_loss_coef: 0.001
+    expert_parallel_size: 1
+
+peft_config:
+  use_peft: false
+
+slurm:
+  job_name: "moe_cp4_dp8_128k_shopify"
+  nodes: 4
+  ntasks_per_node: 1
+  gpus_per_node: 8
+  cpus_per_gpu: 14
+  output: "logs/OUT_%x.%j"
+  error: "logs/ERR_%x.%j"
+  setup_commands:
+    - "mkdir -p logs"
+    - "export OUTPUT_DIR=/lambdafs/alay/checkpoints"
+    - "export WANDB_MODE=offline"
+    - "export TOKENIZERS_PARALLELISM=false"

@@ -71,11 +71,14 @@ be rebuilt:
 ```bash
 uv cache clean flash-attn
 rm -rf .venv
-MAX_JOBS=1 uv sync
+uv sync
+uv pip install setuptools wheel ninja packaging
+MAX_JOBS=1 uv sync --group flash-attn
 ```
 
 Run this on a machine with a CUDA toolkit and enough build memory available if
-uv needs to rebuild `flash-attn` from source.
+uv needs to rebuild `flash-attn` from source. On H100-only clusters,
+`FLASH_ATTN_CUDA_ARCHS=90` can keep the rebuild smaller.
 
 ## Quickstart
 

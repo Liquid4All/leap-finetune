@@ -1,0 +1,56 @@
+project_name: "shopify_action_curriculum_moe_sft_cp8_dp1_24b_smoke"
+model_name: "/lambdafs/alay/checkpoints/LFM2-24B-A2B-moe_sft-train-all-lr5em05-w0p0-no_lora-20260618_001121-j2087026/LFM2-24B-A2B-moe_sft-train-all-lr5em05-w0p0-no_lora-20260618_001121-e1s8348-j2087026"
+training_type: "moe_sft"
+
+dataset:
+  train_path: "/lambdafs/alay/datasets/shopify-suggested-actions-action-curriculum-cp-diagnostic/train"
+  val_path: "/lambdafs/alay/datasets/shopify-suggested-actions-action-curriculum-cp-diagnostic/validation"
+  type: "sft"
+  cache_dataset: false
+
+ray:
+  num_workers: 8
+
+training_config:
+  extends: "MOE_SFT"
+  max_length: 221184
+  max_steps: 1
+  packing: false
+  padding_free: false
+  drop_overlength: true
+  shuffle_dataset: false
+  train_dataloader_shuffle: false
+  length_grouped_sampling: false
+  assistant_only_loss: true
+  completion_only_loss: false
+  context_parallel_size: 8
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 5e-5
+  warmup_ratio: 0.04
+  logging_steps: 1
+  save_strategy: "no"
+  eval_strategy: "no"
+  manual_sharded_checkpoint_format: "hf"
+
+  moe_training:
+    aux_loss_coef: 0.01
+    z_loss_coef: 0.001
+    expert_parallel_size: 1
+
+peft_config:
+  use_peft: false
+
+slurm:
+  job_name: "moe_cp8_dp1_shopify_curr_24b_smoke"
+  nodes: 1
+  ntasks_per_node: 1
+  gpus_per_node: 8
+  cpus_per_gpu: 14
+  output: "logs/OUT_%x.%j"
+  error: "logs/ERR_%x.%j"
+  setup_commands:
+    - "mkdir -p logs"
+    - "export OUTPUT_DIR=/lambdafs/alay/checkpoints"
+    - "export WANDB_MODE=offline"
+    - "export TOKENIZERS_PARALLELISM=false"

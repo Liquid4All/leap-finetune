@@ -1,0 +1,67 @@
+project_name: "shopify_action_curriculum_moe_sft_cp8_dp8"
+model_name: "LFM2-24B-A2B"
+training_type: "moe_sft"
+
+model_config:
+  rope_scaling:
+    rope_type: "yarn"
+    type: "yarn"
+    factor: 8.0
+    original_max_position_embeddings: 32768
+    rope_theta: 1000000.0
+    beta_fast: 32
+    beta_slow: 1
+  max_position_embeddings: 262144
+
+dataset:
+  train_path: "/lambdafs/alay/datasets/shopify-suggested-actions-action-curriculum/train"
+  val_path: "/lambdafs/alay/datasets/shopify-suggested-actions-action-curriculum/validation"
+  type: "sft"
+  cache_dataset: true
+
+ray:
+  num_workers: 64
+
+training_config:
+  extends: "MOE_SFT"
+  max_length: 221184
+  num_train_epochs: 1
+  packing: false
+  padding_free: false
+  drop_overlength: true
+  shuffle_dataset: false
+  train_dataloader_shuffle: false
+  length_grouped_sampling: false
+  assistant_only_loss: true
+  completion_only_loss: false
+  context_parallel_size: 8
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 5e-5
+  warmup_ratio: 0.04
+  logging_steps: 10
+  save_strategy: "epoch"
+  eval_strategy: "epoch"
+  manual_sharded_checkpoint_format: "hf"
+
+  moe_training:
+    aux_loss_coef: 0.01
+    z_loss_coef: 0.001
+    expert_parallel_size: 1
+
+peft_config:
+  use_peft: false
+
+slurm:
+  job_name: "moe_cp8_dp8_shopify_curriculum"
+  nodes: 8
+  ntasks_per_node: 1
+  gpus_per_node: 8
+  cpus_per_gpu: 14
+  output: "logs/OUT_%x.%j"
+  error: "logs/ERR_%x.%j"
+  setup_commands:
+    - "mkdir -p logs"
+    - "export OUTPUT_DIR=/lambdafs/alay/checkpoints"
+    - "export WANDB_MODE=offline"
+    - "export TOKENIZERS_PARALLELISM=false"

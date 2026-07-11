@@ -1744,7 +1744,7 @@ requires-dist = [
     { name = "torchvision", specifier = ">=0.24.1" },
     { name = "trackio", specifier = ">=0.3" },
     { name = "transformers", specifier = ">=5.3.0,<5.4.0" },
-    { name = "trl", specifier = ">=1.0,<2.0" },
+    { name = "trl", specifier = "==1.2.0" },
     { name = "turm", marker = "sys_platform == 'linux'", specifier = ">=0.13.0" },
     { name = "typer", specifier = ">=0.20.0" },
     { name = "wandb", specifier = ">=0.22.3" },
@@ -4286,7 +4286,7 @@ requires-dist = [
 
 [[package]]
 name = "trl"
-version = "1.8.0"
+version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accelerate", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
@@ -4295,9 +4295,9 @@ dependencies = [
     { name = "packaging", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
     { name = "transformers", marker = "python_full_version < '3.13' and sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/d2/0bde76fff71f577dd3497ac2daefe4fa093f28791dd636228ebd17165bd5/trl-1.8.0.tar.gz", hash = "sha256:b7fc6ed021bb288e02f8530a4f809a182fe689440c84a47c9d8e35897bea0af1", size = 717196 }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/d6/2d3d876917d43537afea7b502abb318ae071295e4accac222741b548399e/trl-1.2.0.tar.gz", hash = "sha256:f5038b21295d2559992a087ea8d9ca10f74cde23e6760861def209811ab45d00", size = 583112 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/ad/0eede5c5d5a643aa8fab3336a01645fe38a3cb1b64a0df665c06c3d1ac17/trl-1.8.0-py3-none-any.whl", hash = "sha256:6fae1e592162907f952d3a909c8e152e3e046851c870ae9b973cbe9e259b0005", size = 863216 },
+    { url = "https://files.pythonhosted.org/packages/02/82/bad1a22ff4b21d8080f7a64d8313c1ac0e791b455b98f2efca1ef3e14b8f/trl-1.2.0-py3-none-any.whl", hash = "sha256:f6ddfa162ac92d25973070d9e3f6cff71b32c52edc34539e4294722f9dc0a6d6", size = 697449 },
 ]
 
 [[package]]

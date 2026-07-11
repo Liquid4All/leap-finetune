@@ -1959,7 +1959,7 @@ requires-dist = [
     { name = "torchvision", specifier = ">=0.24.1" },
     { name = "trackio", specifier = ">=0.3" },
     { name = "transformers", specifier = ">=5.3.0,<5.4.0" },
-    { name = "trl", specifier = ">=1.0,<2.0" },
+    { name = "trl", specifier = "==1.2.0" },
     { name = "turm", marker = "sys_platform == 'linux'", specifier = ">=0.13.0" },
     { name = "typer", specifier = ">=0.20.0" },
     { name = "wandb", specifier = ">=0.22.3" },

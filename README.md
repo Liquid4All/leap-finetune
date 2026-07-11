@@ -47,28 +47,34 @@ git clone <repository-url>
 cd leap_finetune
 ```
 
-CUDA / NVIDIA clusters use the default dependency groups:
+### Backend Install Profiles
+
+CUDA / NVIDIA clusters use the root project and default dependency groups:
 
 ```bash
 uv sync
 ```
 
-AMD / ROCm clusters use the ROCm project. For the cleanest repeated use, set
-the backend once in your shell, module, or direnv config:
+AMD / ROCm clusters use the ROCm project. The environment variable is
+`UV_PROJECT`, not `UV_EXPORT`. For repeated use, set it once in your shell,
+module, or direnv config:
 
 ```bash
 export UV_PROJECT=rocm
 uv sync
 ```
 
-Both profiles are lockfile-managed but intentionally split. CUDA is the root
-project by default and pins `vllm==0.22.0` plus the CUDA FlashAttention 2 wheel
-for the matching Torch 2.11 / CUDA 13 stack. ROCm lives under [`rocm`](./rocm/)
-and uses direct URLs from a validated vLLM ROCm wheel set for
-`vllm==0.22.0+rocm722` plus the matching `torch`, `torchvision`, `torchaudio`,
-`flash-attn`, and `triton` stack. Ray is pinned to `2.51.1` for both profiles.
-The pinned accelerator wheels are Python 3.12 Linux x86_64 wheels, so use the
-repo's `.python-version` when creating GPU environments.
+The default install paths both try pinned accelerator wheels:
+
+- CUDA: `uv sync` installs the default CUDA lock, including `vllm==0.22.0` and
+  the pinned CUDA FlashAttention 2 wheel for the Torch 2.11 / CUDA 13 stack.
+- ROCm: `UV_PROJECT=rocm uv sync` installs the ROCm lock from [`rocm`](./rocm/),
+  including direct URLs for the validated `torch`, `torchvision`, `torchaudio`,
+  `triton`, `flash-attn`, and `vllm==0.22.0+rocm722` wheel set.
+
+Ray is pinned to `2.51.1` for both profiles. The pinned accelerator wheels are
+Python 3.12 Linux x86_64 wheels, so use the repo's `.python-version` when
+creating GPU environments.
 
 `UV_PROJECT` can also be used explicitly for either backend. Choose one:
 
@@ -97,10 +103,19 @@ leap-finetune job_configs/sft_example_with_slurm.yaml
 uv run leap-finetune job_configs/sft_example_with_slurm.yaml
 ```
 
-### FlashAttention 2 Validation
+### FlashAttention 2
 
-The normal runtime probes FlashAttention 2. If FA2 is not usable, training emits
-an explicit warning and falls back to SDPA. To inspect the current environment:
+The default CUDA and ROCm install paths try to install pinned FA2 wheels. If a
+pinned wheel cannot be resolved or installed, `uv sync` fails at install time;
+use the no-FA2 install path below. If FA2 installs but does not import or cannot
+be selected at runtime, training emits an explicit warning and falls back to
+SDPA:
+
+```text
+FlashAttention 2 not available (...); falling back to SDPA.
+```
+
+To inspect the active environment:
 
 ```bash
 # CUDA, after `uv sync`
@@ -113,26 +128,27 @@ uv run leap-finetune env fa2-status
 uv run leap-finetune env fa2-status --require
 ```
 
-If a pinned FA2 wheel does not match the target, install a base environment
-without the pinned FA2 group, then run the FA2 repair command. It tries a
-matching pinned wheel first, then binary-only resolution, and leaves runtime on
-SDPA if no wheel works:
+`fa2-status` reports the detected backend, Python tag, platform, Torch version,
+CUDA/HIP version, accelerator visibility, installed `flash-attn` version,
+selected attention implementation, and the reason FA2 is or is not usable.
+
+To install without FA2 first, then repair FA2 separately:
 
 ```bash
-# CUDA fallback path
+# CUDA without pinned FA2
 uv sync --no-group flash-attn
 uv run leap-finetune env install-fa2
 
-# ROCm HF training fallback path. Excluding rocm-vllm is required because the
-# validated ROCm vLLM wheel depends on the same FA2 wheel.
+# ROCm HF training without pinned FA2/vLLM
 UV_PROJECT=rocm uv sync --no-group rocm-fa2 --no-group rocm-vllm
 UV_PROJECT=rocm uv run leap-finetune env install-fa2
 ```
 
-ROCm GRPO/vLLM support requires the full `rocm-vllm` profile and therefore a
-compatible ROCm FA2 stack. If that stack cannot resolve on a target cluster, use
-the SDPA fallback for non-vLLM training until a matching vLLM/FA2 wheel set is
-available.
+`install-fa2` tries, in order:
+
+1. A matching pinned wheel for the detected CUDA or ROCm runtime.
+2. Binary-only public resolution for `flash-attn==2.8.3`.
+3. Source build, only when explicitly requested.
 
 Source builds are not part of the normal install path. Use them only as an
 explicit escape hatch on a machine with the matching CUDA or ROCm toolchain and
@@ -141,6 +157,11 @@ enough build memory:
 ```bash
 uv run leap-finetune env install-fa2 --allow-source-build
 ```
+
+ROCm GRPO/vLLM support requires the full `rocm-vllm` profile and therefore a
+compatible ROCm FA2 stack. If that stack cannot resolve on a target cluster, use
+the SDPA fallback for non-vLLM training until a matching vLLM/FA2 wheel set is
+available.
 
 ## Quickstart
 

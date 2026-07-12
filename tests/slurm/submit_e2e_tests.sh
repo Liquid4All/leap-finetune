@@ -15,8 +15,8 @@ Environment overrides:
   GPUS_PER_TASK            GPUs in the allocation (default: 4)
   CPUS_PER_GPU             CPUs per GPU (default: 14)
   TIME_LIMIT               SLURM time limit (default: 06:00:00)
-  OUTPUT_DIR               Test result directory (default: /lambdafs/alay/test-results)
-  TMP_ROOT                 Node temp root (default: /lambdafs/alay/tmp)
+  OUTPUT_DIR               Test result directory (default: <repo>/.test-results/e2e)
+  TMP_ROOT                 Node temp root (default: /tmp/$USER)
   PYTEST_ARGS              pytest args to run inside SLURM
   EXTRA_SBATCH_DIRECTIVES  Newline-separated extra #SBATCH directives
 EOF
@@ -50,8 +50,8 @@ NODES="${NODES:-1}"
 GPUS_PER_TASK="${GPUS_PER_TASK:-4}"
 CPUS_PER_GPU="${CPUS_PER_GPU:-14}"
 TIME_LIMIT="${TIME_LIMIT:-06:00:00}"
-OUTPUT_DIR="${OUTPUT_DIR:-/lambdafs/alay/test-results}"
-TMP_ROOT="${TMP_ROOT:-/lambdafs/alay/tmp}"
+OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/.test-results/e2e}"
+TMP_ROOT="${TMP_ROOT:-/tmp/${USER}}"
 PYTEST_ARGS="${PYTEST_ARGS:-tests/test_dense_e2e.py tests/test_moe_e2e.py tests/test_vlm_e2e.py --dense --moe --vlm}"
 EXTRA_SBATCH_DIRECTIVES="${EXTRA_SBATCH_DIRECTIVES:-}"
 VENV_ACTIVATE="${VIRTUAL_ENV:-${ROOT_DIR}/.venv}/bin/activate"

@@ -107,9 +107,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Validate an exported HF checkpoint has all MoE experts and loads."
     )
-    parser.add_argument(
-        "--run-root", type=Path, default=Path("/lambdafs/alay/checkpoints")
-    )
+    parser.add_argument("--run-root", type=Path, default=Path("outputs/checkpoints"))
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--expected-num-experts", type=int, default=None)
     parser.add_argument(

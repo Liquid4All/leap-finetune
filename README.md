@@ -923,7 +923,7 @@ Export a HuggingFace checkpoint or PEFT adapter to GGUF with
 `leap-export-gguf`:
 
 ```bash
-uv run leap-export-gguf /path/to/checkpoint --quant F16 --output-dir /lambdafs/gguf
+uv run leap-export-gguf /path/to/checkpoint --quant F16 --output-dir ./outputs/gguf
 ```
 
 Repeat `--quant` to produce multiple outputs:
@@ -932,7 +932,7 @@ Repeat `--quant` to produce multiple outputs:
 uv run leap-export-gguf /path/to/checkpoint \
   --quant F16 \
   --quant Q4_K_M \
-  --output-dir /lambdafs/gguf \
+  --output-dir ./outputs/gguf \
   --llama-cpp-dir /path/to/llama.cpp
 ```
 
@@ -947,7 +947,7 @@ PEFT adapter directories can be exported with `F16`, `BF16`, `F32`, or `Q8_0`:
 uv run leap-export-gguf /path/to/adapter \
   --base-model-path /path/to/base-model \
   --quant F16 \
-  --output-dir /lambdafs/gguf
+  --output-dir ./outputs/gguf
 ```
 
 For adapter K-quants, merge the adapter into the base model first, then export

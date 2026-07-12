@@ -10,7 +10,6 @@ dataset:
   # image_root: "/path/to/images"  # prepended to relative image paths (optional)
 
 training_config:
-  extends: "DEFAULT_VLM_DPO"
   num_train_epochs: 1
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 16
@@ -19,5 +18,4 @@ training_config:
   # optimizer_type: "adamw_8bit"  # optional, uses bitsandbytes
 
 peft_config:
-  extends: "DEFAULT_VLM_LORA"
   use_peft: true

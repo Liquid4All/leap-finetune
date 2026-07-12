@@ -2,7 +2,6 @@ import pytest
 
 from leap_finetune.config import materialize_job_config, parse_job_config
 from leap_finetune.rl.rewards import resolve_reward_specs
-from leap_finetune.training.default_configs import TRAINING_DEFAULTS
 
 from conftest import write_config
 
@@ -23,21 +22,6 @@ VLM_GRPO_DATASET = {
 }
 
 
-class TestGRPODefaultProfiles:
-    def test_grpo_defaults_discovered(self):
-        names = set(TRAINING_DEFAULTS)
-        assert "DEFAULT_GRPO" in names
-        assert "DEFAULT_VLM_GRPO" in names
-        assert "MOE_GRPO" in names
-
-    def test_default_grpo_has_expected_fields(self):
-        cfg = TRAINING_DEFAULTS["DEFAULT_GRPO"]
-        assert cfg["training_type"] == "grpo"
-        assert cfg["loss_type"] == "dapo"
-        assert cfg["beta"] == 0.0
-        assert cfg["vllm_mode"] == "colocate"
-
-
 class TestGRPOSmoke:
     def test_minimal_grpo_materializes(self, tmp_path):
         config = {
@@ -45,7 +29,7 @@ class TestGRPOSmoke:
             "model_name": "LFM2-1.2B",
             "training_type": "grpo",
             "dataset": GRPO_DATASET,
-            "training_config": {"extends": "DEFAULT_GRPO"},
+            "training_config": {},
             "rewards": {
                 "funcs": ["./rewards/length.py::length_reward"],
                 "weights": [1.0],
@@ -69,7 +53,7 @@ class TestGRPOSmoke:
             "model_name": "LFM2-1.2B",
             "training_type": "grpo",
             "dataset": GRPO_DATASET,
-            "training_config": {"extends": "DEFAULT_GRPO"},
+            "training_config": {},
             "rewards": {
                 "funcs": ["./local_reward.py::local_reward"],
                 "weights": [1.0],
@@ -85,7 +69,7 @@ class TestGRPOSmoke:
             "model_name": "LFM2-1.2B",
             "training_type": "grpo",
             "dataset": GRPO_DATASET,
-            "training_config": {"extends": "DEFAULT_GRPO"},
+            "training_config": {},
             "rewards": {
                 "judge": {
                     "model": "LFM2-1.2B",
@@ -106,7 +90,7 @@ class TestGRPOSmoke:
             "model_name": "LFM2-VL-1.6B",
             "training_type": "vlm_grpo",
             "dataset": VLM_GRPO_DATASET,
-            "training_config": {"extends": "DEFAULT_VLM_GRPO"},
+            "training_config": {},
             "rl_env": {
                 "source": "liquidai/vlm-grounding-bbox-env",
                 "max_turns": 1,
@@ -122,20 +106,4 @@ class TestGRPOSmoke:
         assert jc.training_type == "vlm_grpo"
         assert jc.rl_env["source"] == "liquidai/vlm-grounding-bbox-env"
         assert jc.grpo_rollout["server_gpus"] == 1
-        assert jc.training_config.value["lr_multipliers"]["model.vision_tower"] == 0.1
-
-    def test_grpo_keys_rejected_on_sft(self, tmp_path):
-        config = {
-            "project_name": "t",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {
-                "path": "HuggingFaceTB/smoltalk",
-                "type": "sft",
-                "limit": 10,
-                "test_size": 0.2,
-            },
-            "rewards": ["./rewards/length.py::length_reward"],
-        }
-        with pytest.raises(ValueError, match="only valid for training_type"):
-            parse_job_config(write_config(config, tmp_path))
+        assert jc.training_config["lr_multipliers"]["model.vision_tower"] == 0.1

@@ -14,9 +14,11 @@
 </div>
 
 <p align="center">
+<a href="#features">Features</a> -
 <a href="#setup">Setup</a> -
 <a href="#quickstart">Quickstart</a> -
 <a href="#cli-and-python-usage">CLI</a> -
+<a href="#local-state">Local State</a> -
 <a href="#execution-backends">Backends</a> -
 <a href="#datasets">Datasets</a> -
 <a href="#grpo">GRPO</a> -
@@ -25,9 +27,28 @@
 <a href="#contributing">Contributing</a>
 </p>
 
-LEAP-Finetune is a minimal fine-tuning repo for LFM2. It handles dataset
-formatting, validation, distributed orchestration, checkpointing, and export
-for local GPU nodes, SLURM clusters, Modal, and Kubernetes/KubeRay.
+LEAP-Finetune is a local-first model factory for customizing LFMs. It provides
+a YAML-driven path from data loading and validation to training, evaluation,
+checkpointing, and export across local GPUs, SLURM clusters, Modal, and
+Kubernetes/KubeRay.
+
+## Features
+
+- Train text, VLM, and MoE models with SFT, DPO, GRPO, LoRA, full fine-tuning,
+  and expert-parallel MoE configs.
+- Load local, Hugging Face, S3, GCS, and Azure datasets; normalize and validate
+  SFT, DPO, GRPO, VLM, and tool-calling formats; filter invalid rows; cache
+  tokenized data.
+- Run benchmark suites during training or standalone, including async vLLM eval
+  modes for non-blocking cluster runs.
+- Compose GRPO rewards from Python functions, task recipes, LLM-as-judge
+  scoring, vLLM rollouts, and optional OpenEnv environments.
+- Launch the same config locally, through SLURM, on Modal, or with KubeRay;
+  track runs with Trackio or Weights & Biases.
+- Keep lightweight local state for runs, eval metrics, backend IDs, and
+  experiment memory that coding agents can inspect between sessions.
+- Resume training, inspect outputs, export Hugging Face checkpoints, and produce
+  GGUF artifacts.
 
 For feature requests or custom infrastructure support, reach out to
 [support@liquid.ai](mailto:support@liquid.ai) with your setup.
@@ -189,20 +210,18 @@ dataset:
   subset: "all"
 
 training_config:
-  extends: "DEFAULT_SFT"
   num_train_epochs: 3
   per_device_train_batch_size: 2
   learning_rate: 2e-5
 
 peft_config:
-  extends: "DEFAULT_LORA"
   use_peft: true
 ```
 
-`training_config.extends` inherits from a base config such as `DEFAULT_SFT`,
-`DEFAULT_DPO`, or `DEFAULT_VLM_SFT`; fields in your YAML override the base.
-`peft_config.extends` works the same way for LoRA defaults such as
-`DEFAULT_LORA` and `DEFAULT_VLM_LORA`.
+`training_type` selects the default trainer profile. `training_config` only
+contains fields you want to override. If `peft_config.use_peft` is true, LoRA
+defaults are selected from `training_type` and any PEFT fields you set override
+those defaults.
 
 Launch training:
 
@@ -239,8 +258,9 @@ CUDA/vLLM stack:
 ```bash
 uv run leap-finetune job_configs/sft_example.yaml
 uv run leap-finetune run job_configs/sft_example.yaml
-uv run leap-finetune job_configs/eval_standalone_example.yaml
-uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
+uv run leap-finetune job_configs/eval_standalone_example.yaml --output results.json
+uv run leap-finetune slurm job_configs/sft_example_with_slurm.yaml --output-dir job_configs/slurms
+uv run leap-finetune runs list
 ```
 
 Install the command as a reusable tool from a checkout:
@@ -248,9 +268,8 @@ Install the command as a reusable tool from a checkout:
 ```bash
 uv tool install --editable . --force
 leap-finetune /absolute/path/to/config.yaml
+leap-finetune /absolute/path/to/eval_config.yaml --output /absolute/path/to/results.json
 leap-finetune slurm /absolute/path/to/config.yaml --output-dir /absolute/path/to/slurms
-leap-finetune /absolute/path/to/eval_config.yaml
-leap-finetune eval /absolute/path/to/eval_config.yaml --output /absolute/path/to/results.json
 ```
 
 `uv tool install` creates an isolated tool environment. Use explicit config
@@ -287,6 +306,33 @@ Run that file inside an environment where `leap-finetune` is installed:
 ```bash
 uv run --with-editable . python launch_training.py
 ```
+
+## Local State
+
+Every CLI or `run_config(...)` launch writes a gitignored `.lft/` directory in
+the current working directory, or `LFT_STATE_DIR` if set.
+
+- `.lft/state.json` stores factual run state: run ID, status/phase, config
+  path, backend metadata, output dir, heartbeat, latest step/log/eval,
+  compact metric history, checkpoint history, and log references.
+- `.lft/memory.md` is for non-discrete experiment judgment: why a run was
+  tried, what it means, and what to try next. Reference run IDs instead of
+  copying metrics or config details into memory.
+
+```bash
+uv run leap-finetune runs report
+uv run leap-finetune runs list
+uv run leap-finetune runs show <run_id>
+uv run leap-finetune runs sync <run_id>
+uv run leap-finetune memory add "Next try lower LR; run was stable but underfit." --ref <run_id>
+uv run leap-finetune memory show
+```
+
+`runs report` is the fastest way to compare recent runs. It shows status,
+phase, heartbeat age, step/max step, latest loss, latest eval summary, and
+available log refs. `runs sync` checks scheduler/backend status and merges
+remote state when a recorded `remote_state_dir` is readable from the current
+machine.
 
 ## Execution Backends
 
@@ -463,6 +509,9 @@ Cloud storage requires appropriate AWS, GCP, or Azure credentials. Use `subset`
 for HuggingFace datasets with multiple configs, `split` for HF split
 expressions such as `train+validation`, and `limit` to cap samples for quick
 testing.
+
+During training, raw data is loaded through Ray Data, normalized, filtered for
+valid rows, shuffled, split, and optionally tokenized, packed, and cached.
 
 ### SFT
 
@@ -722,7 +771,7 @@ normalized from `min_score`/`max_score` to `[0, 1]`.
 
 ### vLLM Rollouts
 
-`DEFAULT_GRPO` and `DEFAULT_VLM_GRPO` set `use_vllm: true` and
+The `grpo` and `vlm_grpo` defaults set `use_vllm: true` and
 `vllm_mode: "colocate"`. Colocate mode runs vLLM inside each training worker.
 Server mode starts `trl vllm-serve` on driver GPUs before Ray initializes.
 Configure GPU counts, not device ids:
@@ -737,7 +786,6 @@ grpo_rollout:
   gpu_memory_utilization: 0.9
 
 training_config:
-  extends: "DEFAULT_GRPO"
   vllm_mode: "server"
   vllm_server_host: "auto"
   vllm_server_port: 8000
@@ -804,22 +852,15 @@ metrics include `short_answer`, `grounding_iou`, `mcq_gen`, and
 See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data
 format examples, YAML reference, and custom metrics.
 
-Run the same eval suite without training:
-
-```bash
-uv run leap-finetune job_configs/eval_standalone_example.yaml
-```
-
 Standalone eval configs use `model_name` or `checkpoint`, `evals:`, and an
 optional `backend:` block. They do not include `dataset`, `training_type`,
 `training_config`, or `async_eval`. Text evals default to `modality: text`;
 set `modality: vlm` only for standalone VLM evals.
 
-Use the explicit `eval` subcommand when you want CLI-only eval options such as
-writing metrics to JSON:
+Run the same eval suite without training and write metrics to JSON:
 
 ```bash
-uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
+uv run leap-finetune job_configs/eval_standalone_example.yaml --output results.json
 ```
 
 The same path is available from Python:
@@ -955,10 +996,10 @@ the merged checkpoint.
 
 ## Advanced Configuration
 
-Default base configs live in
+Default trainer profiles live in
 [`src/leap_finetune/training/default_configs/`](./src/leap_finetune/training/default_configs/)
-and are auto-discovered. New configs added to those files are immediately
-available via `extends` in YAML.
+and are selected by `training_type`. YAML `training_config` values are user
+overrides, not named inheritance.
 
 [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is installed by the
 default CUDA group. Enable it with `use_liger_kernel: true` in
@@ -978,9 +1019,10 @@ default.
 
 ### Testing
 
-The test suite is intentionally scoped to four buckets: config parsing, e2e,
-RL, and MoE. See [`tests/README.md`](./tests/README.md) for the current layout.
-E2E fixtures and SLURM launchers live under [`tests/e2e/`](./tests/e2e/).
+The test suite is intentionally scoped by area: config, distribution,
+evaluation, e2e, RL, and MoE. See [`tests/README.md`](./tests/README.md) for
+the current layout. E2E fixtures and SLURM launchers live under
+[`tests/e2e/`](./tests/e2e/).
 
 Run the normal tests:
 

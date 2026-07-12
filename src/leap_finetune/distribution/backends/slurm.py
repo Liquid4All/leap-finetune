@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -11,6 +12,8 @@ from leap_finetune import LEAP_FINETUNE_DIR
 
 
 _PASSTHROUGH_ENV_VARS = (
+    "LFT_RUN_ID",
+    "LFT_STATE_DIR",
     "NCCL_IB_DISABLE",
     "NCCL_DEBUG",
     "NCCL_DEBUG_SUBSYS",
@@ -28,21 +31,27 @@ def check_and_handle_slurm(
     config_path_arg: str | None = None,
     *,
     config_dict: dict | None = None,
-) -> bool:
+) -> bool | dict[str, Any]:
     if os.environ.get("LEAP_FINETUNE_FROM_SLURM") == "1":
         return False
 
     config_path = None
+    if config_path_arg:
+        candidate = pathlib.Path(config_path_arg).expanduser()
+        if candidate.exists():
+            config_path = candidate.resolve()
+
     if config_dict is None:
         if not config_path_arg:
             return False
 
-        from leap_finetune.config.parser import resolve_config_path
+        if config_path is None:
+            from leap_finetune.config.parser import resolve_config_path
 
-        try:
-            config_path = resolve_config_path(config_path_arg)
-        except FileNotFoundError:
-            return False
+            try:
+                config_path = resolve_config_path(config_path_arg)
+            except FileNotFoundError:
+                return False
 
         with open(config_path) as f:
             config_dict = yaml.safe_load(f) or {}
@@ -92,7 +101,29 @@ def check_and_handle_slurm(
         sys.exit(1)
 
     print(f"SLURM job submitted: {result.stdout.strip()}")
-    return True
+    job_id = _parse_sbatch_job_id(result.stdout)
+    slurm_settings = _resolve_slurm_settings(config_dict)
+    log_refs = _slurm_log_refs(
+        slurm_settings,
+        job_id=job_id,
+        submit_cwd=pathlib.Path.cwd(),
+    )
+    return {
+        "backend": "slurm",
+        "status": "submitted",
+        "job_id": job_id,
+        "script_path": str(script_path),
+        "job_name": slurm_settings["job_name"],
+        "stdout_template": slurm_settings["output"],
+        "stderr_template": slurm_settings["error"],
+        "submit_cwd": str(pathlib.Path.cwd()),
+        "log_refs": log_refs,
+    }
+
+
+def _parse_sbatch_job_id(stdout: str) -> str | None:
+    match = re.search(r"Submitted batch job\s+(\d+)", stdout)
+    return match.group(1) if match else None
 
 
 def _default_judge_gpus(config_dict: dict[str, Any]) -> int:
@@ -133,6 +164,66 @@ def _default_gpus_per_task(config_dict: dict[str, Any]) -> int:
     if server_gpus == 0:
         return max(1, judge_gpus + training_gpus)
     return max(1, server_gpus + judge_gpus + training_gpus)
+
+
+def _resolve_slurm_settings(config_dict: dict[str, Any]) -> dict[str, Any]:
+    slurm_config = config_dict.get("slurm", {})
+    defaults = {
+        "job_name": config_dict.get("project_name", "leap_finetune"),
+        "nodes": 1,
+        "ntasks_per_node": 1,
+        "gpus_per_node": None,
+        "gpus_per_task": _default_gpus_per_task(config_dict),
+        "cpus_per_gpu": 8,
+        "output": "logs/OUT_%x.%j",
+        "error": "logs/ERR_%x.%j",
+    }
+    return {**defaults, **slurm_config}
+
+
+def _expand_slurm_log_template(
+    template: str,
+    *,
+    job_id: str | None,
+    job_name: str,
+    submit_cwd: pathlib.Path,
+) -> str:
+    expanded = (
+        str(template)
+        .replace("%%", "%")
+        .replace("%j", job_id or "%j")
+        .replace("%A", job_id or "%A")
+        .replace("%x", job_name)
+    )
+    path = pathlib.Path(expanded)
+    if not path.is_absolute():
+        path = submit_cwd / path
+    return str(path)
+
+
+def _slurm_log_refs(
+    slurm_settings: dict[str, Any],
+    *,
+    job_id: str | None,
+    submit_cwd: pathlib.Path,
+) -> dict[str, Any]:
+    job_name = str(slurm_settings["job_name"])
+    return {
+        "stdout": _expand_slurm_log_template(
+            str(slurm_settings["output"]),
+            job_id=job_id,
+            job_name=job_name,
+            submit_cwd=submit_cwd,
+        ),
+        "stderr": _expand_slurm_log_template(
+            str(slurm_settings["error"]),
+            job_id=job_id,
+            job_name=job_name,
+            submit_cwd=submit_cwd,
+        ),
+        "slurm_stdout_template": str(slurm_settings["output"]),
+        "slurm_stderr_template": str(slurm_settings["error"]),
+    }
 
 
 def _render_export_block(is_multinode: bool) -> str:
@@ -210,19 +301,7 @@ def generate_slurm_script(
     auto_submit: bool = False,
 ) -> pathlib.Path:
     slurm_config = config_dict.get("slurm", {})
-
-    defaults = {
-        "job_name": config_dict.get("project_name", "leap_finetune"),
-        "nodes": 1,
-        "ntasks_per_node": 1,
-        "gpus_per_node": None,
-        "gpus_per_task": _default_gpus_per_task(config_dict),
-        "cpus_per_gpu": 8,
-        "output": "logs/OUT_%x.%j",
-        "error": "logs/ERR_%x.%j",
-    }
-
-    slurm_settings = {**defaults, **slurm_config}
+    slurm_settings = _resolve_slurm_settings(config_dict)
 
     if output_dir is None:
         output_dir = config_path.parent

@@ -1,3 +1,5 @@
+import pathlib
+
 import pytest
 
 from leap_finetune import run_config
@@ -60,7 +62,7 @@ class TestExampleSmoke:
         }
         assert materialized.training_type == expected_type
         assert materialized.dataset is not None
-        assert isinstance(materialized.to_dict()["training_config"], dict)
+        assert isinstance(materialized.training_config, dict)
 
 
 class TestDirectPythonConfig:
@@ -86,7 +88,7 @@ class TestDirectPythonConfig:
         )
 
         materialized = materialize_job_config(job)
-        resolved = materialized.training_config.value
+        resolved = materialized.training_config
         assert materialized.job_name == "py_job"
         assert resolved["training_type"] == "sft"
         assert resolved["num_train_epochs"] == 4
@@ -227,6 +229,112 @@ class TestDirectPythonConfig:
         assert isinstance(calls["config"], EvalRunConfig)
         assert calls["output_path"] is None
 
+    def test_cli_dispatches_eval_yaml_without_eval_subcommand(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        calls = {}
+
+        def fake_run_eval_config(config, *, output_path=None):
+            calls["config"] = config
+            calls["output_path"] = output_path
+            return {"benchmark/tiny_qa/score": 1.0}
+
+        monkeypatch.setattr(
+            "leap_finetune.cli.main.check_and_handle_slurm",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.modal.check_and_handle_modal",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.cli.main._assert_local_cuda_available",
+            lambda: pytest.fail("eval-only CLI should not require CUDA"),
+        )
+        monkeypatch.setattr(
+            "leap_finetune.evaluation.runner.run_eval_config",
+            fake_run_eval_config,
+        )
+
+        cfg_path = write_config(
+            {
+                "model_name": "LFM2-1.2B",
+                "evals": {
+                    "benchmarks": [
+                        {
+                            "name": "tiny_qa",
+                            "path": "/tmp/tiny_qa.jsonl",
+                            "metric": "short_answer",
+                        }
+                    ]
+                },
+            },
+            tmp_path,
+        )
+        output_path = tmp_path / "results.json"
+        monkeypatch.setattr(
+            "sys.argv",
+            ["leap-finetune", cfg_path, "--output", str(output_path)],
+        )
+
+        from leap_finetune.cli.main import main
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "benchmark/tiny_qa/score: 1.0" in captured.out
+        assert isinstance(calls["config"], EvalRunConfig)
+        assert calls["output_path"] == str(output_path)
+
+    def test_run_config_dispatches_remote_yaml_from_light_config(
+        self, tmp_path, monkeypatch
+    ):
+        calls = {}
+
+        monkeypatch.setattr(
+            "leap_finetune.cli.main.check_and_handle_slurm",
+            lambda *args, **kwargs: False,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
+            lambda *args, **kwargs: False,
+        )
+
+        def fake_modal(config_path_arg=None, *, config_dict=None):
+            calls["config_path_arg"] = config_path_arg
+            calls["config_dict"] = config_dict
+            return True
+
+        monkeypatch.setattr(
+            "leap_finetune.distribution.backends.modal.check_and_handle_modal",
+            fake_modal,
+        )
+        monkeypatch.setattr(
+            "leap_finetune.cli.main._assert_local_cuda_available",
+            lambda: pytest.fail("remote config should not require CUDA"),
+        )
+
+        cfg_path = write_config(
+            {
+                "project_name": "modal_run",
+                "model_name": "LFM2-1.2B",
+                "training_type": "sft",
+                "dataset": BASE_SFT_DATASET,
+                "training_config": {"num_train_epochs": 1},
+                "modal": {"gpu": "H100"},
+            },
+            tmp_path,
+        )
+
+        run_config(cfg_path)
+
+        assert calls["config_path_arg"] == str(pathlib.Path(cfg_path).resolve())
+        assert calls["config_dict"]["modal"]["gpu"] == "H100"
+
 
 class TestFocusedValidation:
     def test_evals_and_benchmarks_both_parse(self, tmp_path):
@@ -287,20 +395,7 @@ class TestFocusedValidation:
             "/tests/e2e/fixtures/tiny_qa_bench.jsonl"
         )
 
-    def test_invalid_dataset_path_combination_rejected(self, tmp_path):
-        config = {
-            "project_name": "bad",
-            "model_name": "LFM2-1.2B",
-            "training_type": "sft",
-            "dataset": {
-                **BASE_SFT_DATASET,
-                "train_path": "other-dataset",
-            },
-        }
-        with pytest.raises(ValueError, match="dataset.path or dataset.train_path"):
-            parse_job_config(write_config(config, tmp_path))
-
-    def test_unknown_extends_rejected(self, tmp_path):
+    def test_named_training_inheritance_is_rejected(self, tmp_path):
         config = {
             "project_name": "bad",
             "model_name": "LFM2-1.2B",
@@ -308,9 +403,8 @@ class TestFocusedValidation:
             "dataset": BASE_SFT_DATASET,
             "training_config": {"extends": "NOT_A_REAL_PROFILE"},
         }
-        parsed = parse_job_config(write_config(config, tmp_path))
-        with pytest.raises(ValueError, match="Unknown base config"):
-            materialize_job_config(parsed)
+        with pytest.raises(ValueError, match="training_config no longer supports"):
+            parse_job_config(write_config(config, tmp_path))
 
     def test_eval_strategy_uses_default_split_when_test_size_omitted(self, tmp_path):
         # Offline training types get the default 0.2 eval split when no explicit
@@ -331,9 +425,9 @@ class TestFocusedValidation:
         }
         parsed = parse_job_config(write_config(config, tmp_path))
         materialized = materialize_job_config(parsed)
-        assert materialized.training_config.value["eval_strategy"] == "steps"
+        assert materialized.training_config["eval_strategy"] == "steps"
 
-    def test_training_type_defaults_apply_without_extends(self, tmp_path):
+    def test_training_type_defaults_apply(self, tmp_path):
         config = {
             "project_name": "dpo_defaults",
             "model_name": "LFM2-1.2B",
@@ -343,7 +437,7 @@ class TestFocusedValidation:
         }
         parsed = parse_job_config(write_config(config, tmp_path))
         materialized = materialize_job_config(parsed)
-        resolved = materialized.training_config.value
+        resolved = materialized.training_config
         assert resolved["training_type"] == "dpo"
         assert resolved["beta"] == 0.1
         assert resolved["num_train_epochs"] == 5
@@ -365,16 +459,16 @@ class TestFocusedValidation:
         assert "fsdp_config" not in stripped
         assert "deepspeed" in train_config
 
-    def test_peft_extends_still_works(self, tmp_path):
+    def test_peft_defaults_apply_with_direct_overrides(self, tmp_path):
         config = {
             "project_name": "peft",
             "model_name": "LFM2-1.2B",
             "training_type": "sft",
             "dataset": BASE_SFT_DATASET,
-            "training_config": {"extends": "DEFAULT_SFT"},
-            "peft_config": {"extends": "DEFAULT_LORA", "use_peft": True, "r": 32},
+            "training_config": {},
+            "peft_config": {"use_peft": True, "r": 32},
         }
         parsed = parse_job_config(write_config(config, tmp_path))
         materialized = materialize_job_config(parsed)
         assert materialized.peft_config is not None
-        assert materialized.peft_config.value.r == 32
+        assert materialized.peft_config.r == 32

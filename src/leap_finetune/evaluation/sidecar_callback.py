@@ -14,6 +14,7 @@ from transformers.trainer_callback import TrainerCallback, TrainerControl, Train
 from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
 from leap_finetune.evaluation.runner import stage_checkpoint_for_eval
 from leap_finetune.evaluation.sbatch_template import render_sbatch_script
+from leap_finetune.state.store import record_eval_result
 from leap_finetune.training.utils.logging import is_rank_zero
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,13 @@ class SidecarEvalCallback(TrainerCallback):
                 state.global_step,
                 self._consecutive_failures,
             )
+            record_eval_result(
+                step=state.global_step,
+                metrics={},
+                status="failed",
+                source="async_sidecar_submit",
+                error="sidecar submission failed",
+            )
             if self._consecutive_failures >= self.cfg.failure.max_consecutive:
                 self._disabled = True
                 logger.error(
@@ -303,6 +311,23 @@ class SidecarEvalCallback(TrainerCallback):
                 # Write marker only AFTER successful submit; format is
                 # "<jobid>:<step>" so _clear_marker_if_stale can sacct the job.
                 marker.write_text(f"{jobid}:{state.global_step}")
+                record_eval_result(
+                    step=state.global_step,
+                    metrics={},
+                    status="submitted",
+                    source="async_sidecar_submit",
+                    backend="slurm",
+                    backend_id=jobid or None,
+                    metadata={"script_path": str(submission.script_path)},
+                    log_refs={
+                        f"async_eval_step_{state.global_step}_stdout": str(
+                            submission.log_out
+                        ),
+                        f"async_eval_step_{state.global_step}_stderr": str(
+                            submission.log_err
+                        ),
+                    },
+                )
                 return jobid or None
 
             last_err = (result.stderr or result.stdout).strip()

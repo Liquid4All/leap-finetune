@@ -138,6 +138,12 @@ def ray_dataset_to_hf(ray_ds) -> Dataset | None:
 # === Dataset Pipeline ===
 
 
+def _ensure_non_empty(ds: ray.data.Dataset, error_message: str) -> None:
+    """Validate that a Ray dataset has at least one row without a full count."""
+    if not ds.take(1):
+        raise ValueError(error_message)
+
+
 def _load_and_prepare_datasets(
     loader: DatasetLoader,
     shuffle_seed: int,
@@ -170,20 +176,24 @@ def _load_and_prepare_datasets(
         shuffle_seed,
         training_config,
     )
-    total_count = ds.count()
 
+    if loader.test_size is None:
+        _ensure_non_empty(
+            ds,
+            f"Dataset is empty after validation. Check if your data matches "
+            f"the expected format for dataset_type='{loader.dataset_type}'",
+        )
+        train_ds = ds
+        eval_ds = None
+        console.print("[green]✓ Dataset ready[/green]")
+        return train_ds, eval_ds
+
+    total_count = ds.count()
     if total_count == 0:
         raise ValueError(
             f"Dataset is empty after validation. Check if your data matches "
             f"the expected format for dataset_type='{loader.dataset_type}'"
         )
-
-    if loader.test_size is None:
-        train_ds = ds
-        eval_ds = None
-        console.print(f"[green]✓ Dataset ready:[/green] {total_count:,} train samples")
-        return train_ds, eval_ds
-
     eval_count = max(1, int(total_count * loader.test_size))
     train_count = total_count - eval_count
 
@@ -244,15 +254,13 @@ def _load_explicit_train_eval_datasets(
         shuffle_seed,
         training_config,
     )
-    train_count = train_ds.count()
-    if train_count == 0:
-        raise ValueError(
-            f"Training dataset is empty after validation for path '{loader.get_train_path()}'"
-        )
+    _ensure_non_empty(
+        train_ds,
+        f"Training dataset is empty after validation for path '{loader.get_train_path()}'",
+    )
 
     eval_path = loader.get_eval_path()
     eval_ds = None
-    eval_count = 0
     if eval_path is not None:
         eval_ds = _normalize_and_filter_dataset(
             loader,
@@ -264,20 +272,15 @@ def _load_explicit_train_eval_datasets(
                 split=loader.val_split or "train",
             ),
         )
-        eval_count = eval_ds.count()
-        if eval_count == 0:
-            raise ValueError(
-                f"Validation dataset is empty after validation for path '{eval_path}'"
-            )
-
-    total_count = train_count + eval_count
-    if eval_ds is None:
-        console.print(f"[green]✓ Dataset ready:[/green] {train_count:,} train samples")
-    else:
-        console.print(
-            f"[green]✓ Dataset ready:[/green] {total_count:,} samples "
-            f"(train: {train_count:,}, eval: {eval_count:,})"
+        _ensure_non_empty(
+            eval_ds,
+            f"Validation dataset is empty after validation for path '{eval_path}'",
         )
+
+    if eval_ds is None:
+        console.print("[green]✓ Dataset ready[/green]")
+    else:
+        console.print("[green]✓ Dataset ready[/green] (train + eval)")
     return train_ds, eval_ds
 
 
@@ -371,19 +374,12 @@ def _print_cache_hit(
     train_ds: ray.data.Dataset,
     eval_ds: ray.data.Dataset | None,
 ) -> None:
-    train_count = train_ds.count()
     if eval_ds is None:
-        console.print(
-            f"[green]✓ Cache hit[/green] [dim]({fingerprint})[/dim]: "
-            f"{train_count:,} train samples"
-        )
+        console.print(f"[green]✓ Cache hit[/green] [dim]({fingerprint})[/dim]")
         return
 
-    eval_count = eval_ds.count()
     console.print(
-        f"[green]✓ Cache hit[/green] [dim]({fingerprint})[/dim]: "
-        f"{train_count + eval_count:,} samples "
-        f"(train: {train_count:,}, eval: {eval_count:,})"
+        f"[green]✓ Cache hit[/green] [dim]({fingerprint})[/dim] (train + eval)"
     )
 
 

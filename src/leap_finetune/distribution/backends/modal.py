@@ -1,3 +1,4 @@
+import os
 import pathlib
 import sys
 
@@ -12,7 +13,7 @@ def check_and_handle_modal(
     config_path_arg: str | None = None,
     *,
     config_dict: dict | None = None,
-) -> bool:
+) -> bool | dict:
     if config_dict is None:
         if not config_path_arg:
             return False
@@ -44,8 +45,7 @@ def check_and_handle_modal(
         print("Config contains Modal settings - submitting Modal job...\n")
         _preflight_checks(config_dict, modal_cfg)
         _print_config_summary(config_dict, modal_cfg)
-        _submit(config_dict, modal_cfg)
-        return True
+        return _submit(config_dict, modal_cfg)
     except SystemExit:
         raise
     except Exception as e:
@@ -135,7 +135,7 @@ def _print_config_summary(config_dict: dict, modal_cfg: dict) -> None:
     if train_cfg.get("num_train_epochs"):
         table.add_row("Epochs", str(train_cfg["num_train_epochs"]))
     if peft_cfg.get("use_peft"):
-        table.add_row("PEFT", f"Enabled ({peft_cfg.get('extends', 'custom')})")
+        table.add_row("PEFT", "Enabled")
 
     panel = Panel(
         table,
@@ -149,7 +149,7 @@ def _print_config_summary(config_dict: dict, modal_cfg: dict) -> None:
 # === Submit job ===
 
 
-def _submit(config_dict: dict, modal_cfg: dict) -> None:
+def _submit(config_dict: dict, modal_cfg: dict) -> dict:
     from contextlib import nullcontext
 
     import modal
@@ -161,6 +161,9 @@ def _submit(config_dict: dict, modal_cfg: dict) -> None:
 
     # Point output_dir at the mounted volume
     output_dir = modal_cfg.get("output_dir", "/outputs")
+    remote_state_dir = modal_cfg.get("state_dir", f"{output_dir}/.lft")
+    run_id = os.environ.get("LFT_RUN_ID")
+    output_volume = modal_cfg.get("output_volume", "leap-finetune")
     config_dict.setdefault("training_config", {})["output_dir"] = output_dir
 
     # Print trackio dashboard URL before training starts
@@ -173,7 +176,7 @@ def _submit(config_dict: dict, modal_cfg: dict) -> None:
     app = modal.App(modal_cfg.get("app_name", "leap-finetune"))
     image = _build_image(modal_cfg)
     volume = modal.Volume.from_name(
-        modal_cfg.get("output_volume", "leap-finetune"),
+        output_volume,
         create_if_missing=True,
     )
     secrets = [modal.Secret.from_name(s) for s in (modal_cfg.get("secrets") or [])]
@@ -197,6 +200,9 @@ def _submit(config_dict: dict, modal_cfg: dict) -> None:
 
         os.environ["LEAP_FINETUNE_DIR"] = "/app"
         os.environ["OUTPUT_DIR"] = output_dir
+        os.environ["LFT_STATE_DIR"] = remote_state_dir
+        if run_id:
+            os.environ["LFT_RUN_ID"] = run_id
         os.environ.pop("HF_HUB_OFFLINE", None)
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -226,8 +232,28 @@ def _submit(config_dict: dict, modal_cfg: dict) -> None:
                     print(f"Dashboard: https://modal.com/id/{app.app_id}")
                     print(f"Monitor with: modal app logs {app.app_id}")
                     print(f"Stop with: modal app stop {app.app_id}")
+                return {
+                    "backend": "modal",
+                    "status": "submitted",
+                    "app_id": app.app_id,
+                    "call_id": call.object_id,
+                    "output_dir": output_dir,
+                    "output_volume": output_volume,
+                    "remote_state_dir": remote_state_dir,
+                    "monitor_command": (
+                        f"modal app logs {app.app_id}" if app.app_id else None
+                    ),
+                }
             else:
                 train.remote(config_str)
+                return {
+                    "backend": "modal",
+                    "status": "completed",
+                    "app_id": app.app_id,
+                    "output_dir": output_dir,
+                    "output_volume": output_volume,
+                    "remote_state_dir": remote_state_dir,
+                }
 
 
 # === Image build ===

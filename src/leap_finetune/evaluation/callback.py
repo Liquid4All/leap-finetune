@@ -7,6 +7,7 @@ from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 
 from leap_finetune.evaluation.base import Benchmark
+from leap_finetune.state.store import record_eval_result
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,13 @@ class BenchmarkEvalCallback(TrainerCallback):
             metrics.update(all_results)
         state.log_history.append(all_results.copy())
 
+        if rank == 0:
+            record_eval_result(
+                step=state.global_step,
+                metrics=all_results,
+                status="completed",
+                source="benchmark",
+            )
         self._log_to_wandb(all_results)
 
         if was_training:

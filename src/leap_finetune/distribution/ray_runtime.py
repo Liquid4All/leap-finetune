@@ -162,6 +162,8 @@ def get_ray_env_vars(ray_temp_dir: str) -> dict[str, str]:
         "NCCL_SOCKET_FAMILY",
         "HIP_VISIBLE_DEVICES",
         "LEAP_JUDGE_LLM_CONFIG",
+        "LFT_RUN_ID",
+        "LFT_STATE_DIR",
     ):
         value = os.environ.get(key)
         if value:

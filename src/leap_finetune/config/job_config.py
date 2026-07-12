@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+import pathlib
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from datasets import Dataset
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
-from leap_finetune.data_loading.dataset_loader import DatasetLoader
 from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
 
 TrainingType = Literal[
@@ -71,8 +70,6 @@ class DatasetConfig(BaseModel):
 class TrainingConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    extends: str | None = None
-    base: str | None = None
     learning_rate: float | None = None
     weight_decay: float | None = None
     num_train_epochs: float | None = None
@@ -86,31 +83,43 @@ class TrainingConfig(BaseModel):
     logging_steps: int | None = None
     bf16: bool | None = None
     gradient_checkpointing: bool | None = None
-    output_dir: str | None = None
+    output_dir: str | pathlib.Path | None = None
     resume_from_checkpoint: str | None = None
     chat_template_path: str | None = None
     adapter_path: str | None = None
     completion_only_loss: bool | None = None
 
-    def extends_name(self) -> str | None:
-        return self.extends or self.base
-
-    def override_dict(self) -> dict[str, Any]:
-        return self.model_dump(exclude_none=True, exclude={"extends", "base"})
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_named_inheritance(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for key in ("extends", "base"):
+                if key in data:
+                    raise ValueError(
+                        "training_config no longer supports `extends` or `base`; "
+                        "training_type selects defaults and training_config only "
+                        "contains overrides."
+                    )
+        return data
 
 
 class PeftConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    extends: str | None = None
-    base: str | None = None
     use_peft: bool | None = None
 
-    def extends_name(self) -> str | None:
-        return self.extends or self.base
-
-    def override_dict(self) -> dict[str, Any]:
-        return self.model_dump(exclude_none=True, exclude={"extends", "base"})
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_named_inheritance(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for key in ("extends", "base"):
+                if key in data:
+                    raise ValueError(
+                        "peft_config no longer supports `extends` or `base`; "
+                        "PEFT defaults are selected from training_type when "
+                        "peft_config is enabled."
+                    )
+        return data
 
 
 class EvalConfig(BaseModel):
@@ -268,18 +277,13 @@ BenchmarkConfig = EvalConfig
 BenchmarkSuiteConfig = EvalSuiteConfig
 
 
-class _ResolvedConfigValue:
-    def __init__(self, value: Any):
-        self.value = value
-
-
 @dataclass
-class ResolvedJobConfig:
+class MaterializedJobConfig:
     job_name: str
     model_name: str
     training_type: TrainingType
-    dataset: DatasetLoader | tuple[Dataset, Dataset] | None
-    training_config: Any
+    dataset: Any
+    training_config: dict[str, Any]
     peft_config: Any | None
     benchmark_configs: dict[str, Any] | None
     model_config: dict[str, Any] | None
@@ -289,22 +293,3 @@ class ResolvedJobConfig:
     grpo_rollout: dict[str, Any] | None
     async_eval: dict[str, Any] | None
     config_dir: str | None = None
-
-    def to_dict(self, dataset: tuple[Dataset, Dataset] | None = None) -> dict[str, Any]:
-        dataset_to_use = dataset if dataset is not None else self.dataset
-        return {
-            "model_name": self.model_name,
-            "job_name": self.job_name,
-            "training_type": self.training_type,
-            "training_config": self.training_config.value,
-            "dataset": dataset_to_use,
-            "peft_config": self.peft_config.value if self.peft_config else None,
-            "benchmark_configs": self.benchmark_configs,
-            "model_config": self.model_config,
-            "ray_config": self.ray_config,
-            "rewards": self.rewards,
-            "rl_env": self.rl_env,
-            "grpo_rollout": self.grpo_rollout,
-            "async_eval": self.async_eval,
-            "config_dir": self.config_dir,
-        }

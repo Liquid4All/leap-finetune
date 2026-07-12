@@ -6,6 +6,8 @@ import logging
 import sys
 from pathlib import Path
 
+from leap_finetune.state.store import record_eval_result
+
 logger = logging.getLogger("leap_finetune.async_eval")
 
 # ==== Async Sidecar Runner ====
@@ -115,6 +117,22 @@ def _log_to_wandb(args: argparse.Namespace, results: dict[str, float]) -> None:
         logger.exception("wandb logging failed")
 
 
+def _record_state(
+    args: argparse.Namespace,
+    *,
+    status: str,
+    metrics: dict[str, float] | None = None,
+    error: str | None = None,
+) -> None:
+    record_eval_result(
+        step=args.trigger_step,
+        metrics=metrics or {},
+        status=status,
+        source="async_sidecar",
+        error=error,
+    )
+
+
 def main() -> int:
     _setup_logging()
     args = _parse_args()
@@ -126,16 +144,19 @@ def main() -> int:
         args.modality,
         args.vllm_gpus,
     )
+    _record_state(args, status="running")
 
     try:
         benchmarks = _load_benchmarks(args)
         logger.info("loaded %d benchmarks", len(benchmarks))
     except Exception:
         logger.exception("benchmark construction failed; aborting")
+        _record_state(args, status="failed", error="benchmark construction failed")
         return 2
 
     if not benchmarks:
         logger.warning("no benchmarks to run; exiting cleanly")
+        _record_state(args, status="completed", metrics={})
         return 0
 
     # vLLM EngineCore CUDA init occasionally races with the parent training
@@ -175,6 +196,7 @@ def main() -> int:
                     _MAX_VLLM_RETRIES,
                     transient,
                 )
+                _record_state(args, status="failed", error="vLLM startup failed")
                 return 3
             logger.warning(
                 "vLLM startup transient failure (attempt %d/%d); "
@@ -203,6 +225,10 @@ def main() -> int:
             backend,
             fallback_backend_factory=fallback_factory,
         )
+    except Exception:
+        logger.exception("benchmark execution failed")
+        _record_state(args, status="failed", error="benchmark execution failed")
+        return 4
     finally:
         try:
             backend.close()
@@ -215,6 +241,7 @@ def main() -> int:
                 pass
 
     _log_to_wandb(args, results)
+    _record_state(args, status="completed", metrics=results)
     logger.info("async eval done")
     return 0
 

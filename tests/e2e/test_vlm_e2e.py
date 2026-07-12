@@ -136,7 +136,6 @@ def _write_string_content_vlm_dataset(tmp_path):
         "training_type": "vlm_sft",
         "dataset": {"path": str(ds_path), "type": "vlm_sft", "test_size": 0.2},
         "training_config": {
-            "extends": "DEFAULT_VLM_SFT",
             "num_train_epochs": 1,
             "per_device_train_batch_size": 1,
             "learning_rate": 1e-5,
@@ -145,7 +144,7 @@ def _write_string_content_vlm_dataset(tmp_path):
             "eval_strategy": "epoch",
             "logging_steps": 2,
         },
-        "peft_config": {"use_peft": True, "extends": "DEFAULT_VLM_LORA"},
+        "peft_config": {"use_peft": True},
     }
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(yaml.safe_dump(config))

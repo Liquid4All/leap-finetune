@@ -11,6 +11,7 @@ from transformers.trainer_callback import TrainerCallback, TrainerControl, Train
 
 from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
 from leap_finetune.evaluation.runner import stage_checkpoint_for_eval
+from leap_finetune.state.store import record_eval_result, update_log_refs
 from leap_finetune.training.utils.logging import is_rank_zero
 
 logger = logging.getLogger(__name__)
@@ -228,6 +229,7 @@ class ReservedEvalCallback(TrainerCallback):
         log_dir = self._eval_dir / "vllm_server"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "server.log"
+        update_log_refs(log_refs={"reserved_vllm_server": str(log_path)})
         logger.info(
             "[async_eval/reserved] launching vLLM (log=%s): %s",
             log_path,
@@ -267,6 +269,13 @@ class ReservedEvalCallback(TrainerCallback):
             self._ensure_thread()
             ckpt_path = self._save_checkpoint(model, state)
             self._input_q.put(_EvalRequest(step=state.global_step, ckpt_path=ckpt_path))
+            record_eval_result(
+                step=state.global_step,
+                metrics={},
+                status="submitted",
+                source="async_reserved",
+                metadata={"checkpoint": str(ckpt_path), "server_url": self.server_url},
+            )
             # NOTE: do NOT reset _consecutive_failures here. The counter is
             # shared with helper-thread cycle failures drained in
             # _account_result; a successful submit followed by N failed
@@ -280,6 +289,13 @@ class ReservedEvalCallback(TrainerCallback):
                 "[async_eval/reserved] submission failed at step %d (%d consecutive)",
                 state.global_step,
                 self._consecutive_failures,
+            )
+            record_eval_result(
+                step=state.global_step,
+                metrics={},
+                status="failed",
+                source="async_reserved",
+                error="reserved eval submission failed",
             )
             if self._consecutive_failures >= self.cfg.failure.max_consecutive:
                 self._disabled = True
@@ -398,6 +414,13 @@ class ReservedEvalCallback(TrainerCallback):
         failures would auto-disable a working setup.
         """
         if not result.ok:
+            record_eval_result(
+                step=result.step,
+                metrics=result.metrics,
+                status="failed",
+                source="async_reserved",
+                error="reserved eval cycle failed",
+            )
             self._consecutive_failures += 1
             logger.warning(
                 "[async_eval/reserved] eval cycle failed at step %d (%d consecutive)",
@@ -411,6 +434,12 @@ class ReservedEvalCallback(TrainerCallback):
                     self._consecutive_failures,
                 )
             return
+        record_eval_result(
+            step=result.step,
+            metrics=result.metrics,
+            status="completed",
+            source="async_reserved",
+        )
         self._consecutive_failures = 0
 
     def _log_to_wandb(self, result: _EvalResult) -> None:

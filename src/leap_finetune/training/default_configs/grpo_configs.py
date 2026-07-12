@@ -11,8 +11,8 @@ from leap_finetune.training.utils.config_filter import (
 
 # === GRPO config hygiene ===
 #
-# This module is auto-discovered by training/default_configs/__init__.py. Any new
-# DEFAULT_* / MOE_* dict becomes available via `extends:` in YAML.
+# Defaults are registered by training_type in training/default_configs/__init__.py.
+# YAML training_config only carries user overrides.
 #
 # Field names match TRL v1.0 GRPOConfig. Keys not recognized by GRPOConfig must
 # be added to GRPO_EXCLUDED_KEYS / VLM_GRPO_EXCLUDED_KEYS so training loops

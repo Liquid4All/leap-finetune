@@ -126,6 +126,11 @@ def fixtures_dir():
     return pathlib.Path(__file__).parent / "e2e" / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def isolated_lft_state_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("LFT_STATE_DIR", str(tmp_path / ".lft"))
+
+
 BASE_SFT_DATASET = {
     "path": "HuggingFaceTB/smoltalk",
     "type": "sft",
@@ -186,7 +191,7 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
 
         job_config = parse_job_config(config_path)
         job_config = materialize_job_config(job_config)
-        job_config_dict = job_config.to_dict()
+        job_config_dict = vars(job_config).copy()
         return ray_trainer(job_config_dict)
     finally:
         if previous_output_dir is None:

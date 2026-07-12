@@ -14,7 +14,6 @@ rewards:
   weights: [1.0]
 
 training_config:
-  extends: "DEFAULT_VLM_GRPO"
   num_train_epochs: 1
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 1
@@ -25,8 +24,8 @@ training_config:
   save_strategy: "no"
   eval_strategy: "no"
   logging_steps: 1
-  # Inherit DEFAULT_VLM_GRPO use_vllm: true so this fixture matches shipped
-  # VLM GRPO rollout defaults.
+  # The vlm_grpo defaults enable vLLM so this fixture matches shipped rollout
+  # defaults.
 
 peft_config:
   use_peft: false

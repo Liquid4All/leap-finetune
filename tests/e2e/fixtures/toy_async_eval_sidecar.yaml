@@ -15,7 +15,6 @@ dataset:
   subset: "all"
 
 training_config:
-  extends: "DEFAULT_SFT"
   num_train_epochs: 4
   per_device_train_batch_size: 2
   gradient_accumulation_steps: 1

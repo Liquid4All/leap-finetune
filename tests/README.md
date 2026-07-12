@@ -16,10 +16,41 @@ buckets:
 uv run pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe
 ```
 
+On AMD / ROCm environments, use the ROCm project so CUDA and ROCm locks remain
+separate. Set this once in your shell, module, or direnv config:
+
+```bash
+export UV_PROJECT=rocm
+uv run python -m pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe
+```
+
 ## GPU Smoke Tests
 
 ```bash
 uv run pytest tests/e2e --dense --moe --vlm
+```
+
+For ROCm:
+
+```bash
+UV_PROJECT=rocm uv run python -m pytest tests/e2e --dense --moe --vlm
+```
+
+## FA2 Validation
+
+Normal tests may fall back to SDPA. FA2 validation should inspect the active
+environment and can require runtime selection:
+
+```bash
+uv sync
+uv run leap-finetune env fa2-status --require
+```
+
+For ROCm:
+
+```bash
+UV_PROJECT=rocm uv sync
+UV_PROJECT=rocm uv run leap-finetune env fa2-status --require
 ```
 
 ## SLURM

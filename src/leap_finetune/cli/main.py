@@ -209,6 +209,11 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "env":
+        from leap_finetune.cli.env import main as env_main
+
+        sys.exit(env_main(sys.argv[2:]))
+
     command, config_path_arg, output_dir_arg = _parse_cli_args()
 
     if command == "slurm":
@@ -223,6 +228,7 @@ def main() -> None:
         print("Usage: leap-finetune <path_to_config.yaml>")
         print("   or: leap-finetune slurm <path_to_config.yaml>")
         print("   or: leap-finetune eval <path_to_eval_config.yaml>")
+        print("   or: leap-finetune env fa2-status")
         sys.exit(1)
 
     run_config(config_path_arg)

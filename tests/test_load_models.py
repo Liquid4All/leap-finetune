@@ -33,12 +33,41 @@ class DummyModel:
 
 
 def test_sdpa_when_flash_attn_metadata_missing(monkeypatch):
+    monkeypatch.delenv("LEAP_REQUIRE_FLASH_ATTN_2", raising=False)
     monkeypatch.setattr(model_loading, "is_flash_attn_2_available", lambda: False)
+    monkeypatch.setattr(model_loading, "_ATTN_FALLBACK_WARNING_EMITTED", False)
 
-    assert model_loading._get_attn_implementation() == "sdpa"
+    with pytest.warns(RuntimeWarning, match="falling back to SDPA"):
+        assert model_loading._get_attn_implementation() == "sdpa"
 
 
 def test_sdpa_when_flash_attn_import_fails(monkeypatch):
+    monkeypatch.delenv("LEAP_REQUIRE_FLASH_ATTN_2", raising=False)
+    monkeypatch.setattr(model_loading, "is_flash_attn_2_available", lambda: True)
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "flash_attn":
+            raise ImportError("broken extension")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(model_loading, "_ATTN_FALLBACK_WARNING_EMITTED", False)
+
+    with pytest.warns(RuntimeWarning, match="broken extension"):
+        assert model_loading._get_attn_implementation() == "sdpa"
+
+
+def test_required_flash_attn_fails_when_metadata_missing(monkeypatch):
+    monkeypatch.setenv("LEAP_REQUIRE_FLASH_ATTN_2", "1")
+    monkeypatch.setattr(model_loading, "is_flash_attn_2_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="Transformers does not report"):
+        model_loading._get_attn_implementation()
+
+
+def test_required_flash_attn_fails_when_import_fails(monkeypatch):
+    monkeypatch.setenv("LEAP_REQUIRE_FLASH_ATTN_2", "true")
     monkeypatch.setattr(model_loading, "is_flash_attn_2_available", lambda: True)
     original_import = builtins.__import__
 
@@ -49,10 +78,12 @@ def test_sdpa_when_flash_attn_import_fails(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    assert model_loading._get_attn_implementation() == "sdpa"
+    with pytest.raises(RuntimeError, match="broken extension"):
+        model_loading._get_attn_implementation()
 
 
 def test_flash_attention_when_import_succeeds(monkeypatch):
+    monkeypatch.setenv("LEAP_REQUIRE_FLASH_ATTN_2", "1")
     monkeypatch.setattr(model_loading, "is_flash_attn_2_available", lambda: True)
     flash_attn = types.ModuleType("flash_attn")
     flash_attn.flash_attn_func = object()

@@ -702,11 +702,12 @@ class TestSlurmGeneration:
         assert config["slurm"]["job_name"] == "sft_training"
         assert config["slurm"]["gpus_per_task"] == 4
 
-    def test_generate_slurm_script(self, slurm_config_path):
+    def test_generate_slurm_script(self, slurm_config_path, monkeypatch):
         import tempfile
 
         from leap_finetune.distribution.backends.slurm import generate_slurm_script
 
+        monkeypatch.setenv("VIRTUAL_ENV", "/opt/leap-rocm/.venv")
         config_path = pathlib.Path(slurm_config_path)
         with open(config_path) as f:
             config_dict = yaml.safe_load(f)
@@ -722,6 +723,13 @@ class TestSlurmGeneration:
             assert "#SBATCH --job-name=sft_training" in content
             assert "#SBATCH --gpus-per-task=4" in content
             assert "LEAP_FINETUNE_FROM_SLURM=1" in content
+            assert "VENV_ACTIVATE=/opt/leap-rocm/.venv/bin/activate" in content
+            assert 'source "${VENV_ACTIVATE}"' in content
+            assert "getattr(torch.version, 'hip', None)" in content
+            assert 'export HIP_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES}"' in content
+            assert "unset ROCR_VISIBLE_DEVICES" in content
+            assert "unset CUDA_VISIBLE_DEVICES" in content
+            assert "unset HIP_VISIBLE_DEVICES" in content
             assert "leap-finetune" in content
 
     def test_generate_multinode_slurm_script_starts_ray_cluster(self, tmp_path):

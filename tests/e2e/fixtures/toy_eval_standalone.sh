@@ -18,7 +18,11 @@ fi
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
-source .venv/bin/activate
+VENV_ACTIVATE="${VIRTUAL_ENV:-$(pwd)/.venv}/bin/activate"
+if [[ ! -f "${VENV_ACTIVATE}" ]]; then
+    VENV_ACTIVATE="$(pwd)/.venv/bin/activate"
+fi
+source "${VENV_ACTIVATE}"
 [ -f "$HOME/.env" ] && source "$HOME/.env"
 
 export TMPDIR="${HOME}/tmp/eval-standalone-${SLURM_JOB_ID:-manual}"

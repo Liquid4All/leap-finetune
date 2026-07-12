@@ -85,7 +85,7 @@ ray_slurm_init() {
   RAY_HEAD_IP="$(srun --nodes=1 --ntasks=1 -w "${RAY_HEAD_NODE}" hostname -I | awk '{print $1}')"
   RAY_ADDRESS="${RAY_HEAD_IP}:${RAY_PORT}"
   TOTAL_GPUS=$((nnodes * gpus_per_node))
-  RAY_TEMP_ROOT="${RAY_TEMP_ROOT:-/tmp/ray-${USER}/${SLURM_JOB_ID}}"
+  RAY_TEMP_ROOT="${RAY_TEMP_ROOT:-/tmp/r${SLURM_JOB_ID}}"
 
   export RAY_HEAD_NODE RAY_HEAD_IP RAY_PORT RAY_ADDRESS TOTAL_GPUS RAY_TEMP_ROOT
 }

@@ -1,3 +1,8 @@
+import json
+import os
+from pathlib import Path
+from typing import Any
+
 from ray import train
 from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
@@ -6,6 +11,60 @@ from leap_finetune.checkpointing.paths import (
     current_checkpoint_output_dir,
     rename_standard_checkpoint,
 )
+
+LEAP_RAY_FINAL_METRICS_FILE = ".leap_ray_final_metrics.json"
+
+
+def _json_default(value: Any) -> Any:
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:
+            pass
+    return str(value)
+
+
+def persist_rank_zero_metrics(output_dir: str | os.PathLike, metrics: dict) -> None:
+    """Persist final metrics for Ray Train results that omit metrics."""
+    try:
+        if train.get_context().get_world_rank() != 0:
+            return
+    except Exception:
+        return
+
+    metrics_path = Path(output_dir) / LEAP_RAY_FINAL_METRICS_FILE
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = metrics_path.with_suffix(f"{metrics_path.suffix}.tmp")
+    tmp_path.write_text(
+        json.dumps(metrics, default=_json_default, sort_keys=True),
+        encoding="utf-8",
+    )
+    os.replace(tmp_path, metrics_path)
+
+
+def hydrate_missing_ray_metrics(result, output_dir: str):
+    """Fill Ray Train results from callback metrics when Ray omits them."""
+    if result is None or getattr(result, "metrics", None) is not None:
+        return result
+
+    metrics_path = Path(output_dir) / LEAP_RAY_FINAL_METRICS_FILE
+    if not metrics_path.exists():
+        return result
+
+    with metrics_path.open(encoding="utf-8") as f:
+        result.metrics = json.load(f)
+
+    return result
+
+
+def report_ray_metrics(metrics: dict, output_dir: str | os.PathLike) -> None:
+    persist_rank_zero_metrics(output_dir, metrics)
+    train.report(metrics=metrics, checkpoint=None)
 
 
 class LeapCheckpointCallback(TrainerCallback):
@@ -86,14 +145,14 @@ class LeapCheckpointCallback(TrainerCallback):
                 )
 
         # Include loss curve summary for test assertions
-        report_metrics = self.metrics.copy()
-        report_metrics.update(self._latest_benchmark_metrics(state))
+        metrics = self.metrics.copy()
+        metrics.update(self._latest_benchmark_metrics(state))
         if self.loss_history:
-            report_metrics["loss_history"] = self.loss_history.copy()
+            metrics["loss_history"] = self.loss_history.copy()
 
-        # Report metrics only — HF Trainer already saved checkpoint to output_dir.
+        # Report metrics only; HF Trainer already saved checkpoint to output_dir.
         # Passing checkpoint=None avoids Ray duplicating files into ray_logs/.
-        train.report(metrics=report_metrics, checkpoint=None)
+        report_ray_metrics(metrics, args.output_dir)
 
     def on_train_end(
         self,
@@ -103,8 +162,8 @@ class LeapCheckpointCallback(TrainerCallback):
         **kwargs,
     ) -> None:
         if self.metrics:
-            report_metrics = self.metrics.copy()
-            report_metrics.update(self._latest_benchmark_metrics(state))
+            metrics = self.metrics.copy()
+            metrics.update(self._latest_benchmark_metrics(state))
             if self.loss_history:
-                report_metrics["loss_history"] = self.loss_history.copy()
-            train.report(metrics=report_metrics, checkpoint=None)
+                metrics["loss_history"] = self.loss_history.copy()
+            report_ray_metrics(metrics, args.output_dir)

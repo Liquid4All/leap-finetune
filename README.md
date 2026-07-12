@@ -47,35 +47,130 @@ git clone <repository-url>
 cd leap_finetune
 ```
 
-CUDA / NVIDIA clusters use the default dependency groups:
+### Backend Install Profiles
+
+CUDA / NVIDIA clusters use the root project and default dependency groups:
 
 ```bash
 uv sync
 ```
 
-AMD / ROCm clusters should use the ROCm group instead:
+AMD / ROCm clusters use the ROCm project. Set `UV_PROJECT` once in your shell,
+module, or direnv config:
 
 ```bash
-uv sync --no-group cuda --group rocm
+export UV_PROJECT=rocm
+uv sync
 ```
 
-The ROCm group is lockfile-managed and uses vLLM's ROCm wheel index for vLLM
-plus the matching `torch`, `torchvision`, `torchaudio`, `flash-attn`, and
-`triton` stack. The pinned ROCm vLLM wheels are Python 3.12 Linux wheels, so
-use the repo's `.python-version` when creating AMD environments.
-
-If `flash-attn` was built against a different Torch/CUDA ABI, errors such as
-`flash_attn_2_cuda... undefined symbol` usually mean the environment needs to
-be rebuilt:
+After `UV_PROJECT` is set, normal commands stay the same: `uv sync`,
+`uv run ...`, and the SLURM helpers all use the selected backend project.
 
 ```bash
-uv cache clean flash-attn
-rm -rf .venv
-MAX_JOBS=1 uv sync
+source .venv/bin/activate
+leap-finetune job_configs/sft_example_with_slurm.yaml
+
+# ROCm, after `export UV_PROJECT=rocm`:
+uv run leap-finetune job_configs/sft_example_with_slurm.yaml
 ```
 
-Run this on a machine with a CUDA toolkit and enough build memory available if
-uv needs to rebuild `flash-attn` from source.
+<details>
+<summary>Backend install details</summary>
+
+The environment variable is `UV_PROJECT`, not `UV_EXPORT`.
+
+The default install paths both try pinned accelerator wheels:
+
+- CUDA: `uv sync` installs the default CUDA lock, including `vllm==0.22.0` and
+  the pinned CUDA FlashAttention 2 wheel for the Torch 2.11 / CUDA 13 stack.
+- ROCm: `UV_PROJECT=rocm uv sync` installs the ROCm lock from [`rocm`](./rocm/),
+  including direct URLs for the validated `torch`, `torchvision`, `torchaudio`,
+  `triton`, `flash-attn`, and `vllm==0.22.0+rocm722` wheel set.
+
+Ray is pinned to `2.51.1` for both profiles. The pinned accelerator wheels are
+Python 3.12 Linux x86_64 wheels, so use the repo's `.python-version` when
+creating GPU environments.
+
+`UV_PROJECT` can also be used explicitly for either backend:
+
+```bash
+export UV_PROJECT=cuda  # optional; bare root uv is already CUDA
+export UV_PROJECT=rocm
+```
+
+The top-level `cuda` path is an alias to the root project, so
+`UV_PROJECT=cuda` uses the same CUDA lock as bare `uv sync`.
+
+No hardware-specific environment variables are required for installation. On
+clusters where the default uv cache is slow, quota-limited, or backed by
+node-local scratch, you can prefix either install command with
+`UV_CACHE_DIR=.uv-cache` to keep uv's package cache in the repo.
+
+</details>
+
+### FlashAttention 2
+
+The default CUDA and ROCm install paths try to install pinned FA2 wheels. If FA2
+installs but does not import or cannot be selected at runtime, training emits an
+explicit warning and falls back to SDPA:
+
+```text
+FlashAttention 2 not available (...); falling back to SDPA.
+```
+
+To inspect the active environment:
+
+```bash
+# CUDA, after `uv sync`
+uv run leap-finetune env fa2-status
+
+# ROCm, after `export UV_PROJECT=rocm && uv sync`
+uv run leap-finetune env fa2-status
+
+# Fail if FA2 is not usable
+uv run leap-finetune env fa2-status --require
+```
+
+`fa2-status` reports the detected backend, Python tag, platform, Torch version,
+CUDA/HIP version, accelerator visibility, installed `flash-attn` version,
+selected attention implementation, and the reason FA2 is or is not usable.
+
+<details>
+<summary>Install without FA2 or repair FA2 separately</summary>
+
+If a pinned FA2 wheel cannot be resolved or installed, `uv sync` fails at install
+time. Install without the pinned FA2 group first, then repair FA2 separately:
+
+```bash
+# CUDA without pinned FA2
+uv sync --no-group flash-attn
+uv run leap-finetune env install-fa2
+
+# ROCm HF training without pinned FA2/vLLM
+UV_PROJECT=rocm uv sync --no-group rocm-fa2 --no-group rocm-vllm
+UV_PROJECT=rocm uv run leap-finetune env install-fa2
+```
+
+`install-fa2` tries, in order:
+
+1. A matching pinned wheel for the detected CUDA or ROCm runtime.
+2. Binary-only public resolution for `flash-attn==2.8.3`.
+3. Source build, only when explicitly requested.
+
+Source builds are not part of the normal install path. Use them only as an
+explicit escape hatch on a machine with the matching CUDA or ROCm toolchain and
+enough build memory:
+
+```bash
+uv run leap-finetune env install-fa2 --allow-source-build
+```
+
+ROCm GRPO/vLLM support requires the full `rocm-vllm` profile and therefore a
+compatible ROCm FA2 stack. If that stack cannot resolve on a target cluster, use
+the SDPA fallback for non-vLLM training until a matching vLLM/FA2 wheel set is
+available.
+
+</details>
 
 ## Quickstart
 
@@ -828,7 +923,7 @@ Export a HuggingFace checkpoint or PEFT adapter to GGUF with
 `leap-export-gguf`:
 
 ```bash
-uv run leap-export-gguf /path/to/checkpoint --quant F16 --output-dir /lambdafs/gguf
+uv run leap-export-gguf /path/to/checkpoint --quant F16 --output-dir ./outputs/gguf
 ```
 
 Repeat `--quant` to produce multiple outputs:
@@ -837,7 +932,7 @@ Repeat `--quant` to produce multiple outputs:
 uv run leap-export-gguf /path/to/checkpoint \
   --quant F16 \
   --quant Q4_K_M \
-  --output-dir /lambdafs/gguf \
+  --output-dir ./outputs/gguf \
   --llama-cpp-dir /path/to/llama.cpp
 ```
 
@@ -852,7 +947,7 @@ PEFT adapter directories can be exported with `F16`, `BF16`, `F32`, or `Q8_0`:
 uv run leap-export-gguf /path/to/adapter \
   --base-model-path /path/to/base-model \
   --quant F16 \
-  --output-dir /lambdafs/gguf
+  --output-dir ./outputs/gguf
 ```
 
 For adapter K-quants, merge the adapter into the base model first, then export

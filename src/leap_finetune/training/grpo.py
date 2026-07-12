@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import logging
 from typing import cast
 
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import PreTrainedTokenizerBase
+
+from leap_finetune.distribution.ray_runtime import normalize_visible_devices
+
+normalize_visible_devices()
+
 from trl import GRPOConfig, GRPOTrainer
 
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback

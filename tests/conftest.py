@@ -17,7 +17,14 @@ os.environ.setdefault("RAY_TMPDIR", str(_RAY_TMPDIR))
 
 # === E2E test output dir ===
 
-_TEST_RESULTS_DIR = pathlib.Path.home() / "test-results"
+_DEFAULT_TEST_RESULTS_DIR = LEAP_FINETUNE_DIR / ".test-results" / "e2e"
+
+
+def _e2e_test_results_dir() -> pathlib.Path:
+    output_dir = os.environ.get("OUTPUT_DIR")
+    if output_dir:
+        return pathlib.Path(output_dir).expanduser().resolve()
+    return _DEFAULT_TEST_RESULTS_DIR
 
 
 # === CLI flag registration ===
@@ -162,14 +169,16 @@ def write_config_fn(tmp_path):
 
 @pytest.fixture
 def e2e_output_dir():
-    """Provide ~/test-results as output dir, cleaned up after each test."""
-    _TEST_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    yield _TEST_RESULTS_DIR
-    shutil.rmtree(_TEST_RESULTS_DIR, ignore_errors=True)
+    """Provide the configured e2e output dir, cleaned up after each test."""
+    test_results_dir = _e2e_test_results_dir()
+    test_results_dir.mkdir(parents=True, exist_ok=True)
+    yield test_results_dir
+    shutil.rmtree(test_results_dir, ignore_errors=True)
 
 
 def run_e2e_training(config_path: str, output_dir: pathlib.Path):
     """Parse config, override output_dir, run training, return Result."""
+    previous_output_dir = os.environ.get("OUTPUT_DIR")
     os.environ["OUTPUT_DIR"] = str(output_dir)
     try:
         from leap_finetune.config.parser import materialize_job_config, parse_job_config
@@ -180,7 +189,10 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
         job_config_dict = job_config.to_dict()
         return ray_trainer(job_config_dict)
     finally:
-        os.environ.pop("OUTPUT_DIR", None)
+        if previous_output_dir is None:
+            os.environ.pop("OUTPUT_DIR", None)
+        else:
+            os.environ["OUTPUT_DIR"] = previous_output_dir
 
 
 def assert_training_result(

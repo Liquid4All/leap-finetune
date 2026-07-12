@@ -11,15 +11,15 @@ dependencies = [
     "accelerate>=1.7.0",
     "peft>=0.15.2",
     "deepspeed>=0.17.1; sys_platform == 'linux'",
-    "torch>=2.7.1",
+    "torch>=2.10.0,<2.12.0",
     "transformers>=5.3.0,<5.4.0",
     "numpy>=2.4.1",
-    "trl>=1.0,<2.0",
+    "trl==1.2.0",
     "rich>=14.1.0",
     "pillow>=11.3.0",
     "mpi4py>=4.1.0; sys_platform == 'linux'",
     "wandb>=0.22.3",
-    "ray==2.48.0",
+    "ray==2.51.1",
     "pyyaml>=6.0",
     "turm>=0.13.0; sys_platform == 'linux'",
     "torchvision>=0.24.1",
@@ -48,71 +48,24 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv]
-# External flash-attn is optional because vLLM pins the CUDA stack tightly.
-# If installed via `uv sync --group flash-attn`, build against the runtime
-# torch ABI instead of an isolated build environment.
+# The default CUDA profile installs a pinned FA2 wheel. Model loading still
+# probes the import at runtime and falls back to SDPA if FA2 is not usable.
 no-build-isolation-package = ["flash-attn"]
-default-groups = ["dev", "cuda"]
+default-groups = ["dev", "cuda", "flash-attn"]
 environments = [
     "python_version == '3.12' and sys_platform == 'darwin'",
     "python_version == '3.12' and sys_platform == 'linux'",
 ]
-# CUDA is the default GPU stack. ROCm pulls vLLM and its torch stack from a different index,
-# so it must be selected explicitly instead of the default cuda group:
-#   uv sync --no-group cuda --group rocm
-conflicts = [
-    [{ group = "cuda" }, { group = "rocm" }],
-    [{ group = "flash-attn" }, { group = "rocm" }],
-]
 
-# vLLM 0.19.0 still declares transformers<5, but LFM models require
-# Transformers 5.3.x. The override is intentional and covered by the GRPO
+# vLLM wheels can declare dependency ranges that lag the LFM Transformers /
+# Hugging Face Hub stack. The override is intentional and covered by the GRPO
 # smoke fixtures, which leave use_vllm enabled to match shipped defaults.
 override-dependencies = [
-    # vllm 0.19.x declares transformers<5; override so it resolves with 5.3+
+    # Override so vLLM resolves with the LFM-validated Transformers 5.3 stack.
     "transformers>=5.3.0,<5.4.0",
     "huggingface_hub>=1.0",
     "numpy<2.5",
 ]
-
-[[tool.uv.index]]
-name = "vllm-rocm"
-url = "https://wheels.vllm.ai/rocm/"
-explicit = true
-
-[tool.uv.sources]
-amd-aiter = [
-    { index = "vllm-rocm", group = "rocm" },
-]
-amdsmi = [
-    { index = "vllm-rocm", group = "rocm" },
-]
-"flash-attn" = [
-    { index = "vllm-rocm", group = "rocm" },
-]
-torch = [
-    { index = "vllm-rocm", group = "rocm" },
-]
-torchaudio = [
-    { index = "vllm-rocm", group = "rocm" },
-]
-torchvision = [
-    { index = "vllm-rocm", group = "rocm" },
-]
-triton = [
-    { index = "vllm-rocm", group = "rocm" },
-]
-"triton-kernels" = [
-    { index = "vllm-rocm", group = "rocm" },
-]
-vllm = [
-    { index = "vllm-rocm", group = "rocm" },
-]
-
-[[tool.uv.dependency-metadata]]
-name = "flash-attn"
-version = "2.8.3"
-requires-dist = ["torch", "einops", "ninja", "packaging", "setuptools", "wheel"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -134,10 +87,9 @@ exclude = ["src/leap_finetune/quantization/gguf"]
 [dependency-groups]
 cuda = [
     "liger-kernel>=0.6.2; sys_platform == 'linux'",
-    # Keep CUDA vLLM pinned to the Transformers 5 / LFM stack that has
-    # been validated. External flash-attn remains opt-in below; vLLM uses
-    # its own kernels for GRPO in the default CUDA install path.
-    "vllm==0.19.0; sys_platform == 'linux'",
+    # Keep CUDA vLLM pinned. FA2 is installed by default through the separate
+    # flash-attn group so it can be disabled with `--no-group flash-attn`.
+    "vllm==0.22.0; sys_platform == 'linux'",
 ]
 dev = [
     "pre-commit>=4.2.0",
@@ -145,20 +97,7 @@ dev = [
     "ruff>=0.11.13",
 ]
 flash-attn = [
-    # Optional HF FA2 support for environments with a known-good wheel/build.
+    # HF FA2 support for the default CUDA 13 / Torch 2.11 stack.
     # Model loading still probes the import at runtime and falls back to SDPA.
-    "flash-attn>=2.8.0; sys_platform == 'linux'",
-]
-rocm = [
-    # Keep these direct so uv 0.6.x can apply the group-scoped vLLM ROCm index.
-    "amd-aiter==0.1.13; sys_platform == 'linux'",
-    "amdsmi==26.2.2; sys_platform == 'linux'",
-    "flash-attn==2.8.3; sys_platform == 'linux'",
-    "torch>=2.7.1; sys_platform == 'linux'",
-    "torchaudio==2.9.0+eaa9e4e; sys_platform == 'linux'",
-    "torchvision>=0.24.1; sys_platform == 'linux'",
-    "triton==3.6.0; sys_platform == 'linux'",
-    "triton-kernels==1.0.0; sys_platform == 'linux'",
-    "liger-kernel>=0.6.2; sys_platform == 'linux'",
-    "vllm==0.22.0+rocm722; sys_platform == 'linux'",
+    "flash-attn @ https://github.com/adithyaxx/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu13torch2.11cxx11abiTRUE-cp312-cp312-linux_x86_64.whl#sha256=eea423825f3e12818b98b2078e2cb5ce6fe6b73d22612316d2a55fad4701938f; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]

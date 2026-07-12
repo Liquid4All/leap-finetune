@@ -5,6 +5,7 @@ import shlex
 from dataclasses import dataclass
 
 from leap_finetune import LEAP_FINETUNE_DIR
+from leap_finetune.distribution.backends.slurm import render_venv_activation_block
 
 # ==== Sidecar Sbatch Rendering ====
 
@@ -119,9 +120,7 @@ if [ -n "${{LEAP_CUDA_MODULE:-}}" ] && command -v module >/dev/null 2>&1; then
     module load "$LEAP_CUDA_MODULE" 2>/dev/null || true
 fi
 
-if [ -f .venv/bin/activate ]; then
-    source .venv/bin/activate
-fi
+{render_venv_activation_block(LEAP_FINETUNE_DIR)}
 
 # User-level secrets (WANDB_API_KEY, HF_TOKEN, HF_HOME, ...).
 if [ -f "$HOME/.env" ]; then

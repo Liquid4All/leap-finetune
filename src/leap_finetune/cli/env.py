@@ -6,7 +6,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-from leap_finetune.checkpointing.model_loading import _flash_attn_2_status
+from leap_finetune.distribution.ray_runtime import normalize_visible_devices
 
 FLASH_ATTN_VERSION = "2.8.3"
 
@@ -69,6 +69,8 @@ PINNED_FLASH_ATTN_WHEELS = (
 
 
 def detect_runtime_target() -> RuntimeTarget:
+    normalize_visible_devices()
+
     torch_version = None
     cuda_version = None
     hip_version = None
@@ -108,6 +110,15 @@ def _package_version(distribution_name: str) -> str | None:
         return importlib.metadata.version(distribution_name)
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _flash_attn_2_status() -> tuple[bool, str]:
+    normalize_visible_devices()
+    from leap_finetune.checkpointing.model_loading import (
+        _flash_attn_2_status as get_status,
+    )
+
+    return get_status()
 
 
 def _matching_pinned_wheel(target: RuntimeTarget) -> FlashAttnWheel | None:

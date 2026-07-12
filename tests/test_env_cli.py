@@ -93,6 +93,26 @@ def test_fa2_status_require_exits_nonzero(monkeypatch):
     assert env.fa2_status(require=True) == 1
 
 
+def test_fa2_status_normalizes_visible_devices_before_probe(monkeypatch):
+    calls = []
+
+    def fake_normalize():
+        calls.append("normalize")
+
+    def fake_status():
+        calls.append("status")
+        return False, "missing"
+
+    monkeypatch.setattr(env, "normalize_visible_devices", fake_normalize)
+    monkeypatch.setattr(env, "_flash_attn_2_status", fake_status)
+    monkeypatch.setattr(env, "_package_version", lambda _: None)
+
+    assert env.fa2_status(require=False) == 0
+
+    assert calls[0] == "normalize"
+    assert calls[-1] == "status"
+
+
 def test_install_fa2_tries_matching_pin_first(monkeypatch):
     target = env.RuntimeTarget(
         backend="cuda",

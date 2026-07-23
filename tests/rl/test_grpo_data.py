@@ -1058,377 +1058,116 @@ class TestVLMGroundingCIoUF1:
         assert weights == [0.1, 1.0]
 
 
-# === VLM GRPO trainer override: image lift-to-top-level ===
-#
-# Regression test for the critical fix in LFMVLMGRPOTrainer._generate_and_score_completions:
-# TRL's GRPOTrainer looks for a top-level `images` column on each example
-# to build the training forward-pass pixel_values. Our VLM GRPO dataset
-# embeds images inside the `prompt` messages, so without the override TRL
-# detects no images, runs the training forward without pixel_values, and
-# the LFM2-VL model silently falls back to treating `<image>` placeholder
-# tokens as raw text embeddings. The rollout/training log-prob gap blows
-# up (~0.3/token) and the policy degrades.
+# === VLM GRPO integration with native TRL LFM2-VL support ===
 
 
-class TestVLMGRPOImageLift:
-    """Assert the trainer's image-lift wrapper surfaces images to TRL.
+class TestVLMGRPOImagePathNormalization:
+    """Leap resolves local image paths before native TRL prompt handling."""
 
-    These tests monkey-patch the parent ``_generate_and_score_completions``
-    so we can isolate the wrapper logic without touching a real model.
-    """
-
-    def _build_instance(self):
-        """Construct a bare LFMVLMGRPOTrainer without running __init__.
-
-        GRPOTrainer.__init__ does heavy work (model loading, processor,
-        accelerator). We only need to exercise the overridden method, so
-        we bypass init and rely on ``super().`` dispatching via the MRO.
-        """
+    @staticmethod
+    def _build_instance():
         from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
 
         return LFMVLMGRPOTrainer.__new__(LFMVLMGRPOTrainer)
 
-    def _make_row(self, image_field):
-        return {
-            "prompt": [
+    def test_paths_are_loaded_in_order_without_mutating_input(
+        self, monkeypatch, tmp_path
+    ):
+        from PIL import Image
+        from trl import GRPOTrainer
+
+        red_path = tmp_path / "red.png"
+        blue_path = tmp_path / "blue.png"
+        Image.new("RGB", (8, 8), color="red").save(red_path)
+        Image.new("RGB", (8, 8), color="blue").save(blue_path)
+        prompts = [
+            [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": image_field},
-                        {"type": "text", "text": "where is the cat?"},
-                    ],
-                }
-            ],
-            "solution": '[{"label": "cat", "bbox": [0.1, 0.2, 0.5, 0.6]}]',
-        }
-
-    def test_images_lifted_from_prompt_content(self, monkeypatch, tmp_path):
-        from PIL import Image
-
-        from trl import GRPOTrainer
-
-        img_path = tmp_path / "cat.jpg"
-        Image.new("RGB", (16, 16), color="red").save(img_path)
-
-        captured = {}
-
-        def fake_parent(self, inputs):
-            captured["inputs"] = inputs
-            return {"ok": True}
-
-        monkeypatch.setattr(
-            GRPOTrainer,
-            "_generate_and_score_completions",
-            fake_parent,
-        )
-
-        instance = self._build_instance()
-        inputs = [self._make_row(str(img_path))]
-        instance._generate_and_score_completions(inputs)
-
-        assert "images" in captured["inputs"][0], (
-            "TRL needs a top-level `images` column to build pixel_values "
-            "for the training forward pass"
-        )
-        lifted = captured["inputs"][0]["images"]
-        assert len(lifted) == 1
-        assert isinstance(lifted[0], Image.Image), (
-            "Image paths must be pre-loaded to PIL so `_tokenize_prompts` "
-            "and the processor don't each re-open the file"
-        )
-
-    def test_existing_images_column_not_overwritten(self, monkeypatch, tmp_path):
-        from PIL import Image
-
-        from trl import GRPOTrainer
-
-        existing = [Image.new("RGB", (8, 8), color="blue")]
-        captured = {}
-
-        def fake_parent(self, inputs):
-            captured["inputs"] = inputs
-            return None
-
-        monkeypatch.setattr(
-            GRPOTrainer,
-            "_generate_and_score_completions",
-            fake_parent,
-        )
-
-        instance = self._build_instance()
-        row = self._make_row(str(tmp_path / "irrelevant.jpg"))
-        row["images"] = existing
-        instance._generate_and_score_completions([row])
-
-        assert captured["inputs"][0]["images"] is existing
-
-    def test_text_only_row_unchanged(self, monkeypatch):
-        from trl import GRPOTrainer
-
-        captured = {}
-
-        def fake_parent(self, inputs):
-            captured["inputs"] = inputs
-            return None
-
-        monkeypatch.setattr(
-            GRPOTrainer,
-            "_generate_and_score_completions",
-            fake_parent,
-        )
-
-        instance = self._build_instance()
-        text_only = {
-            "prompt": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
-            "solution": "hello",
-        }
-        instance._generate_and_score_completions([text_only])
-
-        assert "images" not in captured["inputs"][0]
-
-    def test_multi_image_order_preserved(self, monkeypatch, tmp_path):
-        from PIL import Image
-
-        from trl import GRPOTrainer
-
-        # PNG (lossless) so the test can distinguish the two images by
-        # pixel value without JPEG compression drift.
-        p1 = tmp_path / "a.png"
-        p2 = tmp_path / "b.png"
-        Image.new("RGB", (8, 8), color="red").save(p1)
-        Image.new("RGB", (8, 8), color="blue").save(p2)
-
-        captured = {}
-
-        def fake_parent(self, inputs):
-            captured["inputs"] = inputs
-            return None
-
-        monkeypatch.setattr(
-            GRPOTrainer,
-            "_generate_and_score_completions",
-            fake_parent,
-        )
-
-        instance = self._build_instance()
-        row = {
-            "prompt": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": str(p1)},
-                        {"type": "image", "image": str(p2)},
+                        {"type": "image", "image": str(red_path)},
+                        {"type": "image", "image": str(blue_path)},
                         {"type": "text", "text": "compare"},
                     ],
                 }
-            ],
-            "solution": "[]",
-        }
-        instance._generate_and_score_completions([row])
+            ]
+        ]
+        captured = {}
 
-        lifted = captured["inputs"][0]["images"]
-        assert len(lifted) == 2
-        # Order must match content order so TRL's prepare_multimodal_messages
-        # assigns the right image to the right placeholder.
-        assert lifted[0].getpixel((0, 0)) == (255, 0, 0)
-        assert lifted[1].getpixel((0, 0)) == (0, 0, 255)
+        def fake_parent(_trainer, patched_prompts):
+            captured["prompts"] = patched_prompts
+            return "tokenized"
+
+        monkeypatch.setattr(GRPOTrainer, "_tokenize_prompts", fake_parent)
+        result = self._build_instance()._tokenize_prompts(prompts)
+
+        assert result == "tokenized"
+        images = captured["prompts"][0][0]["content"][:2]
+        assert images[0]["image"].getpixel((0, 0)) == (255, 0, 0)
+        assert images[1]["image"].getpixel((0, 0)) == (0, 0, 255)
+        assert prompts[0][0]["content"][0]["image"] == str(red_path)
+        assert prompts[0][0]["content"][1]["image"] == str(blue_path)
+
+    def test_text_only_prompts_pass_through(self, monkeypatch):
+        from trl import GRPOTrainer
+
+        prompts = [[{"role": "user", "content": [{"type": "text", "text": "hi"}]}]]
+        captured = {}
+
+        def fake_parent(_trainer, patched_prompts):
+            captured["prompts"] = patched_prompts
+            return None
+
+        monkeypatch.setattr(GRPOTrainer, "_tokenize_prompts", fake_parent)
+        self._build_instance()._tokenize_prompts(prompts)
+        assert captured["prompts"] == prompts
 
 
-class TestVLMGRPOSpatialShapesAlias:
-    """Regression test for the spatial_shapes to image_sizes alias.
+class TestTRLNativeLFM2VLGRPO:
+    """Guard the upstream support that replaces Leap TRL 1.2 shims."""
 
-    LFM2-VL's processor returns ``spatial_shapes``, which TRL's GRPO
-    trainer does NOT recognize in its multimodal whitelist. We
-    piggyback on TRL's whitelisted ``image_sizes`` field instead:
-    rename at the processor output so TRL propagates it through
-    _generate_and_score_completions -> _compute_loss ->
-    _get_per_token_logps_and_entropies, then rename back before
-    calling the model forward (inside our
-    _get_per_token_logps_and_entropies override).
+    def test_trainer_uses_upstream_multimodal_paths(self):
+        import inspect
 
-    This test exercises the processor-wrapping context manager with
-    a stub processor; it does NOT load a real LFM2-VL model.
-    """
+        from trl import GRPOTrainer
 
-    def _make_stub_processor(self, output: dict):
-        """Return a callable object whose ``__call__`` returns ``output``."""
-
-        class _StubProcessor:
-            def __call__(self, *args, **kwargs):
-                # Return a fresh copy so mutation by the alias doesn't
-                # bleed between test invocations.
-                return dict(output)
-
-        return _StubProcessor()
-
-    def _build_instance(self, processor):
         from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
 
-        instance = LFMVLMGRPOTrainer.__new__(LFMVLMGRPOTrainer)
-        instance.processing_class = processor
-        return instance
+        for method in (
+            "_prepare_inputs",
+            "_generate_and_score_completions",
+            "_get_per_token_logps_and_entropies",
+            "_get_last_hidden_state",
+        ):
+            assert method not in LFMVLMGRPOTrainer.__dict__
 
-    def test_context_manager_renames_spatial_shapes(self):
-        stub_output = {
-            "input_ids": "fake",
-            "pixel_values": "fake",
-            "spatial_shapes": "fake_shapes",
-        }
-        processor = self._make_stub_processor(stub_output)
-        instance = self._build_instance(processor)
+        hidden_state_params = inspect.signature(
+            GRPOTrainer._get_last_hidden_state
+        ).parameters
+        logp_params = inspect.signature(
+            GRPOTrainer._get_per_token_logps_and_entropies
+        ).parameters
+        assert "spatial_shapes" in hidden_state_params
+        assert "spatial_shapes" in logp_params
+        assert "num_tiles" in logp_params
 
-        # Before the context manager: raw call returns spatial_shapes.
-        assert "spatial_shapes" in processor()
-        assert "image_sizes" not in processor()
-
-        # Inside the context: the processor renames on output.
-        with instance._aliasing_spatial_shapes_as_image_sizes():
-            result = processor()
-        assert "image_sizes" in result
-        assert result["image_sizes"] == "fake_shapes"
-        assert "spatial_shapes" not in result
-
-        # After exit: original class behavior restored.
-        assert "spatial_shapes" in processor()
-        assert "image_sizes" not in processor()
-
-    def test_context_manager_noop_when_no_processor(self):
-        """Unit-test construction via ``__new__`` has no processor; the
-        context manager must be a safe no-op rather than AttributeError."""
-        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
-
-        instance = LFMVLMGRPOTrainer.__new__(LFMVLMGRPOTrainer)
-        # No processing_class attribute set
-        with instance._aliasing_spatial_shapes_as_image_sizes():
-            pass  # just verify it doesn't raise
-
-    def test_rename_back_in_get_per_token_logps(self, monkeypatch):
-        """The override of ``_get_per_token_logps_and_entropies`` must
-        undo the alias at the model-forward boundary: it receives
-        ``image_sizes`` (from TRL's propagated dict) and must forward
-        it to the model as ``spatial_shapes``."""
-        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
-
-        instance = LFMVLMGRPOTrainer.__new__(LFMVLMGRPOTrainer)
-        # LFM2-VL's forward accepts these names:
-        instance.model_kwarg_keys = {
-            "input_ids",
-            "attention_mask",
-            "pixel_values",
-            "spatial_shapes",
-            "pixel_attention_mask",
-            "use_cache",
-        }
-        instance.temperature = 1.0
-
-        captured_model_inputs: dict = {}
-
-        class _FakeModel:
-            def __call__(self, **kwargs):
-                captured_model_inputs.update(kwargs)
-                # Fake logits shaped to let selective_log_softmax run
-                return type("O", (), {"logits": torch.randn(1, 6, 10)})()
-
-        # Trivial 1-sample batch with a 5-token completion
-        input_ids = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.long)
-        attention_mask = torch.ones_like(input_ids)
-        instance._get_per_token_logps_and_entropies(
-            _FakeModel(),
-            input_ids,
-            attention_mask,
-            logits_to_keep=5,
-            # The fields TRL's _compute_loss explicitly passes; image_sizes
-            # is the aliased spatial_shapes.
-            pixel_values=torch.zeros(1, 3, 4, 4),
-            image_sizes=torch.tensor([[2, 2]]),
-            pixel_attention_mask=torch.ones(1, 4, 4),
+    def test_upstream_tile_split_round_trip(self):
+        from trl.trainer.utils import (
+            split_pixel_values_by_grid,
+            unsplit_pixel_values_by_grid,
         )
 
-        assert "spatial_shapes" in captured_model_inputs, (
-            "The override must rename image_sizes to spatial_shapes at "
-            "the model-forward boundary so LFM2-VL's forward can use it"
-        )
-        assert "image_sizes" not in captured_model_inputs, (
-            "image_sizes must be consumed, not passed through; LFM2-VL "
-            "does not accept it"
-        )
-        assert torch.equal(
-            captured_model_inputs["spatial_shapes"], torch.tensor([[2, 2]])
-        )
-        assert "pixel_values" in captured_model_inputs
-        assert "pixel_attention_mask" in captured_model_inputs
-
-
-# === VLM GRPO trainer override: multi-image buffering ===
-#
-# Regression test for LFMVLMGRPOTrainer._prepare_inputs. TRL's generation-batch
-# buffering calls split_pixel_values_by_grid -> split_tensor_dict ->
-# unsplit_pixel_values_by_grid. The stock split does not recognise LFM2-VL's
-# layout, so it is a no-op and split_tensor_dict then slices the *image* axis by
-# the *sample* count. With >1 image per sample that drops images and the logprob
-# forward fails with "Image features and image tokens do not match". The
-# override splits pixel_values and its paired image-axis tensors by num_images
-# so every sample's images survive. Upstream fix: huggingface/trl#6114.
-
-
-class TestVLMGRPOMultiImageBuffering:
-    """Exercise the LFM2-VL-aware split/merge directly (no model needed)."""
-
-    def _make_batch(self, num_images, max_patches=4, dim=3):
-        total = sum(num_images)
-        # Distinct per-image values so a dropped/misordered image is detectable.
-        pixel_values = torch.arange(total * max_patches * dim, dtype=torch.float32)
-        pixel_values = pixel_values.reshape(total, max_patches, dim)
-        # prompt_ids first: split_tensor_dict reads .shape[0] off the first
-        # value to get the sample count, so it must be a sample-axis tensor.
-        return {
-            "prompt_ids": torch.arange(len(num_images) * 6).reshape(len(num_images), 6),
-            "pixel_values": pixel_values,
-            "image_sizes": torch.arange(total * 2).reshape(total, 2),
-            "pixel_attention_mask": torch.ones(total, max_patches),
-            "num_images": list(num_images),
+        batch = {
+            "num_images": [2, 1],
+            "num_tiles": [3, 2],
+            "pixel_values": torch.arange(20).reshape(5, 4),
+            "pixel_attention_mask": torch.arange(30).reshape(5, 6),
+            "spatial_shapes": torch.arange(10).reshape(5, 2),
         }
+        split = split_pixel_values_by_grid(batch)
+        for key in ("pixel_values", "pixel_attention_mask", "spatial_shapes"):
+            assert [tensor.shape[0] for tensor in split[key]] == [3, 2]
 
-    def test_split_groups_image_axis_tensors_by_sample(self):
-        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
-
-        batch = self._make_batch([2, 3])
-        split = LFMVLMGRPOTrainer._split_pixel_values_by_grid(batch)
-
-        # pixel_values + every paired image-axis tensor become per-sample lists.
-        for key in ("pixel_values", "image_sizes", "pixel_attention_mask"):
-            assert isinstance(split[key], list)
-            assert [t.shape[0] for t in split[key]] == [2, 3], (
-                f"{key} must be split by num_images, not sample count"
-            )
-
-    def test_round_trip_reconstructs_original(self):
-        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
-
-        batch = self._make_batch([2, 3])
-        split = LFMVLMGRPOTrainer._split_pixel_values_by_grid(batch)
-        merged = LFMVLMGRPOTrainer._unsplit_pixel_values_by_grid(split)
-
-        for key in ("pixel_values", "image_sizes", "pixel_attention_mask"):
+        merged = unsplit_pixel_values_by_grid(split)
+        for key in ("pixel_values", "pixel_attention_mask", "spatial_shapes"):
             assert torch.equal(merged[key], batch[key])
-
-    def test_buffering_preserves_all_images(self):
-        """The end-to-end path TRL runs: split -> split_tensor_dict -> unsplit.
-
-        With one chunk per sample, every chunk must carry exactly that
-        sample's images. Pre-fix, pixel_values stayed a (5, ...) tensor and
-        the image axis was sliced by sample count, dropping images.
-        """
-        from trl.trainer.utils import split_tensor_dict
-
-        from leap_finetune.training.vlm_grpo import LFMVLMGRPOTrainer
-
-        batch = self._make_batch([2, 3])
-        split = LFMVLMGRPOTrainer._split_pixel_values_by_grid(batch)
-        chunks = split_tensor_dict(split, num_chunks=2)
-        rebuilt = [LFMVLMGRPOTrainer._unsplit_pixel_values_by_grid(c) for c in chunks]
-
-        assert [c["pixel_values"].shape[0] for c in rebuilt] == [2, 3]
-        # Sample 0 keeps the first 2 images, sample 1 the last 3 — in order.
-        assert torch.equal(rebuilt[0]["pixel_values"], batch["pixel_values"][:2])
-        assert torch.equal(rebuilt[1]["pixel_values"], batch["pixel_values"][2:])

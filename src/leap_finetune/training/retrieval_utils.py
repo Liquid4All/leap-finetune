@@ -105,11 +105,6 @@ def build_retrieval_training_args(
     tracker: str,
     job_name: str,
 ) -> SentenceTransformerTrainingArguments:
-    if int(train_config.get("gradient_accumulation_steps", 1)) != 1:
-        raise ValueError(
-            "Retrieval contrastive losses require gradient_accumulation_steps=1; "
-            "use a cached loss and mini_batch_size for larger effective batches."
-        )
     filtered, _ = filter_runtime_config_kwargs(
         train_config,
         excluded_keys=RETRIEVAL_RUNTIME_EXCLUDED_KEYS,
@@ -124,8 +119,3 @@ def build_retrieval_training_args(
         run_name=job_name,
         **filtered,
     )
-
-
-def require_no_peft(training_config: dict) -> None:
-    if training_config.get("peft_config") is not None:
-        raise ValueError("PEFT is not yet supported for embedding or ColBERT training")

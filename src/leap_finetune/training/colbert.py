@@ -1,17 +1,18 @@
 import logging
+from typing import assert_never, cast
 
 from pylate import evaluation, losses, models, utils
 from ray.train.huggingface.transformers import prepare_trainer
 from sentence_transformers import SentenceTransformerTrainer
 
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
+from leap_finetune.config.job_config import ColBERTLoss
 from leap_finetune.checkpointing.model_loading import _resolve_model_id
 from leap_finetune.training.retrieval_utils import (
     align_retrieval_train_shard,
     build_ir_evaluation_data,
     build_retrieval_training_args,
     canonical_retrieval_dataset,
-    require_no_peft,
 )
 from leap_finetune.training.utils.logging import finish_tracker
 from leap_finetune.training.utils.trainer_lifecycle import run_training_safely
@@ -59,7 +60,6 @@ def _build_evaluator(eval_dataset, batch_size: int):
 
 def colbert_run(training_config: dict) -> None:
     setup_training_worker()
-    require_no_peft(training_config)
     train_dataset, eval_dataset = get_ray_train_eval_datasets()
     train_dataset = canonical_retrieval_dataset(train_dataset)
     eval_dataset = canonical_retrieval_dataset(eval_dataset)
@@ -69,8 +69,8 @@ def colbert_run(training_config: dict) -> None:
     train_config = training_config.get("train_config", {})
     train_dataset = align_retrieval_train_shard(
         train_dataset,
-        per_device_batch_size=int(train_config.get("per_device_train_batch_size", 1)),
-        gather_across_devices=bool(train_config.get("gather_across_devices", True)),
+        per_device_batch_size=train_config["per_device_train_batch_size"],
+        gather_across_devices=train_config["gather_across_devices"],
     )
     output_dir = train_config.get("output_dir", "")
     resume_from = train_config.get("resume_from_checkpoint")
@@ -92,9 +92,9 @@ def colbert_run(training_config: dict) -> None:
     )
     model.tokenizer.pad_token = model.tokenizer.eos_token
 
-    gather = bool(train_config.get("gather_across_devices", True))
-    temperature = float(train_config.get("temperature", 0.02))
-    loss_name = train_config.get("loss", "contrastive")
+    gather = train_config["gather_across_devices"]
+    temperature = train_config["temperature"]
+    loss_name = cast(ColBERTLoss, train_config["loss"])
     if loss_name == "contrastive":
         loss = losses.Contrastive(
             model=model,
@@ -104,12 +104,12 @@ def colbert_run(training_config: dict) -> None:
     elif loss_name == "cached_contrastive":
         loss = losses.CachedContrastive(
             model=model,
-            mini_batch_size=int(train_config.get("mini_batch_size", 32)),
+            mini_batch_size=train_config.get("mini_batch_size", 32),
             gather_across_devices=gather,
             temperature=temperature,
         )
     else:
-        raise ValueError(f"Unsupported ColBERT loss: {loss_name}")
+        assert_never(loss_name)
 
     trainer = LFMColBERTTrainer(
         model=model,

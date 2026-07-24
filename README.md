@@ -514,7 +514,11 @@ Use `training_type: "embedding"` for LFM2.5-Embedding and
 shape:
 
 ```json
-{"query": "search text", "positive": "relevant document", "negative": "irrelevant document"}
+{
+  "query": "search text",
+  "positive": "relevant document",
+  "negative": "irrelevant document"
+}
 ```
 
 `negative` is optional for training and required for triplet-accuracy metrics.

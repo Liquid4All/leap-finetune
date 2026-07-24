@@ -110,8 +110,6 @@ def moe_dpo_config_path(job_configs_dir):
     return str(job_configs_dir / "moe_dpo_example.yaml")
 
 
-
-
 BASE_SFT_DATASET = {
     "path": "HuggingFaceTB/smoltalk",
     "type": "sft",

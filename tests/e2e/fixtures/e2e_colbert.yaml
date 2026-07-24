@@ -1,0 +1,41 @@
+project_name: "e2e_colbert"
+model_name: "LiquidAI/LFM2.5-ColBERT-350M"
+training_type: "colbert"
+
+dataset:
+  path: "tiny_retrieval.jsonl"
+  type: "colbert"
+  test_size: 0.2
+
+training_config:
+  extends: "DEFAULT_COLBERT"
+  num_train_epochs: 3
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  learning_rate: 5e-5
+  eval_on_start: true
+  logging_steps: 1
+  save_strategy: "no"
+  eval_strategy: "epoch"
+
+peft_config:
+  use_peft: false
+
+slurm:
+  job_name: "e2e_colbert_1gpu"
+  nodes: 1
+  ntasks_per_node: 1
+  gpus_per_task: 1
+  cpus_per_gpu: 8
+  output: "logs/OUT_%x.%j"
+  error: "logs/ERR_%x.%j"
+  directives:
+    - "--partition=gpuworker"
+    - "--time=01:00:00"
+  setup_commands:
+    - "export UV_PROJECT_ENVIRONMENT=/tmp/leap_rocm_${SLURM_JOB_ID}"
+    - "uv sync --project envs/rocm --frozen --no-default-groups --group rocm-core"
+    - "source ${UV_PROJECT_ENVIRONMENT}/bin/activate"
+    - "export OUTPUT_DIR=./outputs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}"
+    - "export RAY_TMPDIR=/tmp/ray_${SLURM_JOB_ID}"
+    - "export HF_DATASETS_CACHE=/tmp/hf_datasets_${SLURM_JOB_ID}"

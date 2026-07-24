@@ -15,12 +15,28 @@ _TRAINING_LOOP_TARGETS = MappingProxyType(
     {
         "sft": ("leap_finetune.training.sft", "sft_run"),
         "dpo": ("leap_finetune.training.dpo", "dpo_run"),
+        "embedding": ("leap_finetune.training.embedding", "embedding_run"),
+        "colbert": ("leap_finetune.training.colbert", "colbert_run"),
         "vlm_sft": ("leap_finetune.training.vlm_sft", "vlm_sft_run"),
         "vlm_dpo": ("leap_finetune.training.vlm_dpo", "vlm_dpo_run"),
         "grpo": ("leap_finetune.training.grpo", "grpo_run"),
         "vlm_grpo": ("leap_finetune.training.vlm_grpo", "vlm_grpo_run"),
         "moe_sft": ("leap_finetune.training.moe_sft", "moe_sft_run"),
         "moe_dpo": ("leap_finetune.training.moe_dpo", "moe_dpo_run"),
+    }
+)
+
+
+PRETOKENIZED_TRAINING_TYPES = frozenset({"sft", "dpo", "moe_sft", "moe_dpo"})
+
+# Ray splits these datasets across workers. Datasets omitted from each tuple are
+# replicated, which lets rank zero report metrics over the complete eval set.
+TRAINING_DATASETS_TO_SPLIT = MappingProxyType(
+    {
+        "embedding": ("train",),
+        "colbert": ("train",),
+        "grpo": (),
+        "vlm_grpo": (),
     }
 )
 
@@ -52,6 +68,8 @@ def __getattr__(name: str):
     loop_names = {
         "sft_run": "sft",
         "dpo_run": "dpo",
+        "embedding_run": "embedding",
+        "colbert_run": "colbert",
         "vlm_sft_run": "vlm_sft",
         "vlm_dpo_run": "vlm_dpo",
         "grpo_run": "grpo",
@@ -66,8 +84,12 @@ def __getattr__(name: str):
 
 __all__ = [
     "TRAINING_LOOPS",
+    "PRETOKENIZED_TRAINING_TYPES",
+    "TRAINING_DATASETS_TO_SPLIT",
     "sft_run",
     "dpo_run",
+    "embedding_run",
+    "colbert_run",
     "vlm_sft_run",
     "vlm_dpo_run",
     "grpo_run",

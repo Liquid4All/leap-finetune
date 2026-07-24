@@ -41,6 +41,7 @@ scratch/
 .pytest_cache/
 .ruff_cache/
 tests/slurm/generated/
+tests/e2e/fixtures/slurms/
 
 # wandb local run dirs (offline logs, large + transient)
 wandb/

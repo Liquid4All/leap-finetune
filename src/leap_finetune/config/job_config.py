@@ -12,6 +12,8 @@ from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
 TrainingType = Literal[
     "sft",
     "dpo",
+    "embedding",
+    "colbert",
     "vlm_sft",
     "vlm_dpo",
     "moe_sft",
@@ -20,7 +22,16 @@ TrainingType = Literal[
     "vlm_grpo",
 ]
 
-DatasetType = Literal["sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo"]
+DatasetType = Literal[
+    "sft",
+    "dpo",
+    "embedding",
+    "colbert",
+    "vlm_sft",
+    "vlm_dpo",
+    "grpo",
+    "vlm_grpo",
+]
 
 
 class DatasetConfig(BaseModel):
@@ -245,6 +256,22 @@ class JobConfig(BaseModel):
             raise ValueError(
                 f"Invalid job name '{resolved_job_name}': only letters, numbers, hyphens, and underscores allowed"
             )
+
+        retrieval_types = {"embedding", "colbert"}
+        if (
+            self.training_type in retrieval_types
+            or self.dataset.type in retrieval_types
+        ) and self.training_type != self.dataset.type:
+            raise ValueError(
+                "Retrieval jobs require matching training_type and dataset.type; "
+                f"got {self.training_type!r} and {self.dataset.type!r}."
+            )
+        if (
+            self.training_type in retrieval_types
+            and self.peft_config is not None
+            and self.peft_config.use_peft is not False
+        ):
+            raise ValueError("PEFT is not yet supported for retrieval training")
 
         if self.training_type not in ("grpo", "vlm_grpo"):
             for key in ("rewards", "rl_env", "grpo_rollout"):

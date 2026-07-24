@@ -4,7 +4,6 @@ import sys
 
 import pytest
 
-pytestmark = pytest.mark.evaluation
 
 # === Grounding Metric Tests ===
 

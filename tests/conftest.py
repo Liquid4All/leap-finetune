@@ -32,27 +32,21 @@ def _e2e_test_results_dir() -> pathlib.Path:
 
 def pytest_addoption(parser):
     parser.addoption("--configs", action="store_true", help="Run only config tests")
-    parser.addoption(
-        "--distribution", action="store_true", help="Run only distribution tests"
-    )
-    parser.addoption(
-        "--evaluation", action="store_true", help="Run only evaluation tests"
-    )
-    parser.addoption("--rl", action="store_true", help="Run only RL tests")
     parser.addoption("--dense", action="store_true", help="Run only dense GPU tests")
     parser.addoption("--vlm", action="store_true", help="Run only VLM GPU tests")
     parser.addoption("--moe", action="store_true", help="Run only MoE GPU tests")
+    parser.addoption(
+        "--retrieval", action="store_true", help="Run only retrieval GPU tests"
+    )
 
 
 def pytest_collection_modifyitems(config, items):
     flag_mark_map = {
         "configs": "configs",
-        "distribution": "distribution",
-        "evaluation": "evaluation",
-        "rl": "rl",
         "dense": "dense",
         "vlm": "vlm",
         "moe": "moe",
+        "retrieval": "retrieval",
     }
     active = [
         mark
@@ -116,14 +110,6 @@ def moe_dpo_config_path(job_configs_dir):
     return str(job_configs_dir / "moe_dpo_example.yaml")
 
 
-@pytest.fixture
-def slurm_config_path(job_configs_dir):
-    return str(job_configs_dir / "sft_example_with_slurm.yaml")
-
-
-@pytest.fixture
-def fixtures_dir():
-    return pathlib.Path(__file__).parent / "e2e" / "fixtures"
 
 
 BASE_SFT_DATASET = {
@@ -142,26 +128,11 @@ BASE_DPO_DATASET = {
     "subset": "default",
 }
 
-BASE_VLM_DATASET = {
-    "path": "alay2shah/example-vlm-sft-dataset",
-    "type": "vlm_sft",
-    "limit": 10,
-    "test_size": 0.2,
-}
-
 
 def write_config(config: dict, tmp_path: pathlib.Path) -> str:
     path = tmp_path / "config.yaml"
     path.write_text(yaml.dump(config))
     return str(path)
-
-
-@pytest.fixture
-def write_config_fn(tmp_path):
-    def _write(config: dict) -> str:
-        return write_config(config, tmp_path)
-
-    return _write
 
 
 # === E2E training helper ===

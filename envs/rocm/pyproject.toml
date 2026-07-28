@@ -24,7 +24,7 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
-leap-finetune = { path = "..", editable = true }
+leap-finetune = { path = "../..", editable = true }
 
 [dependency-groups]
 dev = [

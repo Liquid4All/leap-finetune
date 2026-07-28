@@ -1,0 +1,20 @@
+project_name: "lfm25_colbert"
+model_name: "LiquidAI/LFM2.5-ColBERT-350M"
+training_type: "colbert"
+
+dataset:
+  path: "sentence-transformers/msmarco-bm25"
+  subset: "triplet"
+  split: "train"
+  type: "colbert"
+  limit: 10000
+  test_size: 0.01
+
+training_config:
+  extends: "DEFAULT_COLBERT"
+  num_train_epochs: 1
+  per_device_train_batch_size: 32
+  learning_rate: 2e-5
+
+peft_config:
+  use_peft: false

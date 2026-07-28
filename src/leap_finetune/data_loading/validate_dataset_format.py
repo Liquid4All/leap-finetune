@@ -423,10 +423,25 @@ def get_row_filter(
                     return False
         return True
 
+    def is_valid_retrieval(row: dict) -> bool:
+        query = row.get("query")
+        positive = row.get("positive")
+        if not _is_nonempty_text(query) or not _is_nonempty_text(positive):
+            return False
+        if query.strip() == positive.strip():
+            return False
+
+        negative = row.get("negative")
+        if negative is None:
+            return True
+        return _is_nonempty_text(negative) and negative.strip() != positive.strip()
+
     if dataset_type == "sft":
         return is_valid_sft
     elif dataset_type == "dpo":
         return is_valid_dpo
+    elif dataset_type in ("embedding", "colbert"):
+        return is_valid_retrieval
     elif dataset_type == "vlm_sft":
         return is_valid_vlm_sft
     elif dataset_type == "vlm_dpo":
@@ -734,6 +749,28 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
 
         return row
 
+    def normalize_retrieval(row: dict) -> dict:
+        import numpy as np
+
+        aliases = {
+            "anchor": "query",
+            "question": "query",
+            "positives": "positive",
+            "document": "positive",
+            "passage": "positive",
+            "negatives": "negative",
+            "hard_negative": "negative",
+            "hard_negatives": "negative",
+        }
+        for source, target in aliases.items():
+            if target not in row and source in row:
+                row[target] = row.pop(source)
+
+        negative = row.get("negative")
+        if isinstance(negative, np.ndarray):
+            row["negative"] = negative.tolist()
+        return row
+
     if dataset_type == "vlm_sft":
         return normalize_vlm_sft
     elif dataset_type == "vlm_dpo":
@@ -742,6 +779,8 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
         return normalize_sft
     elif dataset_type == "dpo":
         return add_dpo_prompt
+    elif dataset_type in ("embedding", "colbert"):
+        return normalize_retrieval
     elif dataset_type == "grpo":
         return normalize_grpo
     elif dataset_type == "vlm_grpo":
@@ -810,6 +849,8 @@ def validate_dataset_format(
         return validate_sft_format(dataset, model_family=model_family)
     elif dataset_type == "dpo":
         return validate_dpo_format(dataset, model_family=model_family)
+    elif dataset_type in ("embedding", "colbert"):
+        return validate_retrieval_format(dataset)
     elif dataset_type == "vlm_sft":
         return validate_vlm_sft_format(dataset)
     elif dataset_type == "vlm_dpo":
@@ -820,6 +861,44 @@ def validate_dataset_format(
         return validate_vlm_grpo_format(dataset)
     else:
         raise ValueError(f"Unsupported dataset_type: {dataset_type}")
+
+
+def _is_nonempty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def validate_retrieval_format(dataset: Dataset) -> Dataset:
+    """Validate query-positive pairs with an optional negative string."""
+    columns = dataset.column_names
+    missing = [column for column in ("query", "positive") if column not in columns]
+    if missing:
+        raise ValueError(
+            f"Retrieval dataset is missing required column(s) {missing}. Found: {columns}. "
+            "Expected non-empty `query` and `positive` strings and an optional negative string."
+        )
+
+    invalid: list[int] = []
+    for index, row in enumerate(dataset):
+        query = row.get("query")
+        positive = row.get("positive")
+        negative = row.get("negative")
+        if (
+            not _is_nonempty_text(query)
+            or not _is_nonempty_text(positive)
+            or query.strip() == positive.strip()
+        ):
+            invalid.append(index)
+            continue
+        if negative is None:
+            continue
+        if not _is_nonempty_text(negative) or negative.strip() == positive.strip():
+            invalid.append(index)
+    if invalid:
+        raise ValueError(
+            f"Retrieval dataset has {len(invalid)} invalid row(s), including {invalid[:10]}. "
+            "Queries/positives must be distinct non-empty strings; the negative must be a distinct non-empty string."
+        )
+    return dataset
 
 
 def validate_grpo_format(dataset: Dataset) -> Dataset:

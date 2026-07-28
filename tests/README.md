@@ -1,39 +1,35 @@
 # Tests
 
-Keep the suite intentionally small. New tests should land in one of these
-buckets:
+Keep the suite intentionally small. New tests should land in one of three buckets:
 
-- `config/` — config parsing and generated launch config.
-- `distribution/` — launch/resource planning and distributed backend utilities.
-- `evaluation/` — benchmark, metric, backend, and async eval contracts.
-- `e2e/` — training smoke tests, dense data-path invariants, fixtures, and SLURM launchers.
-- `rl/` — RL data contracts, rewards, rollout partitioning, and envs.
-- `moe/` — MoE runtime, losses, rank groups, and EP behavior.
+- `config/` — Pydantic config parsing and validation.
+- `math/` — numerical correctness for losses, metrics, masks, routing, and sharding.
+- `e2e/` — full-service training tests, fixtures, and SLURM launchers.
 
 ## Local Checks
 
 ```bash
-uv run pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe
+uv run pytest tests/config tests/math
 ```
 
 On AMD / ROCm environments, use the ROCm project so CUDA and ROCm locks remain
 separate. Set this once in your shell, module, or direnv config:
 
 ```bash
-export UV_PROJECT=rocm
-uv run python -m pytest tests/config tests/distribution tests/evaluation tests/rl tests/moe
+export UV_PROJECT=envs/rocm
+uv run python -m pytest tests/config tests/math
 ```
 
 ## GPU Smoke Tests
 
 ```bash
-uv run pytest tests/e2e --dense --moe --vlm
+uv run pytest tests/e2e --dense --moe --vlm --retrieval
 ```
 
 For ROCm:
 
 ```bash
-UV_PROJECT=rocm uv run python -m pytest tests/e2e --dense --moe --vlm
+UV_PROJECT=envs/rocm uv run python -m pytest tests/e2e --dense --moe --vlm --retrieval
 ```
 
 ## FA2 Validation
@@ -49,8 +45,8 @@ uv run leap-finetune env fa2-status --require
 For ROCm:
 
 ```bash
-UV_PROJECT=rocm uv sync
-UV_PROJECT=rocm uv run leap-finetune env fa2-status --require
+UV_PROJECT=envs/rocm uv sync
+UV_PROJECT=envs/rocm uv run leap-finetune env fa2-status --require
 ```
 
 ## SLURM

@@ -43,7 +43,11 @@ from leap_finetune.rl.judge import (
     get_judge_config,
     judge_needs_local_server,
 )
-from leap_finetune.training import TRAINING_LOOPS
+from leap_finetune.training import (
+    PRETOKENIZED_TRAINING_TYPES,
+    TRAINING_DATASETS_TO_SPLIT,
+    TRAINING_LOOPS,
+)
 from leap_finetune.training.utils.logging import print_next_steps_panel
 
 
@@ -156,7 +160,9 @@ def ray_trainer(job_config: dict) -> None:
         runtime_env = RuntimeEnv(
             working_dir=str(RUNTIME_DIR),
             env_vars=get_ray_env_vars(ray_temp_dir),
-            worker_process_setup_hook=worker_process_setup_hook,
+            worker_process_setup_hook=(
+                "leap_finetune.distribution.ray_runtime.worker_process_setup_hook"
+            ),
         )
 
         if connect_existing_cluster:
@@ -215,20 +221,17 @@ def ray_trainer(job_config: dict) -> None:
     # The driver validates/tokenizes/packs text data once. Ray shards those
     # materialized datasets across workers when TorchTrainer starts.
     dataset_config = job_config["dataset"]
-    tokenizer = load_tokenizer(
-        job_config["model_name"],
-        chat_template=training_config.get("chat_template"),
-        chat_template_path=training_config.get("chat_template_path"),
-    )
+    use_pretokenize = training_type in PRETOKENIZED_TRAINING_TYPES
+    tokenizer = None
+    if use_pretokenize:
+        tokenizer = load_tokenizer(
+            job_config["model_name"],
+            chat_template=training_config.get("chat_template"),
+            chat_template_path=training_config.get("chat_template_path"),
+        )
 
     if isinstance(dataset_config, DatasetLoader):
-        # Pre-tokenize SFT and DPO on driver; VLM/GRPO pass raw rows through.
-        use_pretokenize = training_type in (
-            "sft",
-            "dpo",
-            "moe_sft",
-            "moe_dpo",
-        )
+        # Pre-tokenize SFT/DPO; retrieval, VLM, and GRPO pass raw rows through.
         train_ds, eval_ds = create_ray_datasets(
             dataset_config,
             tokenizer=tokenizer if use_pretokenize else None,
@@ -269,10 +272,10 @@ def ray_trainer(job_config: dict) -> None:
     ray_dataset_config = None
     if training_type in ("moe_sft", "moe_dpo") and ep_size > 1:
         ray_dataset_config = ExpertParallelDataConfig(expert_parallel_size=ep_size)
-    elif is_grpo:
-        # TRL's RepeatSampler handles per-rank striding; every worker needs the
-        # full prompt dataset rather than Ray's default per-worker split.
-        ray_dataset_config = DataConfig(datasets_to_split=[])
+    elif training_type in TRAINING_DATASETS_TO_SPLIT:
+        ray_dataset_config = DataConfig(
+            datasets_to_split=list(TRAINING_DATASETS_TO_SPLIT[training_type])
+        )
 
     resources_per_worker = None
     if is_grpo and rollout_plan is not None and not connect_existing_cluster:

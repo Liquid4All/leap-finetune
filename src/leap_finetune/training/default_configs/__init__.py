@@ -8,6 +8,10 @@ from leap_finetune.training.default_configs.grpo_configs import (
     DEFAULT_VLM_GRPO,
     MOE_GRPO,
 )
+from leap_finetune.training.default_configs.retrieval_configs import (
+    DEFAULT_COLBERT,
+    DEFAULT_EMBEDDING,
+)
 from leap_finetune.training.default_configs.sft_configs import DEFAULT_SFT, MOE_SFT
 from leap_finetune.training.default_configs.vlm_sft_configs import DEFAULT_VLM_SFT
 from leap_finetune.training.peft.peft_configs import (
@@ -22,6 +26,8 @@ from leap_finetune.training.peft.peft_configs import (
 TRAINING_DEFAULTS = {
     "DEFAULT_SFT": DEFAULT_SFT,
     "DEFAULT_DPO": DEFAULT_DPO,
+    "DEFAULT_EMBEDDING": DEFAULT_EMBEDDING,
+    "DEFAULT_COLBERT": DEFAULT_COLBERT,
     "DEFAULT_VLM_SFT": DEFAULT_VLM_SFT,
     "DEFAULT_VLM_DPO": DEFAULT_VLM_DPO,
     "MOE_SFT": MOE_SFT,
@@ -42,6 +48,8 @@ PEFT_DEFAULTS = {
 
 __all__ = [
     "DEFAULT_DPO",
+    "DEFAULT_EMBEDDING",
+    "DEFAULT_COLBERT",
     "DEFAULT_GRPO",
     "DEFAULT_LORA",
     "DEFAULT_SFT",

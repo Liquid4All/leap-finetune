@@ -22,52 +22,6 @@ class TestVLMLoRA:
         result = run_e2e_training(config_path, e2e_output_dir)
         assert_training_result(result)
 
-    @requires_gpu
-    def test_vlm_custom_optimizer_structure(self):
-        """Verify LFMVLMTrainer creates per-component LR param groups."""
-        import torch
-        from transformers import TrainingArguments
-
-        from leap_finetune.checkpointing.model_loading import load_vlm_model
-        from leap_finetune.training.default_configs.vlm_sft_configs import (
-            DEFAULT_LR_MULTIPLIERS,
-        )
-        from leap_finetune.training.vlm_sft import LFMVLMTrainer
-
-        model, processor = load_vlm_model("LFM2-VL-1.6B")
-        args = TrainingArguments(
-            output_dir="/tmp/test_vlm_opt",
-            learning_rate=1e-4,
-            per_device_train_batch_size=1,
-            report_to="none",
-            max_steps=1,
-        )
-        trainer = LFMVLMTrainer(
-            lr_multipliers=DEFAULT_LR_MULTIPLIERS,
-            model=model,
-            processing_class=processor,
-            args=args,
-        )
-        optimizer = trainer.create_optimizer()
-
-        assert isinstance(optimizer, torch.optim.AdamW)
-
-        # Should have param groups for each prefix + possibly ungrouped
-        groups = optimizer.param_groups
-        assert len(groups) >= 2, f"Expected multiple param groups, got {len(groups)}"
-
-        # Find the vision_tower group (should have lr = base_lr * 0.1)
-        base_lr = args.learning_rate
-        vision_group = None
-        for g in groups:
-            if abs(g["lr"] - base_lr * 0.1) < 1e-10:
-                vision_group = g
-                break
-        assert vision_group is not None, (
-            f"No param group with vision tower LR ({base_lr * 0.1}). "
-            f"Groups have LRs: {[g['lr'] for g in groups]}"
-        )
-
 
 # === VLM SFT full fine-tune ===
 

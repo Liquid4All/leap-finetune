@@ -12,6 +12,8 @@ from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
 TrainingType = Literal[
     "sft",
     "dpo",
+    "embedding",
+    "colbert",
     "vlm_sft",
     "vlm_dpo",
     "moe_sft",
@@ -20,7 +22,32 @@ TrainingType = Literal[
     "vlm_grpo",
 ]
 
-DatasetType = Literal["sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo"]
+DatasetType = Literal[
+    "sft",
+    "dpo",
+    "embedding",
+    "colbert",
+    "vlm_sft",
+    "vlm_dpo",
+    "grpo",
+    "vlm_grpo",
+]
+
+
+EmbeddingLoss = Literal[
+    "multiple_negatives_ranking",
+    "cached_multiple_negatives_ranking",
+]
+ColBERTLoss = Literal["contrastive", "cached_contrastive"]
+RetrievalLoss = EmbeddingLoss | ColBERTLoss
+
+
+class RetrievalPrompts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = "query: "
+    positive: str = "document: "
+    negative: str = "document: "
 
 
 class DatasetConfig(BaseModel):
@@ -91,6 +118,11 @@ class TrainingConfig(BaseModel):
     chat_template_path: str | None = None
     adapter_path: str | None = None
     completion_only_loss: bool | None = None
+    loss: RetrievalLoss | None = None
+    prompts: RetrievalPrompts | None = None
+    temperature: float | None = Field(default=None, gt=0)
+    mini_batch_size: int | None = Field(default=None, gt=0)
+    gather_across_devices: bool | None = None
 
     def extends_name(self) -> str | None:
         return self.extends or self.base
@@ -245,6 +277,80 @@ class JobConfig(BaseModel):
             raise ValueError(
                 f"Invalid job name '{resolved_job_name}': only letters, numbers, hyphens, and underscores allowed"
             )
+
+        retrieval_types = {"embedding", "colbert"}
+        if (
+            self.training_type in retrieval_types
+            or self.dataset.type in retrieval_types
+        ) and self.training_type != self.dataset.type:
+            raise ValueError(
+                "Retrieval jobs require matching training_type and dataset.type; "
+                f"got {self.training_type!r} and {self.dataset.type!r}."
+            )
+        if (
+            self.training_type in retrieval_types
+            and self.peft_config is not None
+            and self.peft_config.use_peft is not False
+        ):
+            raise ValueError("PEFT is not yet supported for retrieval training")
+        if self.training_type in retrieval_types:
+            train_config = self.training_config
+            expected_base = (
+                "DEFAULT_EMBEDDING"
+                if self.training_type == "embedding"
+                else "DEFAULT_COLBERT"
+            )
+            if (
+                train_config.extends_name() is not None
+                and train_config.extends_name() != expected_base
+            ):
+                raise ValueError(
+                    f"{self.training_type} training requires "
+                    f"training_config.extends={expected_base!r}"
+                )
+            if train_config.gradient_accumulation_steps not in (None, 1):
+                raise ValueError(
+                    "Retrieval contrastive losses require "
+                    "gradient_accumulation_steps=1; use a cached loss and "
+                    "mini_batch_size for larger effective batches."
+                )
+            if (
+                train_config.per_device_train_batch_size is not None
+                and train_config.per_device_train_batch_size < 1
+            ):
+                raise ValueError(
+                    "per_device_train_batch_size must be positive for retrieval"
+                )
+
+            if self.training_type == "embedding":
+                allowed_losses = {
+                    "multiple_negatives_ranking",
+                    "cached_multiple_negatives_ranking",
+                }
+                effective_loss = train_config.loss or "multiple_negatives_ranking"
+                if train_config.temperature is not None:
+                    raise ValueError(
+                        "training_config.temperature is only valid for ColBERT"
+                    )
+            else:
+                allowed_losses = {"contrastive", "cached_contrastive"}
+                effective_loss = train_config.loss or "contrastive"
+                if train_config.prompts is not None:
+                    raise ValueError(
+                        "training_config.prompts is only valid for embedding"
+                    )
+
+            if effective_loss not in allowed_losses:
+                raise ValueError(
+                    f"Unsupported {self.training_type} loss: {effective_loss}"
+                )
+            if (
+                train_config.mini_batch_size is not None
+                and not effective_loss.startswith("cached_")
+            ):
+                raise ValueError(
+                    "training_config.mini_batch_size requires a cached retrieval loss"
+                )
 
         if self.training_type not in ("grpo", "vlm_grpo"):
             for key in ("rewards", "rl_env", "grpo_rollout"):

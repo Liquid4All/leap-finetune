@@ -31,6 +31,8 @@ _REWARDS_DIR = LEAP_FINETUNE_DIR / "rewards"
 TRAINING_TYPE_TO_CONFIG = {
     "sft": "DEFAULT_SFT",
     "dpo": "DEFAULT_DPO",
+    "embedding": "DEFAULT_EMBEDDING",
+    "colbert": "DEFAULT_COLBERT",
     "vlm_sft": "DEFAULT_VLM_SFT",
     "vlm_dpo": "DEFAULT_VLM_DPO",
     "moe_sft": "MOE_SFT",
@@ -42,7 +44,16 @@ DATASET_TYPE_ALIASES = {
     "moe_sft": "sft",
     "moe_dpo": "dpo",
 }
-VALID_DATASET_TYPES = {"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo"}
+VALID_DATASET_TYPES = {
+    "sft",
+    "dpo",
+    "embedding",
+    "colbert",
+    "vlm_sft",
+    "vlm_dpo",
+    "grpo",
+    "vlm_grpo",
+}
 
 
 def resolve_config_path(config_input: str | pathlib.Path) -> pathlib.Path:

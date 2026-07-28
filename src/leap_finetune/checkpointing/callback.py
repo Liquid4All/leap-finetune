@@ -117,6 +117,25 @@ class LeapCheckpointCallback(TrainerCallback):
                 }
         return {}
 
+    @staticmethod
+    def _retrieval_improvement_metrics(state: TrainerState) -> dict:
+        history: dict[str, list[float]] = {}
+        for entry in state.log_history:
+            for key, value in entry.items():
+                if "retrieval" not in key or not isinstance(value, (int, float)):
+                    continue
+                history.setdefault(key, []).append(float(value))
+
+        metrics = {}
+        for key, values in history.items():
+            if len(values) < 2:
+                continue
+            name = key.removeprefix("eval_")
+            metrics[f"retrieval/baseline/{name}"] = values[0]
+            metrics[f"retrieval/final/{name}"] = values[-1]
+            metrics[f"retrieval/delta/{name}"] = values[-1] - values[0]
+        return metrics
+
     def on_save(
         self,
         args: TrainingArguments,
@@ -164,6 +183,7 @@ class LeapCheckpointCallback(TrainerCallback):
         if self.metrics:
             metrics = self.metrics.copy()
             metrics.update(self._latest_benchmark_metrics(state))
+            metrics.update(self._retrieval_improvement_metrics(state))
             if self.loss_history:
                 metrics["loss_history"] = self.loss_history.copy()
             report_ray_metrics(metrics, args.output_dir)

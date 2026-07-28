@@ -59,7 +59,7 @@ AMD / ROCm clusters use the ROCm project. Set `UV_PROJECT` once in your shell,
 module, or direnv config:
 
 ```bash
-export UV_PROJECT=rocm
+export UV_PROJECT=envs/rocm
 uv sync
 ```
 
@@ -70,7 +70,7 @@ After `UV_PROJECT` is set, normal commands stay the same: `uv sync`,
 source .venv/bin/activate
 leap-finetune job_configs/sft_example_with_slurm.yaml
 
-# ROCm, after `export UV_PROJECT=rocm`:
+# ROCm, after `export UV_PROJECT=envs/rocm`:
 uv run leap-finetune job_configs/sft_example_with_slurm.yaml
 ```
 
@@ -83,23 +83,16 @@ The default install paths both try pinned accelerator wheels:
 
 - CUDA: `uv sync` installs the default CUDA lock, including `vllm==0.22.0` and
   the pinned CUDA FlashAttention 2 wheel for the Torch 2.11 / CUDA 13 stack.
-- ROCm: `UV_PROJECT=rocm uv sync` installs the ROCm lock from [`rocm`](./rocm/),
-  including direct URLs for the validated `torch`, `torchvision`, `torchaudio`,
-  `triton`, `flash-attn`, and `vllm==0.22.0+rocm722` wheel set.
+- ROCm: `UV_PROJECT=envs/rocm uv sync` installs the ROCm lock from
+  [`envs/rocm`](./envs/rocm/), including direct URLs for the validated
+  `torch`, `torchvision`, `torchaudio`, `triton`, `flash-attn`, and `vllm==0.22.0+rocm722` wheel set.
 
 Ray is pinned to `2.51.1` for both profiles. The pinned accelerator wheels are
 Python 3.12 Linux x86_64 wheels, so use the repo's `.python-version` when
 creating GPU environments.
 
-`UV_PROJECT` can also be used explicitly for either backend:
-
-```bash
-export UV_PROJECT=cuda  # optional; bare root uv is already CUDA
-export UV_PROJECT=rocm
-```
-
-The top-level `cuda` path is an alias to the root project, so
-`UV_PROJECT=cuda` uses the same CUDA lock as bare `uv sync`.
+The CUDA project is the repository root, so it does not require `UV_PROJECT`.
+Select ROCm explicitly with `export UV_PROJECT=envs/rocm`.
 
 No hardware-specific environment variables are required for installation. On
 clusters where the default uv cache is slow, quota-limited, or backed by
@@ -124,7 +117,7 @@ To inspect the active environment:
 # CUDA, after `uv sync`
 uv run leap-finetune env fa2-status
 
-# ROCm, after `export UV_PROJECT=rocm && uv sync`
+# ROCm, after `export UV_PROJECT=envs/rocm && uv sync`
 uv run leap-finetune env fa2-status
 
 # Fail if FA2 is not usable
@@ -147,8 +140,8 @@ uv sync --no-group flash-attn
 uv run leap-finetune env install-fa2
 
 # ROCm HF training without pinned FA2/vLLM
-UV_PROJECT=rocm uv sync --no-group rocm-fa2 --no-group rocm-vllm
-UV_PROJECT=rocm uv run leap-finetune env install-fa2
+UV_PROJECT=envs/rocm uv sync --no-group rocm-fa2 --no-group rocm-vllm
+UV_PROJECT=envs/rocm uv run leap-finetune env install-fa2
 ```
 
 `install-fa2` tries, in order:
@@ -222,6 +215,8 @@ Useful starter configs:
 | SFT                     | [`job_configs/sft_example.yaml`](./job_configs/sft_example.yaml)                               |
 | SFT + LoRA              | [`job_configs/sft_with_lora_example.yaml`](./job_configs/sft_with_lora_example.yaml)           |
 | DPO                     | [`job_configs/dpo_example.yaml`](./job_configs/dpo_example.yaml)                               |
+| Dense embedding         | [`job_configs/embedding_example.yaml`](./job_configs/embedding_example.yaml)                   |
+| ColBERT                 | [`job_configs/colbert_example.yaml`](./job_configs/colbert_example.yaml)                       |
 | VLM SFT                 | [`job_configs/vlm_sft_example.yaml`](./job_configs/vlm_sft_example.yaml)                       |
 | VLM DPO                 | [`job_configs/vlm_dpo_example.yaml`](./job_configs/vlm_dpo_example.yaml)                       |
 | GRPO                    | [`job_configs/grpo_example.yaml`](./job_configs/grpo_example.yaml)                             |
@@ -511,6 +506,34 @@ For multi-turn DPO, make `prompt` the shared conversation history and make
 Rows without `prompt` are also accepted if `chosen` and `rejected` are full
 conversations with the same shared prefix; the tokenizer extracts that prefix
 as the prompt. Prefer the explicit `prompt` shape above when writing new data.
+
+### Retrieval and Embedding models
+
+Use `training_type: "embedding"` for LFM Embedding models and
+`training_type: "colbert"` for LFM ColBERT models. Both accept the same
+dataset shape:
+
+```json
+{
+  "query": "search text",
+  "positive": "relevant document",
+  "negative": "irrelevant document"
+}
+```
+
+`negative` is optional for training and required for triplet-accuracy metrics.
+Dense training automatically applies `query: ` and `document: ` prompts.
+ColBERT uses PyLate's query/document tokenization and MaxSim loss. On multiple
+GPUs, both losses gather in-batch negatives across workers; each retrieval
+worker aligns its shard to complete batches so collective tensor shapes stay
+equal.
+Gradient accumulation is intentionally rejected—select a cached loss and set
+`mini_batch_size` when a larger effective batch is needed.
+
+```bash
+uv run leap-finetune job_configs/embedding_example.yaml
+uv run leap-finetune job_configs/colbert_example.yaml
+```
 
 ### VLM SFT
 
@@ -978,14 +1001,14 @@ default.
 
 ### Testing
 
-The test suite is intentionally scoped to four buckets: config parsing, e2e,
-RL, and MoE. See [`tests/README.md`](./tests/README.md) for the current layout.
+The test suite is intentionally scoped to config validation, mathematical
+correctness, and full-service e2e coverage. See [`tests/README.md`](./tests/README.md) for the current layout.
 E2E fixtures and SLURM launchers live under [`tests/e2e/`](./tests/e2e/).
 
 Run the normal tests:
 
 ```bash
-uv run pytest tests/config tests/rl tests/moe -q
+uv run pytest tests/config tests/math -q
 ```
 
 GPU e2e tests require an appropriate GPU or cluster backend; see

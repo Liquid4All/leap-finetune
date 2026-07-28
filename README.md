@@ -509,9 +509,9 @@ as the prompt. Prefer the explicit `prompt` shape above when writing new data.
 
 ### Retrieval and Embedding models
 
-Use `training_type: "embedding"` for LFM2.5-Embedding and
-`training_type: "colbert"` for LFM2.5-ColBERT. Both accept the same dataset
-shape:
+Use `training_type: "embedding"` for LFM Embedding models and
+`training_type: "colbert"` for LFM ColBERT models. Both accept the same
+dataset shape:
 
 ```json
 {

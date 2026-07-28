@@ -61,6 +61,15 @@ def canonical_retrieval_dataset(dataset: Dataset | None) -> Dataset | None:
     return dataset.select_columns(columns)
 
 
+def register_remote_model_for_checkpointing(model) -> None:
+    """Include trusted remote model code in Sentence Transformers checkpoints."""
+    transformer = model[0]
+    auto_model = transformer.auto_model
+    auto_map = getattr(auto_model.config, "auto_map", {})
+    if "AutoModel" in auto_map:
+        auto_model.register_for_auto_class("AutoModel")
+
+
 def align_retrieval_train_shard(
     dataset: Dataset,
     *,

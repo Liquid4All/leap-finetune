@@ -13,6 +13,7 @@ from leap_finetune.training.retrieval_utils import (
     build_ir_evaluation_data,
     build_retrieval_training_args,
     canonical_retrieval_dataset,
+    register_remote_model_for_checkpointing,
 )
 from leap_finetune.training.utils.logging import finish_tracker
 from leap_finetune.training.utils.trainer_lifecycle import run_training_safely
@@ -90,6 +91,7 @@ def colbert_run(training_config: dict) -> None:
         model_name_or_path=_resolve_model_id(model_name),
         trust_remote_code=True,
     )
+    register_remote_model_for_checkpointing(model)
     model.tokenizer.pad_token = model.tokenizer.eos_token
 
     gather = train_config["gather_across_devices"]

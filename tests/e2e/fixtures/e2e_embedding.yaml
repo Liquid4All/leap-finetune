@@ -15,7 +15,8 @@ training_config:
   learning_rate: 5e-5
   eval_on_start: true
   logging_steps: 1
-  save_strategy: "no"
+  save_strategy: "epoch"
+  save_total_limit: 1
   eval_strategy: "epoch"
 
 peft_config:

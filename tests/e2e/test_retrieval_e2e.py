@@ -1,6 +1,8 @@
 import math
 
 import pytest
+from pylate import models
+from sentence_transformers import SentenceTransformer
 
 from conftest import requires_gpu, requires_multi_gpu, run_e2e_training
 
@@ -23,11 +25,28 @@ def _assert_retrieval_improved(result):
     assert max(ndcg_deltas.values()) > 0, f"NDCG@10 did not improve: {ndcg_deltas}"
 
 
+def _assert_checkpoint_reloads(kind, output_dir):
+    checkpoints = [path.parent for path in output_dir.rglob("modules.json")]
+    assert checkpoints, f"No retrieval checkpoint found under {output_dir}"
+    checkpoint = max(checkpoints, key=lambda path: path.stat().st_mtime)
+    assert (checkpoint / "modeling_lfm2_bidirectional.py").is_file()
+
+    model_cls = SentenceTransformer if kind == "embedding" else models.ColBERT
+    model = model_cls(
+        str(checkpoint),
+        device="cpu",
+        trust_remote_code=True,
+        local_files_only=True,
+    )
+    assert len(model) == 2
+
+
 @pytest.mark.parametrize("kind", ["embedding", "colbert"])
 @requires_gpu
 def test_single_gpu_retrieval_training_improves(kind, e2e_output_dir):
     result = run_e2e_training(str(FIXTURES / f"e2e_{kind}.yaml"), e2e_output_dir)
     _assert_retrieval_improved(result)
+    _assert_checkpoint_reloads(kind, e2e_output_dir)
 
 
 @pytest.mark.parametrize("kind", ["embedding", "colbert"])
@@ -36,3 +55,4 @@ def test_multi_gpu_retrieval_training_improves(kind, e2e_output_dir, monkeypatch
     monkeypatch.setenv("LEAP_NUM_WORKERS", "2")
     result = run_e2e_training(str(FIXTURES / f"e2e_{kind}.yaml"), e2e_output_dir)
     _assert_retrieval_improved(result)
+    _assert_checkpoint_reloads(kind, e2e_output_dir)

@@ -111,6 +111,15 @@ class TestParseJobConfig:
         assert "beta" in job.training_config.value
         assert "deepspeed" in job.training_config.value
 
+    def test_parse_kto_example(self, kto_config_path):
+        job = parse_job_config(kto_config_path)
+        assert job.training_type == "kto"
+        assert job.job_name == "my_kto_project"
+        assert job.dataset.dataset_type == "kto"
+        assert "beta" in job.training_config.value
+        assert "desirable_weight" in job.training_config.value
+        assert "deepspeed" in job.training_config.value
+
     def test_parse_vlm_example(self, vlm_config_path):
         job = parse_job_config(vlm_config_path)
         assert job.training_type == "vlm_sft"

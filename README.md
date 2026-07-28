@@ -222,6 +222,7 @@ Useful starter configs:
 | SFT                     | [`job_configs/sft_example.yaml`](./job_configs/sft_example.yaml)                               |
 | SFT + LoRA              | [`job_configs/sft_with_lora_example.yaml`](./job_configs/sft_with_lora_example.yaml)           |
 | DPO                     | [`job_configs/dpo_example.yaml`](./job_configs/dpo_example.yaml)                               |
+| KTO                     | [`job_configs/kto_example.yaml`](./job_configs/kto_example.yaml)                               |
 | VLM SFT                 | [`job_configs/vlm_sft_example.yaml`](./job_configs/vlm_sft_example.yaml)                       |
 | VLM DPO                 | [`job_configs/vlm_dpo_example.yaml`](./job_configs/vlm_dpo_example.yaml)                       |
 | GRPO                    | [`job_configs/grpo_example.yaml`](./job_configs/grpo_example.yaml)                             |
@@ -511,6 +512,35 @@ For multi-turn DPO, make `prompt` the shared conversation history and make
 Rows without `prompt` are also accepted if `chosen` and `rejected` are full
 conversations with the same shared prefix; the tokenizer extracts that prefix
 as the prompt. Prefer the explicit `prompt` shape above when writing new data.
+
+### KTO
+
+KTO ([Ethayarajh et al., 2024](https://huggingface.co/papers/2402.01306))
+learns from *unpaired* binary feedback: each row is a single completion marked
+desirable or undesirable, so no same-prompt preference pairs are needed. Use
+`training_type: "kto"` with `prompt`, `completion`, and boolean `label`
+columns (`true` = desirable). Like DPO, `prompt` and `completion` can be plain
+strings or message lists:
+
+```json
+{
+  "prompt": [{ "role": "user", "content": "What is the capital of France?" }],
+  "completion": [
+    { "role": "assistant", "content": "The capital of France is London." }
+  ],
+  "label": false
+}
+```
+
+Notes:
+
+- KTO rows are not pretokenized in Ray: TRL's `KTOTrainer` applies the chat
+  template, tokenizes, and builds its KL-estimation pairs per worker shard.
+- `per_device_train_batch_size` must be > 1; the KL term is estimated from
+  mismatched prompt/completion pairs within each batch.
+- With imbalanced classes, tune `desirable_weight` / `undesirable_weight` so
+  `desirable_weight * num_desirable / (undesirable_weight * num_undesirable)`
+  stays in `[1, 1.33]` (the trainer logs a warning when it is not).
 
 ### VLM SFT
 

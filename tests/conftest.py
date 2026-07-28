@@ -102,6 +102,11 @@ def dpo_config_path(job_configs_dir):
 
 
 @pytest.fixture
+def kto_config_path(job_configs_dir):
+    return str(job_configs_dir / "kto_example.yaml")
+
+
+@pytest.fixture
 def vlm_config_path(job_configs_dir):
     return str(job_configs_dir / "vlm_sft_example.yaml")
 

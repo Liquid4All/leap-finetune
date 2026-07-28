@@ -299,6 +299,36 @@ def get_row_filter(
 
         return True
 
+    def is_valid_kto(row: dict) -> bool:
+        """Check if row has valid KTO (unpaired preference) format."""
+        prompt = row.get("prompt")
+        completion = row.get("completion")
+        label = row.get("label")
+
+        if prompt is None or completion is None or label is None:
+            return False
+        if len(prompt) == 0 or len(completion) == 0:
+            return False
+        # Binary desirability label; equality also accepts numpy bools.
+        if not (label == True or label == False):  # noqa: E712
+            return False
+
+        if isinstance(completion, str):
+            if ("<" in completion or "[" in completion) and has_foreign_tool_markers(
+                completion
+            ):
+                return False
+        else:
+            for msg in completion:
+                if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                    continue
+                content = msg.get("content", "")
+                if isinstance(content, str) and ("<" in content or "[" in content):
+                    if has_foreign_tool_markers(content):
+                        return False
+
+        return True
+
     def is_valid_vlm_sft(row: dict) -> bool:
         """Check if row has valid VLM SFT format with loadable images.
 
@@ -427,6 +457,8 @@ def get_row_filter(
         return is_valid_sft
     elif dataset_type == "dpo":
         return is_valid_dpo
+    elif dataset_type == "kto":
+        return is_valid_kto
     elif dataset_type == "vlm_sft":
         return is_valid_vlm_sft
     elif dataset_type == "vlm_dpo":
@@ -810,6 +842,8 @@ def validate_dataset_format(
         return validate_sft_format(dataset, model_family=model_family)
     elif dataset_type == "dpo":
         return validate_dpo_format(dataset, model_family=model_family)
+    elif dataset_type == "kto":
+        return validate_kto_format(dataset)
     elif dataset_type == "vlm_sft":
         return validate_vlm_sft_format(dataset)
     elif dataset_type == "vlm_dpo":
@@ -1054,6 +1088,49 @@ def validate_dpo_format(dataset: Dataset, model_family: str = "lfm2") -> Dataset
         return dataset
 
     return dataset.map(lambda x: {**x, "prompt": _extract_prompt(x["chosen"])})
+
+
+def validate_kto_format(dataset: Dataset) -> Dataset:
+    """Validate KTO (unpaired preference) dataset format.
+
+    Expected columns are prompt/completion/label, where prompt and completion
+    are strings or message lists and label marks the completion as desirable
+    (True) or undesirable (False). TRL's KTOTrainer applies the chat template
+    and tokenizes, so rows stay untokenized here.
+    """
+    columns = set(dataset.column_names)
+
+    required = {"prompt", "completion", "label"}
+    if not required.issubset(columns):
+        raise ValueError(
+            f"KTO needs {sorted(required)} columns. Found: {list(columns)}"
+        )
+
+    invalid_indices = []
+    bad_label_indices = []
+
+    for i in range(len(dataset)):
+        row = dataset[i]
+        if not row["prompt"] or not row["completion"]:
+            invalid_indices.append(i)
+        if row["label"] not in (True, False, 0, 1):
+            bad_label_indices.append(i)
+
+    if invalid_indices:
+        shown = invalid_indices[:5]
+        raise ValueError(
+            f"Found {len(invalid_indices)} samples with empty prompt/completion "
+            f"(indices: {shown}{'...' if len(invalid_indices) > 5 else ''})"
+        )
+
+    if bad_label_indices:
+        shown = bad_label_indices[:5]
+        raise ValueError(
+            f"Found {len(bad_label_indices)} samples with non-boolean label "
+            f"(indices: {shown}{'...' if len(bad_label_indices) > 5 else ''})"
+        )
+
+    return dataset
 
 
 def validate_vlm_dpo_format(dataset: Dataset) -> Dataset:

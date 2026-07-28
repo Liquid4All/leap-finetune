@@ -15,6 +15,7 @@ _TRAINING_LOOP_TARGETS = MappingProxyType(
     {
         "sft": ("leap_finetune.training.sft", "sft_run"),
         "dpo": ("leap_finetune.training.dpo", "dpo_run"),
+        "kto": ("leap_finetune.training.kto", "kto_run"),
         "vlm_sft": ("leap_finetune.training.vlm_sft", "vlm_sft_run"),
         "vlm_dpo": ("leap_finetune.training.vlm_dpo", "vlm_dpo_run"),
         "grpo": ("leap_finetune.training.grpo", "grpo_run"),
@@ -52,6 +53,7 @@ def __getattr__(name: str):
     loop_names = {
         "sft_run": "sft",
         "dpo_run": "dpo",
+        "kto_run": "kto",
         "vlm_sft_run": "vlm_sft",
         "vlm_dpo_run": "vlm_dpo",
         "grpo_run": "grpo",
@@ -68,6 +70,7 @@ __all__ = [
     "TRAINING_LOOPS",
     "sft_run",
     "dpo_run",
+    "kto_run",
     "vlm_sft_run",
     "vlm_dpo_run",
     "grpo_run",

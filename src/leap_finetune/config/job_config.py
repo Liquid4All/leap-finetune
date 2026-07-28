@@ -12,6 +12,7 @@ from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
 TrainingType = Literal[
     "sft",
     "dpo",
+    "kto",
     "vlm_sft",
     "vlm_dpo",
     "moe_sft",
@@ -20,7 +21,7 @@ TrainingType = Literal[
     "vlm_grpo",
 ]
 
-DatasetType = Literal["sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo"]
+DatasetType = Literal["sft", "dpo", "kto", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo"]
 
 
 class DatasetConfig(BaseModel):

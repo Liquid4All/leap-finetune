@@ -6,6 +6,10 @@ from ray.train.huggingface.transformers import prepare_trainer
 from transformers import Trainer, TrainingArguments
 
 from leap_finetune.data_loading.tokenize_data import create_vlm_collate_fn
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_model_for_qat,
+)
 from leap_finetune.training.default_configs.vlm_sft_configs import (
     DEFAULT_LR_MULTIPLIERS,
     VLM_SFT_EXCLUDED_KEYS,
@@ -170,11 +174,15 @@ def vlm_sft_run(training_config: dict) -> None:
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
     )
+    prepare_model_for_qat(
+        model, train_config, is_vlm=True, resume_from_checkpoint=resume_from
+    )
 
     if adapter_path:
         model = load_peft_adapter(model, adapter_path)
     elif peft_config:
         model = apply_peft_to_model(model, peft_config)
+    finalize_qat_after_peft(model)
 
     collate_fn = create_vlm_collate_fn(processor)
 

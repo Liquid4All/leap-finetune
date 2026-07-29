@@ -7,6 +7,7 @@ from ray import train
 from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 
+from leap_finetune.quantization.qat.metadata import write_qat_metadata
 from leap_finetune.checkpointing.paths import (
     current_checkpoint_output_dir,
     rename_standard_checkpoint,
@@ -150,18 +151,24 @@ class LeapCheckpointCallback(TrainerCallback):
             step=state.global_step,
             manual_sharded=self.manual_sharded,
         )
+        final_checkpoint_path = checkpoint_path
         if train.get_context().get_world_rank() == 0:
             print(f"Checkpoint saved: {checkpoint_path}")
             print(f"   Metrics: {self.metrics}")
 
             if not self.manual_sharded:
-                rename_standard_checkpoint(
+                renamed = rename_standard_checkpoint(
                     output_dir=args.output_dir,
                     run_name_template=self.run_name_template,
                     epoch=state.epoch,
                     step=state.global_step,
                     save_total_limit=args.save_total_limit,
                 )
+                if renamed is not None:
+                    final_checkpoint_path = str(renamed)
+            model = kwargs.get("model")
+            if model is not None:
+                write_qat_metadata(final_checkpoint_path, model)
 
         # Include loss curve summary for test assertions
         metrics = self.metrics.copy()
@@ -180,6 +187,10 @@ class LeapCheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> None:
+        model = kwargs.get("model")
+        if model is not None:
+            write_qat_metadata(args.output_dir, model)
+
         if self.metrics:
             metrics = self.metrics.copy()
             metrics.update(self._latest_benchmark_metrics(state))

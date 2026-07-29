@@ -17,6 +17,11 @@ from trl import GRPOConfig, GRPOTrainer
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_info import is_moe_model_from_name
 from leap_finetune.checkpointing.model_loading import load_model
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_model_for_qat,
+)
+from leap_finetune.quantization.qat.grpo import QATGRPOReferenceMixin
 from leap_finetune.evaluation import (
     create_llm_benchmarks_from_config,
     make_eval_callback,
@@ -50,6 +55,10 @@ logger = logging.getLogger(__name__)
 # dataset; TRL then distributes repeated prompt groups across ranks.
 
 
+class LFMGRPOTrainer(QATGRPOReferenceMixin, GRPOTrainer):
+    """Text GRPO trainer with QAT-aware reference preparation."""
+
+
 def grpo_run(training_config: dict) -> None:
     setup_training_worker()
     train_dataset, eval_dataset = get_ray_train_eval_datasets()
@@ -63,6 +72,12 @@ def grpo_run(training_config: dict) -> None:
         raise ValueError("GRPO for MoE models is not supported in this EP branch")
 
     train_config = training_config.get("train_config", {})
+    qat_config = train_config.get("qat")
+    if qat_config and train_config.get("use_vllm", False):
+        raise ValueError(
+            "QAT GRPO requires use_vllm: false so rollout and training "
+            "forwards use the same fake-quantized model"
+        )
     run_name_template = train_config.get("leap_run_name_template")
     resume_from = train_config.get("resume_from_checkpoint")
     output_dir = train_config.get("output_dir", "")
@@ -91,6 +106,7 @@ def grpo_run(training_config: dict) -> None:
     training_args = GRPOConfig(**config_kwargs)
 
     model, tokenizer = load_model(model_name)
+    prepare_model_for_qat(model, train_config, resume_from_checkpoint=resume_from)
     # GRPO requires left-padded prompts so generated completions append cleanly.
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
@@ -98,6 +114,7 @@ def grpo_run(training_config: dict) -> None:
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
+    finalize_qat_after_peft(model)
 
     # Resolve reward functions from the driver-side config_dir. Loaders are
     # deterministic, so each worker re-runs the resolution independently
@@ -144,7 +161,8 @@ def grpo_run(training_config: dict) -> None:
     if reward_weights is not None:
         training_args.reward_weights = reward_weights
 
-    trainer = GRPOTrainer(
+    trainer = LFMGRPOTrainer(
+        qat_config=qat_config,
         model=model,
         reward_funcs=reward_funcs,
         args=training_args,

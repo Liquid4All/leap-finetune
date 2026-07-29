@@ -9,6 +9,11 @@ from transformers import ProcessorMixin
 from trl import DPOConfig, DPOTrainer
 from trl.trainer.dpo_trainer import DataCollatorForVisionPreference
 
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_dpo_reference_model,
+    prepare_model_for_qat,
+)
 from leap_finetune.evaluation import (
     BenchmarkEvalCallback,
     create_vlm_benchmarks_from_config,
@@ -212,10 +217,24 @@ def vlm_dpo_run(training_config: dict) -> None:
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
     )
+    prepare_model_for_qat(
+        model, train_config, is_vlm=True, resume_from_checkpoint=resume_from
+    )
+    ref_model = prepare_dpo_reference_model(
+        train_config,
+        policy_uses_peft=bool(peft_config or adapter_path),
+        load_model=lambda: load_vlm_model(
+            model_name,
+            max_image_tokens=max_image_tokens,
+            do_image_splitting=do_image_splitting,
+        )[0],
+        is_vlm=True,
+    )
     if adapter_path:
         model = load_peft_adapter(model, adapter_path)
     elif peft_config:
         model = apply_peft_to_model(model, peft_config)
+    finalize_qat_after_peft(model)
     if freeze_vision_encoder:
         freeze_vlm_modules(model, ["model.vision_tower"])
 
@@ -231,6 +250,7 @@ def vlm_dpo_run(training_config: dict) -> None:
         lr_multipliers=lr_multipliers,
         optimizer_type=optimizer_type,
         model=model,
+        ref_model=ref_model,
         args=training_args,
         processing_class=processor,
         train_dataset=train_dataset,

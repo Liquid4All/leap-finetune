@@ -81,9 +81,9 @@ def build_openenv_rollout_func(
 ) -> Callable:
     """Return a TRL ``rollout_func(prompts, trainer)`` that drives an OpenEnv env.
 
-    Generates completions via TRL's ``generate_rollout_completions``
-    (works in both vLLM colocate and server mode), then steps each
-    completion through the env and collects ``env_reward`` per prompt.
+    Generates completions through the trainer's native generation path, then
+    steps each completion through the env and collects ``env_reward`` per
+    prompt. This works with Transformers generation and both vLLM modes.
     Only ``max_turns=1`` is supported; multi-turn envs have env-specific
     prompt construction and should ship a custom rollout_func.
     """
@@ -95,25 +95,25 @@ def build_openenv_rollout_func(
         )
 
     def rollout_func(prompts: list, trainer) -> dict:
-        from trl.experimental.openenv import generate_rollout_completions
-
-        outputs = generate_rollout_completions(trainer, prompts)
+        prompt_ids, images, multimodal_fields = trainer._tokenize_prompts(prompts)
+        completion_ids, logprobs = trainer._generate_single_turn(
+            prompt_ids, images, multimodal_fields
+        )
+        texts = trainer.processing_class.batch_decode(
+            completion_ids, skip_special_tokens=True
+        )
 
         env_rewards: list[float] = []
-        for out in outputs:
+        for text in texts:
             env.reset(**reset_kwargs)
-            text = out.get("text")
-            if text is None:
-                tokenizer = trainer.processing_class
-                text = tokenizer.decode(out["completion_ids"], skip_special_tokens=True)
             result = env.step({action_key: text})
             reward = float(result.reward) if result.reward is not None else 0.0
             env_rewards.append(reward)
 
         return {
-            "prompt_ids": [o["prompt_ids"] for o in outputs],
-            "completion_ids": [o["completion_ids"] for o in outputs],
-            "logprobs": [o["logprobs"] for o in outputs],
+            "prompt_ids": prompt_ids,
+            "completion_ids": completion_ids,
+            "logprobs": logprobs,
             ENV_REWARD_KEY: env_rewards,
         }
 

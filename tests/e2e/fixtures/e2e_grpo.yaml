@@ -14,17 +14,20 @@ rewards:
 
 training_config:
   extends: "DEFAULT_GRPO"
-  # Single optimizer step is enough to verify the wiring works end-to-end
-  num_train_epochs: 1
+  max_steps: 8
   per_device_train_batch_size: 2
   gradient_accumulation_steps: 1
   steps_per_generation: 2
   learning_rate: 1e-6
   num_generations: 2             # tiny group size for the smoke test
   max_completion_length: 16
+  # Tiny completions usually hit the cap; keep them trainable in this E2E.
+  mask_truncated_completions: false
   save_strategy: "no"
   eval_strategy: "no"
   logging_steps: 1
+  seed: 42
+  data_seed: 42
   # Inherit DEFAULT_GRPO use_vllm: true so the smoke test covers the shipped
   # rollout path with vLLM 0.19 + the Transformers override in pyproject.toml.
 

@@ -90,6 +90,10 @@ class LeapCheckpointCallback(TrainerCallback):
         super().__init__()
         self.metrics: dict = {}
         self.loss_history: list[float] = []
+        self.reward_history: list[float] = []
+        self.reward_std_history: list[float] = []
+        self.grad_norm_history: list[float] = []
+        self.learning_rate_history: list[float] = []
         self.run_name_template = run_name_template
         self.manual_sharded = manual_sharded
 
@@ -105,6 +109,28 @@ class LeapCheckpointCallback(TrainerCallback):
             self.metrics.update(logs)
             if "loss" in logs:
                 self.loss_history.append(logs["loss"])
+            for key, history in (
+                ("reward", self.reward_history),
+                ("reward_std", self.reward_std_history),
+                ("grad_norm", self.grad_norm_history),
+                ("learning_rate", self.learning_rate_history),
+            ):
+                value = logs.get(key)
+                if isinstance(value, (int, float)):
+                    history.append(float(value))
+
+    def _optimization_history_metrics(self) -> dict:
+        """Expose optimizer/reward histories for end-to-end learning checks."""
+        return {
+            key: values.copy()
+            for key, values in (
+                ("reward_history", self.reward_history),
+                ("reward_std_history", self.reward_std_history),
+                ("grad_norm_history", self.grad_norm_history),
+                ("learning_rate_history", self.learning_rate_history),
+            )
+            if values
+        }
 
     @staticmethod
     def _latest_benchmark_metrics(state: TrainerState) -> dict:
@@ -166,6 +192,7 @@ class LeapCheckpointCallback(TrainerCallback):
         # Include loss curve summary for test assertions
         metrics = self.metrics.copy()
         metrics.update(self._latest_benchmark_metrics(state))
+        metrics.update(self._optimization_history_metrics())
         if self.loss_history:
             metrics["loss_history"] = self.loss_history.copy()
 
@@ -184,6 +211,7 @@ class LeapCheckpointCallback(TrainerCallback):
             metrics = self.metrics.copy()
             metrics.update(self._latest_benchmark_metrics(state))
             metrics.update(self._retrieval_improvement_metrics(state))
+            metrics.update(self._optimization_history_metrics())
             if self.loss_history:
                 metrics["loss_history"] = self.loss_history.copy()
             report_ray_metrics(metrics, args.output_dir)

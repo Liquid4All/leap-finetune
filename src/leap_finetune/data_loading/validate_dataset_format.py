@@ -682,10 +682,20 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
 
         import numpy as np
 
+        def as_py(value):
+            if isinstance(value, np.ndarray):
+                return [as_py(item) for item in value.tolist()]
+            if isinstance(value, list):
+                return [as_py(item) for item in value]
+            if isinstance(value, tuple):
+                return [as_py(item) for item in value]
+            if isinstance(value, dict):
+                return {key: as_py(item) for key, item in value.items()}
+            return value
+
         for key in ("prompt", "messages", "conversation", "conversations"):
-            val = row.get(key)
-            if isinstance(val, np.ndarray):
-                row[key] = val.tolist()
+            if key in row:
+                row[key] = as_py(row[key])
 
         source_alias = None
         if "prompt" not in row:
@@ -729,6 +739,30 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
 
         if not isinstance(prompt, list):
             return row
+
+        for message in prompt:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                    if isinstance(content, dict):
+                        content = [content]
+                except (json.JSONDecodeError, TypeError):
+                    content = [{"type": "text", "text": content}]
+            if not isinstance(content, list):
+                continue
+
+            normalized_content = []
+            for item in content:
+                if isinstance(item, str):
+                    try:
+                        item = json.loads(item)
+                    except (json.JSONDecodeError, TypeError):
+                        item = {"type": "text", "text": item}
+                normalized_content.append(item)
+            message["content"] = normalized_content
 
         if image_root:
             root = pathlib.PurePosixPath(image_root)

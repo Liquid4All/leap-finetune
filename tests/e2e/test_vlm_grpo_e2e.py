@@ -3,40 +3,85 @@
 Verifies the VLM GRPO training loop works end-to-end including:
 - VLM model loading via load_vlm_model
 - Per-component LR param groups (vision_tower at 0.1x base LR)
-- Dataset validation with image loading
+- Dataset validation and rollout with two images in every prompt
 - GRPO rollout + reward computation
-- One optimizer step
+- Multiple optimizer steps with nonzero gradients
 
 Run on a GPU node with:
     uv run pytest --vlm tests/e2e/test_vlm_grpo_e2e.py -v
 """
 
-import math
+import json
 import pathlib
 
 import pytest
+import yaml
+from PIL import Image
 
-from conftest import requires_gpu, run_e2e_training
+from conftest import assert_grpo_optimization, requires_gpu, run_e2e_training
 
 pytestmark = pytest.mark.vlm
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
 
+def _write_multi_image_grpo_config(tmp_path):
+    fixture_dir = tmp_path.parent / "grpo_multi_image_fixture"
+    image_dir = fixture_dir / "images"
+    image_dir.mkdir(parents=True)
+    image_paths = []
+    for name, color in (("red", "red"), ("blue", "blue")):
+        path = image_dir / f"{name}.png"
+        Image.new("RGB", (48, 48), color=color).save(path)
+        image_paths.append(str(path))
+
+    rows = []
+    for index in range(8):
+        rows.append(
+            {
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": image_paths[index % 2]},
+                            {
+                                "type": "image",
+                                "image": image_paths[(index + 1) % 2],
+                            },
+                            {
+                                "type": "text",
+                                "text": "Describe how these two colored squares differ.",
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+
+    dataset_dir = fixture_dir / "data"
+    dataset_dir.mkdir()
+    dataset_path = dataset_dir / "multi_image_grpo.jsonl"
+    dataset_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    config = yaml.safe_load((FIXTURES / "e2e_vlm_grpo.yaml").read_text())
+    config["dataset"]["path"] = str(dataset_path)
+    config["dataset"]["limit"] = len(rows)
+    reward_path = FIXTURES.parents[2] / "rewards" / "length.py"
+    config["rewards"]["funcs"] = [f"{reward_path}::length_reward"]
+    config_dir = fixture_dir / "config"
+    config_dir.mkdir()
+    config_path = config_dir / "e2e_vlm_grpo_multi_image.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    return str(config_path)
+
+
 class TestVLMGRPO:
     @requires_gpu
-    def test_vlm_grpo_completes_one_step(self, e2e_output_dir):
-        config_path = str(FIXTURES / "e2e_vlm_grpo.yaml")
+    def test_vlm_grpo_multi_image_optimizes(self, e2e_output_dir, tmp_path):
+        config_path = _write_multi_image_grpo_config(tmp_path)
         result = run_e2e_training(config_path, e2e_output_dir)
-        assert result is not None
+        assert_grpo_optimization(result)
         metrics = result.metrics
-        assert metrics is not None
-        assert metrics.get("epoch", 0) > 0
-
-        if "train_loss" in metrics:
-            assert math.isfinite(metrics["train_loss"]), (
-                f"train_loss not finite: {metrics['train_loss']}"
-            )
 
         # Per-component LR metrics should be logged because
         # LFMVLMGRPOTrainer.log() injects lr/<component> entries.

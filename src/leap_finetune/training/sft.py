@@ -38,16 +38,39 @@ from leap_finetune.training.utils.config_filter import filter_runtime_config_kwa
 logger = logging.getLogger(__name__)
 
 
+class LFMDataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
+    """TRL collator that applies masks produced by Leap's distributed tokenizer."""
+
+    def torch_call(self, examples):
+        masked_examples = []
+        for example in examples:
+            item = dict(example)
+            masks = [
+                item.pop(name)
+                for name in ("assistant_masks", "completion_mask")
+                if name in item
+            ]
+            if masks:
+                input_ids = item["input_ids"]
+                if any(len(mask) != len(input_ids) for mask in masks):
+                    raise ValueError("SFT loss mask length must match input_ids")
+                labels = list(item.get("labels", input_ids))
+                item["labels"] = [
+                    label if all(mask[index] for mask in masks) else -100
+                    for index, label in enumerate(labels)
+                ]
+            masked_examples.append(item)
+        return super().torch_call(masked_examples)
+
+
 class LFMSFTTrainer(RayDataLoaderMixin, Trainer):
     """SFT trainer with Ray-sharded data loaders."""
 
 
 def build_sft_data_collator(tokenizer, train_config: dict):
     padding_free = train_config.get("padding_free", train_config.get("packing", False))
-    completion_only_loss = bool(train_config.get("completion_only_loss", False))
-    return DataCollatorForLanguageModeling(
+    return LFMDataCollatorForLanguageModeling(
         pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-        completion_only_loss=completion_only_loss,
         padding_free=padding_free,
     )
 

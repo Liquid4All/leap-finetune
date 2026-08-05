@@ -232,6 +232,55 @@ def assert_training_result(
         )
 
 
+def assert_grpo_optimization(result, min_steps=4, min_reward_logs=2):
+    """Require reward variation and nonzero gradients over several updates.
+
+    Short stochastic GRPO jobs cannot reliably require a monotonic reward
+    curve. These checks instead prove that the policy received a non-constant
+    learning signal and performed optimizer steps with a positive LR.
+    """
+    assert result is not None, "Training returned no result"
+    metrics = result.metrics
+    assert metrics is not None, "No metrics in training result"
+    assert metrics.get("epoch", 0) > 0, f"No epoch progress: {metrics}"
+
+    if "train_loss" in metrics:
+        assert math.isfinite(metrics["train_loss"]), (
+            f"train_loss is not finite: {metrics['train_loss']}"
+        )
+
+    histories = {
+        key: metrics.get(key, [])
+        for key in (
+            "reward_history",
+            "reward_std_history",
+            "grad_norm_history",
+            "learning_rate_history",
+        )
+    }
+    minimum_entries = {
+        "reward_history": min_reward_logs,
+        "reward_std_history": min_reward_logs,
+        "grad_norm_history": min_steps,
+        "learning_rate_history": min_steps,
+    }
+    for key, values in histories.items():
+        assert len(values) >= minimum_entries[key], f"Too few {key} entries: {values}"
+        assert all(math.isfinite(value) for value in values), (
+            f"Non-finite {key}: {values}"
+        )
+
+    assert any(value > 0 for value in histories["reward_std_history"]), (
+        f"Rewards never varied within a generation group: {histories}"
+    )
+    assert any(value > 0 for value in histories["grad_norm_history"]), (
+        f"GRPO produced no nonzero gradients: {histories}"
+    )
+    assert any(value > 0 for value in histories["learning_rate_history"]), (
+        f"GRPO never used a positive learning rate: {histories}"
+    )
+
+
 def assert_eval_callback_logged(result):
     metrics = result.metrics or {}
     benchmark_keys = [key for key in metrics if key.startswith("benchmark/")]

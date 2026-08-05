@@ -15,16 +15,20 @@ rewards:
 
 training_config:
   extends: "DEFAULT_VLM_GRPO"
-  num_train_epochs: 1
+  max_steps: 6
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 1
-  steps_per_generation: 3
+  steps_per_generation: 2
   learning_rate: 1e-6
   num_generations: 2
   max_completion_length: 16
+  # Tiny completions usually hit the cap; keep them trainable in this E2E.
+  mask_truncated_completions: false
   save_strategy: "no"
   eval_strategy: "no"
   logging_steps: 1
+  seed: 42
+  data_seed: 42
   # Inherit DEFAULT_VLM_GRPO use_vllm: true so this fixture matches shipped
   # VLM GRPO rollout defaults.
 

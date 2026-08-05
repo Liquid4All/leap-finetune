@@ -38,9 +38,8 @@ with no Docker required.
 When `rl_env:` is set, the training loop:
 
 1. Resolves the YAML block to a live OpenEnv client via `connect_openenv`.
-2. Wraps it in a TRL `rollout_func` that drives
-   `trl.experimental.openenv.generate_rollout_completions` (works in
-   both vLLM colocate and server mode).
+2. Wraps it in a TRL `rollout_func` that uses the trainer's native
+   generation path (Transformers, vLLM colocate, or vLLM server).
 3. Auto-prepends `env_reward` to your reward list so the environment's
    per-step reward contributes to the GRPO objective. You can stack
    additional file-based rewards under `rewards:` as usual; they
@@ -124,8 +123,6 @@ leap-finetune YAML config via `rl_env.source`.
 
 ## Caveats
 
-- `trl.experimental.openenv` is marked **experimental** by TRL; the
-  API may shift in a future minor release. The adapter isolates the
-  TRL dependency to a single file (`adapter.py`) to keep any breaking
-  change to a one-file fix.
+- TRL's `rollout_func` is marked **experimental**. The adapter isolates
+  that dependency to a single file (`adapter.py`) so API changes stay local.
 - OpenEnv itself is young (currently on v0.2). The contract may move.

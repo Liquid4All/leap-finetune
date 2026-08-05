@@ -1,6 +1,14 @@
+import json
+
+import numpy as np
 import pytest
+from PIL import Image
 
 from leap_finetune.config import materialize_job_config, parse_job_config
+from leap_finetune.data_loading.validate_dataset_format import (
+    get_row_filter,
+    normalize_columns,
+)
 from leap_finetune.rl.rewards import resolve_reward_specs
 from leap_finetune.training.default_configs import TRAINING_DEFAULTS
 
@@ -123,6 +131,32 @@ class TestGRPOSmoke:
         assert jc.rl_env["source"] == "liquidai/vlm-grounding-bbox-env"
         assert jc.grpo_rollout["server_gpus"] == 1
         assert jc.training_config.value["lr_multipliers"]["model.vision_tower"] == 0.1
+
+    def test_vlm_grpo_normalizes_nested_ray_arrays(self, tmp_path):
+        image_path = tmp_path / "square.png"
+        Image.new("RGB", (8, 8), color="red").save(image_path)
+        row = {
+            "prompt": np.array(
+                [
+                    {
+                        "role": "user",
+                        "content": np.array(
+                            [
+                                json.dumps({"type": "image", "image": str(image_path)}),
+                                json.dumps({"type": "text", "text": "Describe it."}),
+                            ],
+                            dtype=object,
+                        ),
+                    }
+                ],
+                dtype=object,
+            )
+        }
+
+        normalized = normalize_columns("vlm_grpo")(row)
+
+        assert isinstance(normalized["prompt"][0]["content"], list)
+        assert get_row_filter("vlm_grpo")(normalized)
 
     def test_grpo_keys_rejected_on_sft(self, tmp_path):
         config = {

@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 from typing import cast
 
+from peft import LoraConfig
 from ray.train.huggingface.transformers import prepare_trainer
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 from leap_finetune.distribution.ray_runtime import normalize_visible_devices
 
@@ -25,6 +26,7 @@ from leap_finetune.rl.rewards import resolve_reward_specs
 from leap_finetune.training.default_configs.grpo_configs import GRPO_EXCLUDED_KEYS
 from leap_finetune.training.peft.peft import (
     apply_peft_to_model,
+    load_peft_adapter,
     merge_and_save_peft_model,
 )
 from leap_finetune.training.utils.logging import (
@@ -41,6 +43,20 @@ from leap_finetune.training.utils.worker_setup import (
 from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_grpo_peft(
+    model: PreTrainedModel,
+    *,
+    peft_config: LoraConfig | None,
+    adapter_path: str | None,
+) -> PreTrainedModel:
+    """Load a trainable adapter continuation or create a fresh adapter."""
+    if adapter_path:
+        return load_peft_adapter(model, adapter_path)
+    if peft_config:
+        return apply_peft_to_model(model, peft_config)
+    return model
 
 
 # === Text GRPO loop ===
@@ -65,6 +81,7 @@ def grpo_run(training_config: dict) -> None:
     train_config = training_config.get("train_config", {})
     run_name_template = train_config.get("leap_run_name_template")
     resume_from = train_config.get("resume_from_checkpoint")
+    adapter_path = train_config.get("adapter_path")
     output_dir = train_config.get("output_dir", "")
     if resume_from:
         logger.info("Resuming from checkpoint: %s", resume_from)
@@ -96,8 +113,11 @@ def grpo_run(training_config: dict) -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    if peft_config:
-        model = apply_peft_to_model(model, peft_config)
+    model = _apply_grpo_peft(
+        model,
+        peft_config=peft_config,
+        adapter_path=adapter_path,
+    )
 
     # Resolve reward functions from the driver-side config_dir. Loaders are
     # deterministic, so each worker re-runs the resolution independently
@@ -178,7 +198,7 @@ def grpo_run(training_config: dict) -> None:
     run_training_safely(trainer, resume_from_checkpoint=resume_from)
 
     # Save PEFT adapter if applicable
-    if peft_config and is_rank_zero():
+    if (peft_config or adapter_path) and is_rank_zero():
         merge_and_save_peft_model(
             model, tokenizer, training_args.output_dir, run_name_template
         )

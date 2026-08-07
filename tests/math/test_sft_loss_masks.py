@@ -83,6 +83,64 @@ def test_tokenize_sft_rejects_text_rows_for_masked_loss():
         raise AssertionError("Expected tokenize_sft to reject text rows")
 
 
+class _NoGenerationMarkerTokenizer(_FakeTokenizer):
+    """A template without {% generation %}: transformers warns and returns zeros."""
+
+    def __init__(self, length: int = 6) -> None:
+        self._length = length
+
+    def apply_chat_template(
+        self,
+        messages,
+        tokenize=True,
+        truncation=True,
+        max_length=None,
+        return_dict=False,
+        return_assistant_tokens_mask=False,
+        tools=None,
+    ):
+        del messages, tokenize, truncation, max_length, tools
+        output = {"input_ids": list(range(10, 10 + self._length))}
+        if return_assistant_tokens_mask:
+            output["assistant_masks"] = [0] * self._length
+        return output if return_dict else output["input_ids"]
+
+
+def test_tokenize_sft_rejects_all_zero_assistant_mask():
+    """Without this the run supervises no tokens and the loss still looks fine."""
+    tokenizer = _NoGenerationMarkerTokenizer()
+    row = {"messages": [{"role": "user", "content": "x"}]}
+
+    try:
+        tokenize_sft(row, tokenizer, max_length=128, assistant_only_loss=True)
+    except ValueError as exc:
+        assert "all zeros" in str(exc)
+    else:
+        raise AssertionError("Expected tokenize_sft to reject an all-zero mask")
+
+
+def test_tokenize_sft_rejects_all_zero_completion_mask():
+    tokenizer = _NoGenerationMarkerTokenizer()
+    row = {"messages": [{"role": "user", "content": "x"}]}
+
+    try:
+        tokenize_sft(row, tokenizer, max_length=128, completion_only_loss=True)
+    except ValueError as exc:
+        assert "all zeros" in str(exc)
+    else:
+        raise AssertionError("Expected tokenize_sft to reject an all-zero mask")
+
+
+def test_tokenize_sft_allows_all_zero_mask_when_row_was_truncated():
+    """Truncation can legitimately cut the assistant span off a long row."""
+    tokenizer = _NoGenerationMarkerTokenizer(length=4)
+    row = {"messages": [{"role": "user", "content": "x"}]}
+
+    tokenized = tokenize_sft(row, tokenizer, max_length=4, assistant_only_loss=True)
+
+    assert tokenized["assistant_masks"] == [0, 0, 0, 0]
+
+
 def test_collator_applies_intersection_of_completion_and_assistant_masks():
     tokenizer = _FakeTokenizer()
     collator = build_sft_data_collator(

@@ -35,6 +35,7 @@ from leap_finetune.training.moe_utils.memory_trace import (
     write_memory_trace_event,
 )
 from leap_finetune.training.utils.trainer_mixins import (
+    CausalLMLossTokenCountMixin,
     ManualShardedCheckpointMixin,
     validate_manual_sharded_training_args,
 )
@@ -71,7 +72,9 @@ MOE_SFT_EXCLUDED_KEYS = SFT_EXCLUDED_KEYS | {
 }
 
 
-class LFMMoeSFTTrainer(ManualShardedCheckpointMixin, Trainer):
+class LFMMoeSFTTrainer(
+    CausalLMLossTokenCountMixin, ManualShardedCheckpointMixin, Trainer
+):
     """SFT Trainer for MoE models with EP/FSDP2 support."""
 
     def __init__(

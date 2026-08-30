@@ -47,6 +47,28 @@ class RayDataLoaderMixin:
         )
 
 
+class CausalLMLossTokenCountMixin:
+    """Align Trainer token counts with decoder-only causal-LM loss targets.
+
+    Transformers 5.3 counts non-ignored labels before the model shifts them,
+    while the causal loss in this repository scores labels[..., 1:].
+    Passing shifted labels through to the upstream helper preserves its
+    distributed gathering and device handling while keeping the denominator
+    aligned with the scored tokens.
+    """
+
+    def _get_num_items_in_batch(self, batch_samples, device):
+        if not batch_samples or "labels" not in batch_samples[0]:
+            return super()._get_num_items_in_batch(batch_samples, device)
+
+        shifted_samples = []
+        for batch in batch_samples:
+            shifted_batch = dict(batch)
+            shifted_batch["labels"] = batch["labels"][..., 1:]
+            shifted_samples.append(shifted_batch)
+        return super()._get_num_items_in_batch(shifted_samples, device)
+
+
 def validate_manual_sharded_training_args(
     config_kwargs: dict,
     *,

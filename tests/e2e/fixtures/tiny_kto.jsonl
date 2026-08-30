@@ -1,0 +1,8 @@
+{"prompt":[{"role":"user","content":"What is 2 + 2?"}],"completion":[{"role":"assistant","content":"4."}],"label":true}
+{"prompt":[{"role":"user","content":"What is 2 + 2?"}],"completion":[{"role":"assistant","content":"5."}],"label":false}
+{"prompt":[{"role":"user","content":"What is the capital of France?"}],"completion":[{"role":"assistant","content":"Paris."}],"label":true}
+{"prompt":[{"role":"user","content":"What is the capital of France?"}],"completion":[{"role":"assistant","content":"London."}],"label":false}
+{"prompt":[{"role":"user","content":"What color is the daytime sky?"}],"completion":[{"role":"assistant","content":"Blue."}],"label":true}
+{"prompt":[{"role":"user","content":"What color is the daytime sky?"}],"completion":[{"role":"assistant","content":"Green."}],"label":false}
+{"prompt":[{"role":"user","content":"What is the opposite of hot?"}],"completion":[{"role":"assistant","content":"Cold."}],"label":true}
+{"prompt":[{"role":"user","content":"What is the opposite of hot?"}],"completion":[{"role":"assistant","content":"Warm."}],"label":false}

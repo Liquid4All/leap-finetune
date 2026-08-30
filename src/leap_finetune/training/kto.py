@@ -2,8 +2,9 @@ import logging
 from typing import cast
 
 from ray.train.huggingface.transformers import prepare_trainer
+from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
-from trl.experimental.kto import KTOConfig, KTOTrainer
+from trl import KTOConfig, KTOTrainer
 
 from leap_finetune.training.utils.worker_setup import (
     default_eval_batch_size,
@@ -46,6 +47,30 @@ logger = logging.getLogger(__name__)
 
 class LFMKTOTrainer(RayDataLoaderMixin, KTOTrainer):
     """KTO trainer with Ray-sharded data loaders."""
+
+    def get_train_dataloader(self):
+        # KTO precomputes KL completions in fixed train-size groups. Keep the
+        # loader in that order and drop incomplete groups.
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.args.per_device_train_batch_size,
+            collate_fn=self.data_collator,
+            shuffle=False,
+            drop_last=True,
+        )
+
+    def get_eval_dataloader(self, eval_dataset=None):
+        if eval_dataset is None:
+            eval_dataset = self.eval_dataset
+        if eval_dataset is None:
+            raise ValueError("No evaluation dataset configured for this run")
+        return DataLoader(
+            eval_dataset,
+            batch_size=self.args.per_device_train_batch_size,
+            collate_fn=self.data_collator,
+            shuffle=False,
+            drop_last=True,
+        )
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         # The plain Ray DataLoaders skip Accelerate's device placement and
@@ -97,6 +122,21 @@ def kto_run(training_config: dict) -> None:
     )
 
     default_eval_batch_size(train_config_filtered)
+    train_batch_size = train_config_filtered["per_device_train_batch_size"]
+    eval_batch_size = train_config_filtered["per_device_eval_batch_size"]
+    if train_batch_size < 2:
+        raise ValueError("KTO requires per_device_train_batch_size >= 2")
+    if eval_batch_size != train_batch_size:
+        raise ValueError(
+            "KTO requires per_device_eval_batch_size to match "
+            "per_device_train_batch_size"
+        )
+    for dataset_name, dataset in (("train", train_dataset), ("eval", eval_dataset)):
+        if dataset is not None and len(dataset) < train_batch_size:
+            raise ValueError(
+                f"KTO {dataset_name} dataset must have at least "
+                f"{train_batch_size} rows per worker"
+            )
 
     config_kwargs = {
         "report_to": tracker,

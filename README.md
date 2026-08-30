@@ -507,8 +507,6 @@ Rows without `prompt` are also accepted if `chosen` and `rejected` are full
 conversations with the same shared prefix; the tokenizer extracts that prefix
 as the prompt. Prefer the explicit `prompt` shape above when writing new data.
 
-### Retrieval and Embedding models
-
 ### KTO
 
 KTO ([Ethayarajh et al., 2024](https://huggingface.co/papers/2402.01306))
@@ -531,8 +529,12 @@ strings or message lists:
 KTO rows are tokenized by TRL's `KTOTrainer` on each worker rather than by
 Leap's pretokenization pipeline. `per_device_train_batch_size` must be greater
 than 1 because KTO estimates its KL term from mismatched completions within a
-batch. For imbalanced labels, tune `desirable_weight` and
-`undesirable_weight`; TRL logs a warning when the weights do not compensate for
+batch. Leap preserves that batch order, uses the train batch size for evaluation,
+and drops incomplete final batches. For imbalanced labels, tune
+`desirable_weight` and `undesirable_weight`; TRL logs a warning when the
+weights do not compensate for the label balance.
+
+### Retrieval and Embedding models
 
 Use `training_type: "embedding"` for LFM Embedding models and
 `training_type: "colbert"` for LFM ColBERT models. Both accept the same

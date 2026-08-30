@@ -200,7 +200,6 @@ def install_memory_efficient_causal_lm_loss(model: nn.Module) -> None:
     def memory_efficient_forward(self, *args, **kwargs):
         labels = kwargs.get("labels")
         logits_to_keep = kwargs.get("logits_to_keep", 0)
-        num_items_in_batch = kwargs.pop("num_items_in_batch", None)
 
         if (
             labels is None
@@ -208,7 +207,15 @@ def install_memory_efficient_causal_lm_loss(model: nn.Module) -> None:
             or args
             or logits_to_keep not in (0, None)
         ):
+            # Keep ``num_items_in_batch`` in kwargs: the stock forward hands it
+            # to ``model.loss_function`` so the loss stays normalized by the
+            # global token count gathered by the trainer. Dropping it here made
+            # eval fall back to a local per-token mean, which the trainer then
+            # scaled by the process count, inflating eval_loss by the world
+            # size on multi-GPU runs.
             return original_forward(*args, **kwargs)
+
+        num_items_in_batch = kwargs.pop("num_items_in_batch", None)
 
         model_kwargs = {
             key: value

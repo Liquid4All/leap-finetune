@@ -206,6 +206,23 @@ def tokenize_sft(
             raise ValueError(
                 "assistant mask length mismatch after chat template tokenization"
             )
+        if not any(assistant_masks):
+            # A chat template without {% generation %} markers makes
+            # apply_chat_template return an all-zero assistant mask: it warns but
+            # does not raise, so the run trains on zero supervised tokens and the
+            # loss curve still looks plausible. Truncation can legitimately cut
+            # the assistant span off a long row, so only reject rows that fit.
+            truncated = (
+                truncate and max_length is not None and len(input_ids) >= max_length
+            )
+            if not truncated:
+                raise ValueError(
+                    "assistant mask is all zeros for a row that was not truncated. "
+                    "Check that the chat template has {% generation %} markers, "
+                    "that the row contains assistant content, and that the "
+                    "assistant span is not fully truncated. Otherwise, use a "
+                    "template that marks the assistant span or turn the flag off."
+                )
         if assistant_only_loss:
             output["assistant_masks"] = assistant_masks
         if completion_only_loss:

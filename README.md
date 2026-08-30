@@ -997,6 +997,13 @@ Pinned chat templates live in
 LiquidAI LFM2.5 and LFM2-24B models select the pinned LFM2.5 template by
 default.
 
+For conversational SFT, set `assistant_only_loss: true` to supervise only
+assistant turns, or `completion_only_loss: true` to supervise only the final
+assistant completion. These options require a chat template with
+`{% generation %}` and `{% endgeneration %}` markers around assistant output;
+the bundled LFM templates include them. They are not used for plain-text SFT
+rows.
+
 ## Contributing
 
 ### Testing

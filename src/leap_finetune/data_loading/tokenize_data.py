@@ -218,10 +218,10 @@ def tokenize_sft(
             if not truncated:
                 raise ValueError(
                     "assistant mask is all zeros for a row that was not truncated. "
-                    "The chat template has no {% generation %} markers, so "
-                    "assistant_only_loss/completion_only_loss would supervise no "
-                    "tokens. Use a template that marks the assistant span, or turn "
-                    "the flag off."
+                    "Check that the chat template has {% generation %} markers, "
+                    "that the row contains assistant content, and that the "
+                    "assistant span is not fully truncated. Otherwise, use a "
+                    "template that marks the assistant span or turn the flag off."
                 )
         if assistant_only_loss:
             output["assistant_masks"] = assistant_masks

@@ -31,6 +31,7 @@ _REWARDS_DIR = LEAP_FINETUNE_DIR / "rewards"
 TRAINING_TYPE_TO_CONFIG = {
     "sft": "DEFAULT_SFT",
     "dpo": "DEFAULT_DPO",
+    "kto": "DEFAULT_KTO",
     "embedding": "DEFAULT_EMBEDDING",
     "colbert": "DEFAULT_COLBERT",
     "vlm_sft": "DEFAULT_VLM_SFT",
@@ -47,6 +48,7 @@ DATASET_TYPE_ALIASES = {
 VALID_DATASET_TYPES = {
     "sft",
     "dpo",
+    "kto",
     "embedding",
     "colbert",
     "vlm_sft",

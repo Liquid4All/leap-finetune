@@ -326,6 +326,12 @@ def _tokenize_datasets(
             )
         return train_ds, eval_ds
 
+    if dataset_type == "kto":
+        # TRL's KTOTrainer tokenizes and derives its KL-pair columns itself
+        # (per worker shard), so KTO rows pass through untokenized.
+        console.print("[dim]KTO: deferring tokenization to KTOTrainer workers[/dim]")
+        return train_ds, eval_ds
+
     if dataset_type == "dpo":
         max_prompt_length = training_config.get("max_prompt_length")
         max_completion_length = training_config.get("max_completion_length")
@@ -430,6 +436,9 @@ def _build_tokenization_cache_key(
         key["max_completion_length"] = training_config.get("max_completion_length")
         key["shuffle_dataset"] = training_config.get("shuffle_dataset", True)
         key["chat_template_sha256"] = _hash_template(tokenizer_chat_template)
+    elif dataset_type == "kto":
+        # KTO caches raw (untokenized) rows; only load/shuffle params matter.
+        key["shuffle_dataset"] = training_config.get("shuffle_dataset", True)
 
     canonical = json.dumps(key, sort_keys=True)
     fingerprint = hashlib.sha256(canonical.encode()).hexdigest()[:16]

@@ -509,6 +509,31 @@ as the prompt. Prefer the explicit `prompt` shape above when writing new data.
 
 ### Retrieval and Embedding models
 
+### KTO
+
+KTO ([Ethayarajh et al., 2024](https://huggingface.co/papers/2402.01306))
+learns from _unpaired_ binary feedback: each row is a single completion marked
+desirable or undesirable, so no same-prompt preference pairs are needed. Use
+`training_type: "kto"` with `prompt`, `completion`, and boolean `label`
+columns (`true` = desirable). Like DPO, `prompt` and `completion` can be plain
+strings or message lists:
+
+```json
+{
+  "prompt": [{ "role": "user", "content": "What is the capital of France?" }],
+  "completion": [
+    { "role": "assistant", "content": "The capital of France is London." }
+  ],
+  "label": false
+}
+```
+
+KTO rows are tokenized by TRL's `KTOTrainer` on each worker rather than by
+Leap's pretokenization pipeline. `per_device_train_batch_size` must be greater
+than 1 because KTO estimates its KL term from mismatched completions within a
+batch. For imbalanced labels, tune `desirable_weight` and
+`undesirable_weight`; TRL logs a warning when the weights do not compensate for
+
 Use `training_type: "embedding"` for LFM Embedding models and
 `training_type: "colbert"` for LFM ColBERT models. Both accept the same
 dataset shape:

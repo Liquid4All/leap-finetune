@@ -28,6 +28,7 @@ from leap_finetune.training.peft.peft import (
     merge_and_save_peft_model,
 )
 from leap_finetune.training.utils.trainer_mixins import (
+    CausalLMLossTokenCountMixin,
     RayDataLoaderMixin,
 )
 from leap_finetune.training.utils.trainer_lifecycle import (
@@ -63,7 +64,7 @@ class LFMDataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
         return super().torch_call(masked_examples)
 
 
-class LFMSFTTrainer(RayDataLoaderMixin, Trainer):
+class LFMSFTTrainer(RayDataLoaderMixin, CausalLMLossTokenCountMixin, Trainer):
     """SFT trainer with Ray-sharded data loaders."""
 
 

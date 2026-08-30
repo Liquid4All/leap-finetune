@@ -1042,7 +1042,7 @@ E2E fixtures and SLURM launchers live under [`tests/e2e/`](./tests/e2e/).
 Run the normal tests:
 
 ```bash
-uv run pytest tests/config tests/math -q
+uv run pytest tests/config tests/numerics -q
 ```
 
 GPU e2e tests require an appropriate GPU or cluster backend; see

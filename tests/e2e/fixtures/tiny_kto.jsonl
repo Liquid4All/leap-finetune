@@ -6,3 +6,11 @@
 {"prompt":[{"role":"user","content":"What color is the daytime sky?"}],"completion":[{"role":"assistant","content":"Green."}],"label":false}
 {"prompt":[{"role":"user","content":"What is the opposite of hot?"}],"completion":[{"role":"assistant","content":"Cold."}],"label":true}
 {"prompt":[{"role":"user","content":"What is the opposite of hot?"}],"completion":[{"role":"assistant","content":"Warm."}],"label":false}
+{"prompt":[{"role":"user","content":"What is 3 + 3?"}],"completion":[{"role":"assistant","content":"6."}],"label":true}
+{"prompt":[{"role":"user","content":"What is 3 + 3?"}],"completion":[{"role":"assistant","content":"7."}],"label":false}
+{"prompt":[{"role":"user","content":"What is the capital of Japan?"}],"completion":[{"role":"assistant","content":"Tokyo."}],"label":true}
+{"prompt":[{"role":"user","content":"What is the capital of Japan?"}],"completion":[{"role":"assistant","content":"Kyoto."}],"label":false}
+{"prompt":[{"role":"user","content":"Which animal says meow?"}],"completion":[{"role":"assistant","content":"A cat."}],"label":true}
+{"prompt":[{"role":"user","content":"Which animal says meow?"}],"completion":[{"role":"assistant","content":"A dog."}],"label":false}
+{"prompt":[{"role":"user","content":"What is the opposite of up?"}],"completion":[{"role":"assistant","content":"Down."}],"label":true}
+{"prompt":[{"role":"user","content":"What is the opposite of up?"}],"completion":[{"role":"assistant","content":"Left."}],"label":false}

@@ -5,8 +5,8 @@ training_type: "kto"
 dataset:
   path: "tests/e2e/fixtures/tiny_kto.jsonl"
   type: "kto"
-  limit: 8
-  test_size: 0.25
+  limit: 16
+  test_size: 0.5
 
 training_config:
   extends: "DEFAULT_KTO"

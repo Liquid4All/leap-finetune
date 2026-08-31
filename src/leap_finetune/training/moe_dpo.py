@@ -3,7 +3,6 @@ from typing import cast
 
 import torch
 import torch.distributed as dist
-from ray.train.huggingface.transformers import prepare_trainer
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
@@ -15,10 +14,9 @@ from leap_finetune.distribution.distributed_configs import (
 )
 from leap_finetune.training.utils.worker_setup import (
     default_eval_batch_size,
-    get_ray_train_eval_datasets,
+    resolve_train_eval_datasets,
     init_tracking_from_config,
     load_causal_lm_for_training,
-    setup_training_worker,
 )
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.evaluation import (
@@ -169,10 +167,11 @@ class LFMMoeDPOTrainer(ManualShardedCheckpointMixin, DPOTrainer):
         return inputs
 
 
-def moe_dpo_run(training_config: dict) -> None:
-    """MoE DPO training loop with revised EP support."""
-    setup_training_worker()
-    train_dataset, eval_dataset = get_ray_train_eval_datasets()
+def moe_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
+    """MoE DPO training loop with local and EP support."""
+    train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
+        train_dataset, eval_dataset
+    )
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")

@@ -20,10 +20,31 @@ def should_use_local(job_config: dict) -> bool:
     if os.getenv("LEAP_LAUNCHER", "auto").lower() == "ray":
         return False
     training_type = job_config["training_type"]
-    if training_type not in _LOCAL_TYPES:
+    is_moe = is_moe_model_from_name(job_config["model_name"])
+    if training_type not in _LOCAL_TYPES and training_type not in {
+        "moe_sft",
+        "moe_dpo",
+    }:
         return False
-    if is_moe_model_from_name(job_config["model_name"]):
+    if training_type.startswith("moe_") and not is_moe:
         return False
+    if is_moe:
+        base_type = training_type.removeprefix("moe_")
+        peft_config = job_config.get("peft_config")
+        moe_config = (job_config.get("training_config") or {}).get("moe_training") or {}
+        peft_enabled = (
+            peft_config.get("use_peft")
+            if isinstance(peft_config, dict)
+            else getattr(peft_config, "use_peft", None)
+        )
+        if (
+            base_type not in {"sft", "dpo"}
+            or peft_config is None
+            or peft_enabled is False
+        ):
+            return False
+        if int(moe_config.get("expert_parallel_size", 1) or 1) != 1:
+            return False
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
         return False
     ray_config = job_config.get("ray_config") or {}
@@ -45,8 +66,12 @@ def local_trainer(job_config: dict):
     if not isinstance(dataset_config, DatasetLoader):
         raise ValueError("Local training requires a DatasetLoader")
 
+    is_moe = is_moe_model_from_name(job_config["model_name"])
+    base_type = training_type.removeprefix("moe_")
+    loop_type = f"moe_{base_type}" if is_moe else training_type
+
     tokenizer = None
-    if training_type in {"sft", "dpo"}:
+    if base_type in {"sft", "dpo"}:
         tokenizer = load_tokenizer(
             job_config["model_name"],
             chat_template=train_config.get("chat_template"),
@@ -69,7 +94,7 @@ def local_trainer(job_config: dict):
         "config_dir": job_config.get("config_dir"),
     }
     print("\nTraining locally on 1 GPU without Ray Train")
-    return TRAINING_LOOPS[training_type](
+    return TRAINING_LOOPS[loop_type](
         loop_config,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

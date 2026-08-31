@@ -2,8 +2,11 @@ import pytest
 
 from conftest import (
     assert_checkpoints_exist,
+    assert_local_model_saved,
     assert_training_result,
     requires_gpu,
+    requires_single_gpu,
+    run_local_e2e_training,
     run_e2e_training,
 )
 
@@ -21,6 +24,13 @@ class TestVLMLoRA:
         config_path = _write_vlm_sft_config(tmp_path, "e2e_vlm_lora.yaml")
         result = run_e2e_training(config_path, e2e_output_dir)
         assert_training_result(result)
+
+    @pytest.mark.single_gpu
+    @requires_single_gpu
+    def test_local_single_gpu_training(self, e2e_output_dir, tmp_path):
+        config_path = _write_vlm_sft_config(tmp_path, "e2e_vlm_lora.yaml")
+        run_local_e2e_training(config_path, e2e_output_dir)
+        assert_local_model_saved(e2e_output_dir)
 
 
 # === VLM SFT full fine-tune ===

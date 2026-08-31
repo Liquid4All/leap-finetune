@@ -2,7 +2,6 @@ import logging
 import math
 
 import torch
-from ray.train.huggingface.transformers import prepare_trainer
 from transformers import Trainer, TrainingArguments
 
 from leap_finetune.data_loading.tokenize_data import create_vlm_collate_fn
@@ -11,9 +10,8 @@ from leap_finetune.training.default_configs.vlm_sft_configs import (
     VLM_SFT_EXCLUDED_KEYS,
 )
 from leap_finetune.training.utils.worker_setup import (
-    get_ray_train_eval_datasets,
+    resolve_train_eval_datasets,
     init_tracking_from_config,
-    setup_training_worker,
 )
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_loading import load_vlm_model
@@ -86,11 +84,12 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
 # === Training loop ===
 
 
-def vlm_sft_run(training_config: dict) -> None:
-    """VLM SFT training loop for Ray Train."""
+def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
+    """Run VLM SFT locally or inside a Ray Train worker."""
 
-    setup_training_worker()
-    train_dataset, eval_dataset = get_ray_train_eval_datasets()
+    train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
+        train_dataset, eval_dataset
+    )
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")

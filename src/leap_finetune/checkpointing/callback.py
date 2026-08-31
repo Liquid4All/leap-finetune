@@ -7,6 +7,8 @@ from ray import train
 from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 
+from leap_finetune.training.utils.logging import is_rank_zero
+
 from leap_finetune.checkpointing.paths import (
     current_checkpoint_output_dir,
     rename_standard_checkpoint,
@@ -64,6 +66,10 @@ def hydrate_missing_ray_metrics(result, output_dir: str):
 
 def report_ray_metrics(metrics: dict, output_dir: str | os.PathLike) -> None:
     persist_rank_zero_metrics(output_dir, metrics)
+    try:
+        train.get_context()
+    except RuntimeError:
+        return
     train.report(metrics=metrics, checkpoint=None)
 
 
@@ -176,7 +182,7 @@ class LeapCheckpointCallback(TrainerCallback):
             step=state.global_step,
             manual_sharded=self.manual_sharded,
         )
-        if train.get_context().get_world_rank() == 0:
+        if is_rank_zero():
             print(f"Checkpoint saved: {checkpoint_path}")
             print(f"   Metrics: {self.metrics}")
 

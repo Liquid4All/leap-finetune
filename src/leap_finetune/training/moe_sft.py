@@ -164,9 +164,8 @@ class LFMMoeSFTTrainer(
 def moe_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
     """MoE SFT training loop with revised non-EP and EP paths."""
     # ==== 1. Worker setup and config ====
-    # Ray has already assigned this worker a dataset shard and CUDA device. This
-    # loop turns the Ray config into Trainer args while keeping MoE-only keys out
-    # of Hugging Face TrainingArguments.
+    # Resolve supplied local datasets or the Ray worker shard, then keep MoE-only
+    # keys out of Hugging Face TrainingArguments.
     train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
         train_dataset, eval_dataset
     )

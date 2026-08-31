@@ -191,13 +191,9 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
     previous_output_dir = os.environ.get("OUTPUT_DIR")
     os.environ["OUTPUT_DIR"] = str(output_dir)
     try:
-        from leap_finetune.config.parser import materialize_job_config, parse_job_config
-        from leap_finetune.distribution.ray_trainer import ray_trainer
+        from leap_finetune.cli.main import run_config
 
-        job_config = parse_job_config(config_path)
-        job_config = materialize_job_config(job_config)
-        job_config_dict = job_config.to_dict()
-        return ray_trainer(job_config_dict)
+        return run_config(config_path)
     finally:
         if previous_output_dir is None:
             os.environ.pop("OUTPUT_DIR", None)

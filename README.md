@@ -203,7 +203,9 @@ Launch training:
 uv run leap-finetune job_configs/sft_example.yaml
 ```
 
-Training uses Ray Train and Accelerate for distributed execution. Unless
+Training uses Ray Train and Accelerate for distributed execution. SFT, DPO, and
+VLM SFT automatically use the native Hugging Face Trainer when exactly one GPU
+is visible; set `LEAP_LAUNCHER=ray` to force Ray. Unless
 `output_dir` is set, results are written to
 `outputs/{project_name}/{run_name}/`. Each run gets a unique name based on the
 model, dataset, learning rate, and timestamp.
@@ -261,7 +263,7 @@ uvx --from . leap-finetune /absolute/path/to/config.yaml
 
 You can also start a run from Python. This uses the same backend dispatch as
 the CLI: configs with `slurm`, `modal`, or `kuberay` submit remotely; other
-configs run local Ray training and require visible CUDA devices.
+configs run local training and require visible CUDA devices. SFT, DPO, and VLM SFT use the native Trainer on one GPU; other modes use Ray.
 
 ```python
 from leap_finetune import run_config

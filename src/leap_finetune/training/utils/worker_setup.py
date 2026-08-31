@@ -56,6 +56,18 @@ def get_ray_train_eval_datasets():
     return train_dataset, eval_dataset
 
 
+def resolve_train_eval_datasets(train_dataset=None, eval_dataset=None):
+    """Use supplied datasets locally, otherwise resolve the Ray worker shard."""
+    if train_dataset is not None:
+        return train_dataset, eval_dataset, lambda trainer: trainer
+
+    setup_training_worker()
+    train_dataset, eval_dataset = get_ray_train_eval_datasets()
+    from ray.train.huggingface.transformers import prepare_trainer
+
+    return train_dataset, eval_dataset, prepare_trainer
+
+
 def init_tracking_from_config(
     job_name: str,
     train_config: dict,

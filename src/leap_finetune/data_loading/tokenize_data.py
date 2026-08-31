@@ -4,7 +4,7 @@ import logging
 import ray
 import ray.data
 import torch
-from datasets import Dataset, Features, Sequence, Value
+from datasets import Dataset
 import pyarrow as pa
 from rich.console import Console
 from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt
@@ -268,20 +268,26 @@ def tokenize_and_pack_sft(
 
     # === 2. Pack or truncate ===
     if packing:
-        # Packing requires full materialization into an HF Dataset
-        rows = []
-        features_dict = {"input_ids": Sequence(Value("int64"))}
-        for row in ds.iter_rows():
-            packed_row = {"input_ids": row["input_ids"]}
-            if "assistant_masks" in row:
-                packed_row["assistant_masks"] = row["assistant_masks"]
-                features_dict["assistant_masks"] = Sequence(Value("int64"))
-            if "completion_mask" in row:
-                packed_row["completion_mask"] = row["completion_mask"]
-                features_dict["completion_mask"] = Sequence(Value("int64"))
-            rows.append(packed_row)
-        features = Features(features_dict)
-        hf_ds = Dataset.from_list(rows, features=features)
+        # Keep packing Arrow-native; the previous row list doubled peak memory.
+        if hasattr(ds, "to_arrow_refs"):
+            tables = ray.get(ds.to_arrow_refs())
+            if not tables:
+                return ds
+            table = pa.concat_tables(tables)
+            columns = [
+                name
+                for name in ("input_ids", "assistant_masks", "completion_mask")
+                if name in table.column_names
+            ]
+            hf_ds = Dataset(table.select(columns))
+        else:
+            hf_ds = Dataset.from_generator(ds.iter_rows)
+            columns = [
+                name
+                for name in ("input_ids", "assistant_masks", "completion_mask")
+                if name in hf_ds.column_names
+            ]
+            hf_ds = hf_ds.select_columns(columns)
         console.print(f"[dim]Tokenized {len(hf_ds):,} rows[/dim]")
         console.print(f"[dim]Packing sequences (BFD, max_length={max_length})...[/dim]")
         hf_ds = pack_dataset(hf_ds, seq_length=max_length, strategy="bfd")

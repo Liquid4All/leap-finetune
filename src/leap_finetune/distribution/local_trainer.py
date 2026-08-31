@@ -12,7 +12,7 @@ from leap_finetune.distribution.distributed_configs import (
 )
 from leap_finetune.training import TRAINING_LOOPS
 
-_LOCAL_TYPES = frozenset({"sft", "dpo", "vlm_sft"})
+_LOCAL_TYPES = frozenset({"sft", "dpo", "vlm_sft", "vlm_dpo"})
 
 
 def should_use_local(job_config: dict) -> bool:
@@ -35,7 +35,7 @@ def should_use_local(job_config: dict) -> bool:
 
 
 def local_trainer(job_config: dict):
-    """Run SFT, DPO, or VLM SFT in the current process without Ray Train."""
+    """Run supported single-GPU trainers in the current process without Ray Train."""
     set_seed(42)
     training_type = job_config["training_type"]
     train_config = strip_distributed_training_config(

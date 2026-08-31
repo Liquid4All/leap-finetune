@@ -76,6 +76,11 @@ requires_multi_gpu = pytest.mark.skipif(
     reason="Requires 2+ GPUs",
 )
 
+requires_single_gpu = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.device_count() != 1,
+    reason="Requires exactly 1 GPU",
+)
+
 
 # === Shared fixtures ===
 
@@ -148,6 +153,37 @@ def e2e_output_dir():
     test_results_dir.mkdir(parents=True, exist_ok=True)
     yield test_results_dir
     shutil.rmtree(test_results_dir, ignore_errors=True)
+
+
+def run_local_e2e_training(
+    config_path: str, output_dir: pathlib.Path, *, max_steps: int = 2
+):
+    """Run a short job through the automatic local single-GPU dispatcher."""
+    previous_output_dir = os.environ.get("OUTPUT_DIR")
+    os.environ["OUTPUT_DIR"] = str(output_dir)
+    try:
+        from leap_finetune.config.parser import materialize_job_config, parse_job_config
+        from leap_finetune.distribution.local_trainer import (
+            local_trainer,
+            should_use_local,
+        )
+
+        job_config = materialize_job_config(parse_job_config(config_path))
+        job_config_dict = job_config.to_dict()
+        job_config_dict["training_config"]["max_steps"] = max_steps
+        assert should_use_local(job_config_dict), "Expected local single-GPU dispatch"
+        local_trainer(job_config_dict)
+    finally:
+        if previous_output_dir is None:
+            os.environ.pop("OUTPUT_DIR", None)
+        else:
+            os.environ["OUTPUT_DIR"] = previous_output_dir
+
+
+def assert_local_model_saved(output_dir: pathlib.Path):
+    assert any(output_dir.rglob("config.json")), (
+        f"No merged local model found under {output_dir}"
+    )
 
 
 def run_e2e_training(config_path: str, output_dir: pathlib.Path):

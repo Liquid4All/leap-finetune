@@ -73,10 +73,6 @@ override-dependencies = [
 testpaths = ["tests"]
 markers = [
     "configs: config parsing, validation, override, filtering (no GPU)",
-    "data: data loading, validation, tokenization, and packing tests",
-    "distribution: launch, resource planning, and backend integration tests (no GPU unless explicitly marked)",
-    "evaluation: benchmark, metric, and async evaluation tests",
-    "rl: RL data, rewards, rollout, and environment tests",
     "dense: dense model end-to-end training tests",
     "vlm: VLM end-to-end training tests",
     "moe: MoE end-to-end training tests",

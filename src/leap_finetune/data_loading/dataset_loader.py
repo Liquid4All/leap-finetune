@@ -19,6 +19,7 @@ class DatasetLoader:
     dataset_type: Literal[
         "sft",
         "dpo",
+        "kto",
         "embedding",
         "colbert",
         "vlm_sft",

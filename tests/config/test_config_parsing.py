@@ -62,6 +62,17 @@ class TestExampleSmoke:
         assert materialized.dataset is not None
         assert isinstance(materialized.to_dict()["training_config"], dict)
 
+    def test_parse_kto_example(self, kto_config_path):
+        job = parse_job_config(kto_config_path)
+        materialized = materialize_job_config(job)
+
+        assert job.training_type == "kto"
+        assert materialized.job_name == "my_kto_project"
+        assert job.dataset.type == "kto"
+        assert "beta" in materialized.training_config.value
+        assert "desirable_weight" in materialized.training_config.value
+        assert "deepspeed" in materialized.training_config.value
+
 
 class TestDirectPythonConfig:
     def test_construct_job_config_directly(self):

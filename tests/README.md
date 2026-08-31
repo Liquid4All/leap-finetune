@@ -3,13 +3,13 @@
 Keep the suite intentionally small. New tests should land in one of three buckets:
 
 - `config/` — Pydantic config parsing and validation.
-- `math/` — numerical correctness for losses, metrics, masks, routing, and sharding.
+- `numerics/` — deterministic correctness for losses, metrics, masks, routing, sharding, and adapters.
 - `e2e/` — full-service training tests, fixtures, and SLURM launchers.
 
 ## Local Checks
 
 ```bash
-uv run pytest tests/config tests/math
+uv run pytest tests/config tests/numerics
 ```
 
 On AMD / ROCm environments, use the ROCm project so CUDA and ROCm locks remain
@@ -17,7 +17,7 @@ separate. Set this once in your shell, module, or direnv config:
 
 ```bash
 export UV_PROJECT=envs/rocm
-uv run python -m pytest tests/config tests/math
+uv run python -m pytest tests/config tests/numerics
 ```
 
 ## GPU Smoke Tests

@@ -6,9 +6,6 @@ import pytest
 from leap_finetune.rl.environments.adapter import build_openenv_rollout_func
 
 
-pytestmark = pytest.mark.rl
-
-
 class _Processor:
     @staticmethod
     def batch_decode(completion_ids, *, skip_special_tokens):

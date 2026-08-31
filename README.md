@@ -507,6 +507,33 @@ Rows without `prompt` are also accepted if `chosen` and `rejected` are full
 conversations with the same shared prefix; the tokenizer extracts that prefix
 as the prompt. Prefer the explicit `prompt` shape above when writing new data.
 
+### KTO
+
+KTO ([Ethayarajh et al., 2024](https://huggingface.co/papers/2402.01306))
+learns from _unpaired_ binary feedback: each row is a single completion marked
+desirable or undesirable, so no same-prompt preference pairs are needed. Use
+`training_type: "kto"` with `prompt`, `completion`, and boolean `label`
+columns (`true` = desirable). Like DPO, `prompt` and `completion` can be plain
+strings or message lists:
+
+```json
+{
+  "prompt": [{ "role": "user", "content": "What is the capital of France?" }],
+  "completion": [
+    { "role": "assistant", "content": "The capital of France is London." }
+  ],
+  "label": false
+}
+```
+
+KTO rows are tokenized by TRL's `KTOTrainer` on each worker rather than by
+Leap's pretokenization pipeline. `per_device_train_batch_size` must be greater
+than 1 because KTO estimates its KL term from mismatched completions within a
+batch. Leap preserves that batch order, uses the train batch size for evaluation,
+and drops incomplete final batches. For imbalanced labels, tune
+`desirable_weight` and `undesirable_weight`; TRL logs a warning when the
+weights do not compensate for the label balance.
+
 ### Retrieval and Embedding models
 
 Use `training_type: "embedding"` for LFM Embedding models and
@@ -1015,7 +1042,7 @@ E2E fixtures and SLURM launchers live under [`tests/e2e/`](./tests/e2e/).
 Run the normal tests:
 
 ```bash
-uv run pytest tests/config tests/math -q
+uv run pytest tests/config tests/numerics -q
 ```
 
 GPU e2e tests require an appropriate GPU or cluster backend; see

@@ -95,7 +95,9 @@ class LFMMoeSFTTrainer(
 
     def get_train_dataloader(self):
         args = getattr(self, "args", None)
-        batch_size = getattr(args, "per_device_train_batch_size", self._train_batch_size)
+        batch_size = getattr(
+            args, "per_device_train_batch_size", self._train_batch_size
+        )
         group_by_length = getattr(args, "group_by_length", True)
         sampler_generator = None
         if group_by_length or self.ep_config is not None:

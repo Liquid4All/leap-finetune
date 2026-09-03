@@ -3,7 +3,6 @@ import math
 from copy import deepcopy
 
 import numpy as np
-from ray.train.huggingface.transformers import prepare_trainer
 from transformers import ProcessorMixin
 from trl import DPOConfig, DPOTrainer
 from trl.trainer.dpo_trainer import DataCollatorForVisionPreference
@@ -37,9 +36,8 @@ from leap_finetune.training.utils.vlm_optimizer import (
     log_per_group_lrs,
 )
 from leap_finetune.training.utils.worker_setup import (
-    get_ray_train_eval_datasets,
     init_tracking_from_config,
-    setup_training_worker,
+    resolve_train_eval_datasets,
 )
 from leap_finetune.training.utils.config_filter import (
     BASE_RUNTIME_EXCLUDED_KEYS,
@@ -139,10 +137,11 @@ class LFMVLMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
         super().log(logs, *args, **kwargs)
 
 
-def vlm_dpo_run(training_config: dict) -> None:
-    """VLM DPO training loop for image-conditioned preference pairs."""
-    setup_training_worker()
-    train_dataset, eval_dataset = get_ray_train_eval_datasets()
+def vlm_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
+    """Run VLM DPO locally or inside a Ray Train worker."""
+    train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
+        train_dataset, eval_dataset
+    )
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")

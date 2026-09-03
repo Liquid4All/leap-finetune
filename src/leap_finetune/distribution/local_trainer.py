@@ -12,7 +12,9 @@ from leap_finetune.distribution.distributed_configs import (
 )
 from leap_finetune.training import TRAINING_LOOPS
 
-_LOCAL_TYPES = frozenset({"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo"})
+_LOCAL_TYPES = frozenset(
+    {"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo", "moe_sft", "moe_dpo"}
+)
 
 
 def should_use_local(job_config: dict) -> bool:
@@ -21,10 +23,7 @@ def should_use_local(job_config: dict) -> bool:
         return False
     training_type = job_config["training_type"]
     is_moe = is_moe_model_from_name(job_config["model_name"])
-    if training_type not in _LOCAL_TYPES and training_type not in {
-        "moe_sft",
-        "moe_dpo",
-    }:
+    if training_type not in _LOCAL_TYPES:
         return False
     if training_type in {"grpo", "vlm_grpo"}:
         train_config = job_config.get("training_config") or {}

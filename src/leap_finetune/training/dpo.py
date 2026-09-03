@@ -1,16 +1,14 @@
 import logging
 from typing import cast
 
-from ray.train.huggingface.transformers import prepare_trainer
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 
 from leap_finetune.training.utils.worker_setup import (
     default_eval_batch_size,
-    get_ray_train_eval_datasets,
+    resolve_train_eval_datasets,
     init_tracking_from_config,
     load_causal_lm_for_training,
-    setup_training_worker,
 )
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.evaluation import (
@@ -55,10 +53,11 @@ class LFMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
         return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
 
-def dpo_run(training_config: dict) -> None:
-    """DPO training loop for Ray-pretokenized datasets."""
-    setup_training_worker()
-    train_dataset, eval_dataset = get_ray_train_eval_datasets()
+def dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
+    """Run DPO locally or inside a Ray Train worker."""
+    train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
+        train_dataset, eval_dataset
+    )
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")

@@ -183,6 +183,7 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
 
     # Heavy imports deferred to here to keep remote-submit codepaths fast.
     from leap_finetune.data_loading.dataset_loader import DatasetLoader
+    from leap_finetune.distribution.local_trainer import local_trainer, should_use_local
     from leap_finetune.distribution.ray_trainer import ray_trainer
     from leap_finetune.training.utils.logging import setup_training_environment
 
@@ -205,7 +206,8 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
     except Exception as e:
         raise ValueError(f"Issue parsing configuration: {e}") from e
 
-    ray_trainer(job_config_dict)
+    trainer = local_trainer if should_use_local(job_config_dict) else ray_trainer
+    return trainer(job_config_dict)
 
 
 def main() -> None:

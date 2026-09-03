@@ -1,7 +1,6 @@
 import logging
 import torch
 import torch.distributed as dist
-from ray.train.huggingface.transformers import prepare_trainer
 from torch.utils.data import DataLoader
 from transformers import Trainer, TrainingArguments
 
@@ -13,10 +12,9 @@ from leap_finetune.distribution.distributed_configs import (
 from leap_finetune.training.default_configs.sft_configs import SFT_EXCLUDED_KEYS
 from leap_finetune.training.utils.worker_setup import (
     default_eval_batch_size,
-    get_ray_train_eval_datasets,
+    resolve_train_eval_datasets,
     init_tracking_from_config,
     load_causal_lm_for_training,
-    setup_training_worker,
 )
 from leap_finetune.training.sft import build_sft_data_collator
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
@@ -172,14 +170,14 @@ class LFMMoeSFTTrainer(
         return loss
 
 
-def moe_sft_run(training_config: dict) -> None:
+def moe_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
     """MoE SFT training loop with revised non-EP and EP paths."""
     # ==== 1. Worker setup and config ====
-    # Ray has already assigned this worker a dataset shard and CUDA device. This
-    # loop turns the Ray config into Trainer args while keeping MoE-only keys out
-    # of Hugging Face TrainingArguments.
-    setup_training_worker()
-    train_dataset, eval_dataset = get_ray_train_eval_datasets()
+    # Resolve supplied local datasets or the Ray worker shard, then keep MoE-only
+    # keys out of Hugging Face TrainingArguments.
+    train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
+        train_dataset, eval_dataset
+    )
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")

@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 import torch
-from ray.train.huggingface.transformers import prepare_trainer
 
 from leap_finetune.distribution.ray_runtime import normalize_visible_devices
 
@@ -41,9 +40,8 @@ from leap_finetune.training.utils.vlm_optimizer import (
     log_per_group_lrs,
 )
 from leap_finetune.training.utils.worker_setup import (
-    get_ray_train_eval_datasets,
     init_tracking_from_config,
-    setup_training_worker,
+    resolve_train_eval_datasets,
 )
 from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 
@@ -121,9 +119,10 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         return super()._tokenize_prompts(patched_prompts)
 
 
-def vlm_grpo_run(training_config: dict) -> None:
-    setup_training_worker()
-    train_dataset, eval_dataset = get_ray_train_eval_datasets()
+def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
+    train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
+        train_dataset, eval_dataset
+    )
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")

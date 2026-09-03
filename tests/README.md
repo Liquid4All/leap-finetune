@@ -32,6 +32,12 @@ For ROCm:
 UV_PROJECT=envs/rocm uv run python -m pytest tests/e2e --dense --moe --vlm --retrieval
 ```
 
+To run only the native local-path cases on one GPU:
+
+```bash
+GPUS_PER_TASK=1 PYTEST_ARGS="tests/e2e -m single_gpu" tests/e2e/slurm/submit_e2e_tests.sh
+```
+
 ## FA2 Validation
 
 Normal tests may fall back to SDPA. FA2 validation should inspect the active

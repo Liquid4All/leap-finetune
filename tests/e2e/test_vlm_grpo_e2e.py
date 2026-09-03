@@ -18,7 +18,13 @@ import pytest
 import yaml
 from PIL import Image
 
-from conftest import assert_grpo_optimization, requires_gpu, run_e2e_training
+from conftest import (
+    assert_grpo_optimization,
+    requires_gpu,
+    requires_single_gpu,
+    run_e2e_training,
+    run_local_e2e_training,
+)
 
 pytestmark = pytest.mark.vlm
 
@@ -90,3 +96,9 @@ class TestVLMGRPO:
             f"No per-component LR metrics logged. Expected lr/vision_tower etc. "
             f"All metrics: {list(metrics)}"
         )
+
+    @pytest.mark.single_gpu
+    @requires_single_gpu
+    def test_local_single_gpu_training(self, e2e_output_dir, tmp_path):
+        config_path = _write_multi_image_grpo_config(tmp_path)
+        run_local_e2e_training(config_path, e2e_output_dir)

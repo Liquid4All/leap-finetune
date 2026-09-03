@@ -15,6 +15,7 @@ from leap_finetune.config import (
 from leap_finetune.distribution.distributed_configs import (
     strip_distributed_training_config,
 )
+from leap_finetune.training.default_configs import TRAINING_DEFAULTS
 
 from conftest import BASE_DPO_DATASET, BASE_SFT_DATASET, write_config
 
@@ -72,6 +73,17 @@ class TestExampleSmoke:
         assert "beta" in materialized.training_config.value
         assert "desirable_weight" in materialized.training_config.value
         assert "deepspeed" in materialized.training_config.value
+
+
+class TestVLMDataLoaderDefaults:
+    @pytest.mark.parametrize("profile", ["DEFAULT_VLM_SFT", "DEFAULT_VLM_DPO"])
+    def test_vlm_profiles_enable_async_collation(self, profile):
+        cfg = TRAINING_DEFAULTS[profile]
+
+        assert cfg["dataloader_num_workers"] == 2
+        assert cfg["dataloader_prefetch_factor"] == 2
+        assert cfg["dataloader_persistent_workers"] is True
+        assert cfg["dataloader_pin_memory"] is True
 
 
 class TestDirectPythonConfig:

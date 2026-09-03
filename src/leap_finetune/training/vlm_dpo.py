@@ -3,7 +3,6 @@ import math
 from copy import deepcopy
 
 import numpy as np
-from PIL import Image
 from ray.train.huggingface.transformers import prepare_trainer
 from transformers import ProcessorMixin
 from trl import DPOConfig, DPOTrainer
@@ -14,7 +13,9 @@ from leap_finetune.evaluation import (
     create_vlm_benchmarks_from_config,
 )
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
+from leap_finetune.data_loading.vlm_batching import add_vlm_tile_counts
 from leap_finetune.checkpointing.model_loading import load_vlm_model
+from leap_finetune.data_loading.image_loader import load_image
 from leap_finetune.training.default_configs.vlm_sft_configs import (
     DEFAULT_LR_MULTIPLIERS,
 )
@@ -70,8 +71,7 @@ class PathLoadingVisionPreferenceCollator(DataCollatorForVisionPreference):
 
     @staticmethod
     def _open_rgb_image(path: str):
-        with Image.open(path) as image:
-            return image.convert("RGB")
+        return load_image(path)
 
     def torch_call(self, examples):
         examples = [deepcopy(example) for example in examples]
@@ -109,11 +109,13 @@ class LFMVLMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
         self,
         lr_multipliers: dict[str, float] | None = None,
         optimizer_type: str = "adamw",
+        group_by_image_tiles: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.lr_multipliers = lr_multipliers or DEFAULT_LR_MULTIPLIERS
         self.optimizer_type = optimizer_type
+        self.group_by_image_tiles = group_by_image_tiles
         self._optimizer_group_names: list[str] = []
 
     def create_optimizer(self):
@@ -146,6 +148,7 @@ def vlm_dpo_run(training_config: dict) -> None:
     model_name = training_config.get("model_name", "")
     job_name = training_config.get("job_name", "leap-ft-run")
     train_config = training_config.get("train_config", {})
+    group_by_image_tiles = bool(train_config.get("group_by_image_tiles", False))
 
     max_image_tokens = train_config.get("max_image_tokens")
     do_image_splitting = train_config.get("do_image_splitting", True)
@@ -194,6 +197,8 @@ def vlm_dpo_run(training_config: dict) -> None:
     max_steps = max(1, steps_per_epoch * epochs // grad_accum)
 
     train_config_filtered.pop("num_train_epochs", None)
+    if not train_config_filtered.get("dataloader_num_workers", 0):
+        train_config_filtered.pop("dataloader_prefetch_factor", None)
     config_kwargs = {
         "report_to": tracker,
         "run_name": job_name,
@@ -218,6 +223,8 @@ def vlm_dpo_run(training_config: dict) -> None:
         model = apply_peft_to_model(model, peft_config)
     if freeze_vision_encoder:
         freeze_vlm_modules(model, ["model.vision_tower"])
+    if group_by_image_tiles:
+        train_dataset = add_vlm_tile_counts(train_dataset, processor)
 
     if not isinstance(processor, ProcessorMixin):
         raise TypeError("VLM DPO requires an AutoProcessor-compatible processor")
@@ -230,6 +237,7 @@ def vlm_dpo_run(training_config: dict) -> None:
     trainer = LFMVLMDPOTrainer(
         lr_multipliers=lr_multipliers,
         optimizer_type=optimizer_type,
+        group_by_image_tiles=group_by_image_tiles,
         model=model,
         args=training_args,
         processing_class=processor,

@@ -17,8 +17,6 @@ SFT_EXCLUDED_KEYS = {
     "packing",
     "max_length",
     "drop_overlength",
-    "packing_strategy",
-    "eval_packing",
     "padding_free",
     "shuffle_dataset",
     "dataset_text_field",
@@ -44,6 +42,10 @@ DEFAULT_SFT = {
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 3,
     "per_device_train_batch_size": 16,
+    "group_by_length": True,
+    "packing": False,
+    "padding_free": False,
+    "max_length": 2048,
     "learning_rate": 5e-5,
     "lr_scheduler_type": "linear",
     "warmup_ratio": 0.2,
@@ -67,6 +69,10 @@ MOE_SFT = {
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 2,  # MoE models typically need fewer epochs
     "per_device_train_batch_size": 2,  # Reduced to save memory
+    "group_by_length": True,
+    "packing": False,
+    "padding_free": False,
+    "max_length": 2048,
     "gradient_accumulation_steps": 1,  # Set to 1 to match Accelerate config for testing
     "learning_rate": 5e-5,
     "lr_scheduler_type": "linear",

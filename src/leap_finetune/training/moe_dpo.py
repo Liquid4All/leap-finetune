@@ -100,17 +100,37 @@ class LFMMoeDPOTrainer(ManualShardedCheckpointMixin, DPOTrainer):
         return dataset
 
     def get_train_dataloader(self):
-        sampler = get_length_grouped_sampler(
-            self.train_dataset,
-            self._train_batch_size,
-        )
+        args = getattr(self, "args", None)
+        batch_size = getattr(args, "per_device_train_batch_size", self._train_batch_size)
+        group_by_length = getattr(args, "group_by_length", True)
+        sampler_generator = None
+        if group_by_length or self.ep_config is not None:
+            seed = (
+                42 + int(self.ep_config["dp_rank"])
+                if self.ep_config is not None
+                else getattr(args, "seed", None)
+            )
+            if seed is not None:
+                sampler_generator = torch.Generator().manual_seed(int(seed))
+
+        sampler = None
+        if group_by_length:
+            sampler = get_length_grouped_sampler(
+                self.train_dataset,
+                batch_size,
+                generator=sampler_generator,
+            )
+        dataloader_kwargs = {}
+        if sampler is None and sampler_generator is not None:
+            dataloader_kwargs["generator"] = sampler_generator
         return DataLoader(
             self.train_dataset,
-            batch_size=self._train_batch_size,
+            batch_size=batch_size,
             collate_fn=self.data_collator,
             shuffle=sampler is None,
             sampler=sampler,
             drop_last=True,
+            **dataloader_kwargs,
         )
 
     def get_eval_dataloader(self, eval_dataset=None):

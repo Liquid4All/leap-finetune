@@ -126,8 +126,8 @@ def store_moe_metrics(
             tokens_per_expert.scatter_add_(0, selected_experts[:, k], ones)
 
         block._moe_tokens_per_expert = tokens_per_expert
-        block._moe_router_logits_mean = router_logits.mean().item()
-        block._moe_router_logits_std = router_logits.std().item()
+        block._moe_router_logits_mean = router_logits.mean().detach()
+        block._moe_router_logits_std = router_logits.std().detach()
         block._moe_num_experts = num_experts
 
 

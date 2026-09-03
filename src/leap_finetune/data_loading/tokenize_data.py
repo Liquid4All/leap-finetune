@@ -5,7 +5,6 @@ import ray
 import ray.data
 import torch
 from datasets import Dataset, Features, Sequence, Value
-import pyarrow as pa
 from rich.console import Console
 from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from trl.data_utils import pack_dataset
@@ -341,10 +340,15 @@ def tokenize_dpo(
 
     # Column names must match TRL v1's DPO data collator:
     # prompt_ids, chosen_ids, rejected_ids (changed from *_input_ids in TRL 0.x)
+    # Include the actual collated sequence length so length grouping works for DPO.
     return {
         "prompt_ids": list(prompt_input_ids),
         "chosen_ids": list(chosen_input_ids),
         "rejected_ids": list(rejected_input_ids),
+        "length": max(
+            len(prompt_input_ids) + len(chosen_input_ids),
+            len(prompt_input_ids) + len(rejected_input_ids),
+        ),
     }
 
 
@@ -368,12 +372,7 @@ def tokenize_dpo_dataset(
             "max_completion_length": max_completion_length,
         },
     )
-
-    arrow_refs = ds.to_arrow_refs()
-    if not arrow_refs:
-        return ds
-
-    tables = ray.get(arrow_refs)
-    row_count = sum(table.num_rows for table in tables)
-    console.print(f"[dim]Tokenized {row_count:,} DPO rows[/dim]")
-    return ray.data.from_arrow(pa.concat_tables(tables))
+    # Keep tokenization lazy in Ray. The driver must not gather all tokenized
+    # DPO rows with ray.get(); Ray Train shards the dataset first, and each
+    # worker materializes only its local shard for the HF trainer.
+    return ds

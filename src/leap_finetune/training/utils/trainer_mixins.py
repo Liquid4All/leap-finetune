@@ -1,7 +1,12 @@
 import logging
 
+import torch
 from torch.utils.data import DataLoader
 
+from leap_finetune.data_loading.length_grouping import (
+    get_length_grouped_sampler,
+    get_tile_count_grouped_sampler,
+)
 from leap_finetune.checkpointing.manual_sharded import (
     finalize_manual_sharded_export_metadata,
     load_manual_sharded_model_checkpoint,
@@ -24,14 +29,68 @@ class RayDataLoaderMixin:
     which HF Trainer auto-multiplies by world_size).
     """
 
+    def _ray_dataloader_kwargs(self, *, training: bool) -> dict:
+        """Translate HF dataloader arguments for the Ray-sharded loader.
+
+        Ray owns distributed sharding, so this only configures local PyTorch
+        loading. Worker-only options must not be passed with ``num_workers=0``.
+        """
+        num_workers = int(getattr(self.args, "dataloader_num_workers", 0) or 0)
+        if num_workers < 0:
+            raise ValueError("dataloader_num_workers must be non-negative")
+
+        kwargs = {
+            "num_workers": num_workers,
+            "pin_memory": bool(getattr(self.args, "dataloader_pin_memory", True)),
+        }
+        if training:
+            kwargs["drop_last"] = bool(
+                getattr(self.args, "dataloader_drop_last", False)
+            )
+
+        if num_workers > 0:
+            prefetch_factor = getattr(self.args, "dataloader_prefetch_factor", None)
+            if prefetch_factor is not None:
+                prefetch_factor = int(prefetch_factor)
+                if prefetch_factor < 1:
+                    raise ValueError("dataloader_prefetch_factor must be positive")
+                kwargs["prefetch_factor"] = prefetch_factor
+            kwargs["persistent_workers"] = bool(
+                getattr(self.args, "dataloader_persistent_workers", False)
+            )
+
+        return kwargs
+
     def get_train_dataloader(self):
-        dataloader_kwargs = {}
+        batch_size = self.args.per_device_train_batch_size
+        sampler = None
+        dataloader_kwargs = self._ray_dataloader_kwargs(training=True)
+        group_generator = None
+        if getattr(self.args, "seed", None) is not None:
+            group_generator = torch.Generator().manual_seed(int(self.args.seed))
+
+        if getattr(self, "group_by_image_tiles", False):
+            sampler = get_tile_count_grouped_sampler(
+                self.train_dataset,
+                batch_size,
+                generator=group_generator,
+            )
+
+        if sampler is None and getattr(self.args, "group_by_length", False):
+            sampler = get_length_grouped_sampler(
+                self.train_dataset,
+                batch_size,
+                generator=group_generator,
+            )
+        if sampler is None and group_generator is not None:
+            dataloader_kwargs["generator"] = group_generator
 
         return DataLoader(
             self.train_dataset,
-            batch_size=self.args.per_device_train_batch_size,
+            batch_size=batch_size,
             collate_fn=self.data_collator,
-            shuffle=True,
+            shuffle=sampler is None,
+            sampler=sampler,
             **dataloader_kwargs,
         )
 
@@ -44,6 +103,7 @@ class RayDataLoaderMixin:
             eval_dataset,
             batch_size=self.args.per_device_eval_batch_size,
             collate_fn=self.data_collator,
+            **self._ray_dataloader_kwargs(training=False),
         )
 
 

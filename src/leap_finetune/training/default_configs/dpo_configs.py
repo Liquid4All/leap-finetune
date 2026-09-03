@@ -15,6 +15,7 @@ DEFAULT_DPO = {
     "output_dir": DPO_OUTPUT_PATH,
     "num_train_epochs": 3,
     "per_device_train_batch_size": 8,
+    "group_by_length": True,
     "learning_rate": 1e-6,
     "lr_scheduler_type": "linear",
     "beta": 0.1,
@@ -35,6 +36,7 @@ DEFAULT_VLM_DPO = {
     **DEFAULT_DPO,
     "training_type": "vlm_dpo",
     "per_device_train_batch_size": 1,
+    "group_by_length": False,
     "per_device_eval_batch_size": 1,
     "gradient_accumulation_steps": 16,
     "learning_rate": 5e-7,
@@ -55,6 +57,12 @@ DEFAULT_VLM_DPO = {
     "remove_unused_columns": False,
     "do_image_splitting": True,
     "max_image_tokens": 256,
+    "group_by_image_tiles": False,
+    # Match VLM SFT: keep image/token collation off the training critical path.
+    "dataloader_num_workers": 2,
+    "dataloader_prefetch_factor": 2,
+    "dataloader_persistent_workers": True,
+    "dataloader_pin_memory": True,
 }
 
 
@@ -69,6 +77,7 @@ MOE_DPO = {
     "output_dir": DPO_OUTPUT_PATH,
     "num_train_epochs": 2,  # MoE models typically need fewer epochs
     "per_device_train_batch_size": 2,  # MoE models are larger, use smaller batch size
+    "group_by_length": True,
     "learning_rate": 1e-6,
     "lr_scheduler_type": "linear",
     "beta": 0.1,

@@ -319,7 +319,7 @@ def _tokenize_datasets(
                 eval_ds,
                 tokenizer,
                 max_length,
-                packing=False,
+                packing=packing,
                 assistant_only_loss=assistant_only_loss,
                 completion_only_loss=completion_only_loss,
                 drop_overlength=drop_overlength,

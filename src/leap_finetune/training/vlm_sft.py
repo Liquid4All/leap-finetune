@@ -6,6 +6,7 @@ from ray.train.huggingface.transformers import prepare_trainer
 from transformers import Trainer, TrainingArguments
 
 from leap_finetune.data_loading.tokenize_data import create_vlm_collate_fn
+from leap_finetune.data_loading.vlm_batching import add_vlm_tile_counts
 from leap_finetune.training.default_configs.vlm_sft_configs import (
     DEFAULT_LR_MULTIPLIERS,
     VLM_SFT_EXCLUDED_KEYS,
@@ -56,9 +57,15 @@ class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
     while the projector and LLM backbone train at the base rate.
     """
 
-    def __init__(self, lr_multipliers: dict[str, float] | None = None, **kwargs):
+    def __init__(
+        self,
+        lr_multipliers: dict[str, float] | None = None,
+        group_by_image_tiles: bool = False,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.lr_multipliers = lr_multipliers or DEFAULT_LR_MULTIPLIERS
+        self.group_by_image_tiles = group_by_image_tiles
         self._optimizer_group_names: list[str] = []
 
     def create_optimizer(self):
@@ -95,6 +102,9 @@ def vlm_sft_run(training_config: dict) -> None:
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")
     job_name = training_config.get("job_name", "leap-ft-run")
+    group_by_image_tiles = bool(
+        training_config.get("train_config", {}).get("group_by_image_tiles", False)
+    )
 
     # Extract VLM-specific params and run name template before filtering
     train_config = training_config.get("train_config", {})
@@ -154,6 +164,8 @@ def vlm_sft_run(training_config: dict) -> None:
 
     # Build training args — use max_steps instead of num_train_epochs
     train_config_filtered.pop("num_train_epochs", None)
+    if not train_config_filtered.get("dataloader_num_workers", 0):
+        train_config_filtered.pop("dataloader_prefetch_factor", None)
     config_kwargs = {
         "report_to": tracker,
         "run_name": job_name,
@@ -170,6 +182,8 @@ def vlm_sft_run(training_config: dict) -> None:
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
     )
+    if group_by_image_tiles:
+        train_dataset = add_vlm_tile_counts(train_dataset, processor)
 
     if adapter_path:
         model = load_peft_adapter(model, adapter_path)
@@ -182,6 +196,7 @@ def vlm_sft_run(training_config: dict) -> None:
     # processing_class ensures processor + tokenizer are saved in checkpoints
     trainer = LFMVLMTrainer(
         lr_multipliers=lr_multipliers,
+        group_by_image_tiles=group_by_image_tiles,
         model=model,
         processing_class=processor,
         args=training_args,

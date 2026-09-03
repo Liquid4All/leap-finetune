@@ -41,3 +41,27 @@ def get_length_grouped_sampler(
         model_input_name="input_ids",
         generator=generator,
     )
+
+
+def get_tile_count_grouped_sampler(
+    dataset: Dataset | None,
+    batch_size: int,
+    *,
+    generator: torch.Generator | None = None,
+):
+    """Group VLM examples with similar processed image tile counts."""
+    if dataset is None:
+        return None
+    column_names = getattr(dataset, "column_names", None)
+    if column_names is None or "_vlm_tile_count" not in column_names:
+        return None
+    counts = list(dataset["_vlm_tile_count"])
+    if not counts:
+        return None
+    if len(set(counts)) == 1:
+        return None
+    return LengthGroupedSampler(
+        batch_size=batch_size,
+        lengths=[max(1, int(count)) for count in counts],
+        generator=generator,
+    )

@@ -2,6 +2,8 @@ import torch
 from leap_finetune.data_loading.tokenize_data import (
     _final_assistant_span_mask,
     tokenize_and_pack_sft,
+    tokenize_dpo,
+    tokenize_dpo_dataset,
     tokenize_sft,
 )
 from leap_finetune.training.sft import build_sft_data_collator
@@ -321,3 +323,56 @@ def test_tokenize_and_pack_sft_can_drop_overlength_without_truncating():
     assert len(rows) == 1
     assert rows[0]["input_ids"] == [0, 1, 2]
     assert rows[0]["assistant_masks"] == [1, 1, 1]
+
+
+def test_tokenize_dpo_emits_collated_pair_length(monkeypatch):
+    import leap_finetune.data_loading.tokenize_data as tokenize_data
+
+    monkeypatch.setattr(tokenize_data, "maybe_extract_prompt", lambda row: row)
+    monkeypatch.setattr(
+        tokenize_data, "maybe_apply_chat_template", lambda row, tokenizer: row
+    )
+
+    class _DpoTokenizer:
+        eos_token_id = 99
+
+        def __call__(self, text, add_special_tokens=False):
+            return {"input_ids": list(range(len(text)))}
+
+    tokenized = tokenize_dpo(
+        {"prompt": "p", "chosen": "ccc", "rejected": "rrrr"},
+        _DpoTokenizer(),
+        None,
+        None,
+    )
+
+    assert tokenized["length"] == 6
+
+
+def test_tokenize_dpo_dataset_stays_lazy():
+    class _LazyDpoDataset:
+        def __init__(self):
+            self.mapped = False
+
+        def map(self, fn, fn_kwargs=None):
+            self.mapped = True
+            assert fn is tokenize_dpo
+            assert fn_kwargs["max_prompt_length"] == 32
+            return self
+
+        def to_arrow_refs(self):
+            raise AssertionError("DPO tokenization must not gather the full dataset")
+
+    class _DpoTokenizer:
+        eos_token_id = 99
+
+    dataset = _LazyDpoDataset()
+    result = tokenize_dpo_dataset(
+        dataset,
+        _DpoTokenizer(),
+        max_prompt_length=32,
+        max_completion_length=64,
+    )
+
+    assert result is dataset
+    assert dataset.mapped is True

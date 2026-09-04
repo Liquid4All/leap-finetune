@@ -48,9 +48,9 @@ class MoEMetricsCallback(TrainerCallback):
                 all_tokens_per_expert.append(module._moe_tokens_per_expert)
                 num_experts = module._moe_num_experts
             if hasattr(module, "_moe_router_logits_mean"):
-                logit_means.append(module._moe_router_logits_mean)
+                logit_means.append(module._moe_router_logits_mean.item())
             if hasattr(module, "_moe_router_logits_std"):
-                logit_stds.append(module._moe_router_logits_std)
+                logit_stds.append(module._moe_router_logits_std.item())
 
         if not all_tokens_per_expert:
             return {}

@@ -6,7 +6,6 @@ import logging
 from typing import cast
 
 from peft import LoraConfig
-from ray.train.huggingface.transformers import prepare_trainer
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
 from leap_finetune.distribution.ray_runtime import normalize_visible_devices
@@ -36,9 +35,8 @@ from leap_finetune.training.utils.logging import (
 )
 from leap_finetune.training.utils.trainer_lifecycle import run_training_safely
 from leap_finetune.training.utils.worker_setup import (
-    get_ray_train_eval_datasets,
     init_tracking_from_config,
-    setup_training_worker,
+    resolve_train_eval_datasets,
 )
 from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 
@@ -66,9 +64,10 @@ def _apply_grpo_peft(
 # dataset; TRL then distributes repeated prompt groups across ranks.
 
 
-def grpo_run(training_config: dict) -> None:
-    setup_training_worker()
-    train_dataset, eval_dataset = get_ray_train_eval_datasets()
+def grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
+    train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
+        train_dataset, eval_dataset
+    )
 
     peft_config = training_config.get("peft_config")
     model_name = training_config.get("model_name", "")

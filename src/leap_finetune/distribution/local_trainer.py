@@ -12,7 +12,9 @@ from leap_finetune.distribution.distributed_configs import (
 )
 from leap_finetune.training import TRAINING_LOOPS
 
-_LOCAL_TYPES = frozenset({"sft", "dpo", "vlm_sft", "vlm_dpo"})
+_LOCAL_TYPES = frozenset(
+    {"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo", "moe_sft", "moe_dpo"}
+)
 
 
 def should_use_local(job_config: dict) -> bool:
@@ -21,11 +23,15 @@ def should_use_local(job_config: dict) -> bool:
         return False
     training_type = job_config["training_type"]
     is_moe = is_moe_model_from_name(job_config["model_name"])
-    if training_type not in _LOCAL_TYPES and training_type not in {
-        "moe_sft",
-        "moe_dpo",
-    }:
+    if training_type not in _LOCAL_TYPES:
         return False
+    if training_type in {"grpo", "vlm_grpo"}:
+        train_config = job_config.get("training_config") or {}
+        if train_config.get("vllm_mode", "colocate") != "colocate":
+            return False
+        rollout_config = job_config.get("grpo_rollout") or {}
+        if int(rollout_config.get("tensor_parallel_size", 1) or 1) != 1:
+            return False
     if training_type.startswith("moe_") and not is_moe:
         return False
     if is_moe:
@@ -90,6 +96,7 @@ def local_trainer(job_config: dict):
         "model_config": job_config.get("model_config"),
         "benchmark_configs": job_config.get("benchmark_configs"),
         "rewards": job_config.get("rewards"),
+        "rl_env": job_config.get("rl_env"),
         "async_eval": job_config.get("async_eval"),
         "config_dir": job_config.get("config_dir"),
     }

@@ -1,8 +1,11 @@
+from types import SimpleNamespace
+
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 
 from leap_finetune.training.moe_sft import LFMMoeSFTTrainer
+from leap_finetune.training.utils.trainer_mixins import RayDataLoaderMixin
 from leap_finetune.training.moe_utils import ep_runtime as moe_ep_module
 
 
@@ -214,3 +217,79 @@ def test_moe_sft_length_grouping_uses_dp_seed_for_ep():
     assert dataloader.sampler is not None
     assert dataloader.sampler.generator is not None
     assert dataloader.sampler.generator.initial_seed() == 45
+
+
+def test_moe_sft_length_grouping_can_be_disabled():
+    trainer = LFMMoeSFTTrainer.__new__(LFMMoeSFTTrainer)
+    trainer.train_dataset = LengthDataset([8, 3, 5, 2])
+    trainer._train_batch_size = 2
+    trainer.args = SimpleNamespace(
+        per_device_train_batch_size=2,
+        group_by_length=False,
+        seed=7,
+    )
+    trainer.data_collator = lambda features: features
+    trainer.ep_config = None
+
+    dataloader = trainer.get_train_dataloader()
+
+    assert type(dataloader.sampler).__name__ == "RandomSampler"
+
+
+def test_ray_dataloader_length_grouping_is_toggleable():
+    trainer = RayDataLoaderMixin()
+    trainer.train_dataset = LengthDataset([8, 3, 5, 2])
+    trainer.args = SimpleNamespace(
+        per_device_train_batch_size=2,
+        group_by_length=True,
+        seed=17,
+    )
+    trainer.data_collator = lambda features: features
+
+    dataloader = trainer.get_train_dataloader()
+
+    assert dataloader.sampler is not None
+    assert dataloader.sampler.generator.initial_seed() == 17
+
+
+def test_ray_dataloader_honors_hf_worker_controls():
+    trainer = RayDataLoaderMixin()
+    trainer.train_dataset = LengthDataset([8, 3, 5, 2])
+    trainer.args = SimpleNamespace(
+        per_device_train_batch_size=2,
+        group_by_length=False,
+        seed=17,
+        dataloader_num_workers=2,
+        dataloader_prefetch_factor=3,
+        dataloader_persistent_workers=True,
+        dataloader_pin_memory=True,
+        dataloader_drop_last=True,
+    )
+    trainer.data_collator = lambda features: features
+
+    dataloader = trainer.get_train_dataloader()
+
+    assert dataloader.num_workers == 2
+    assert dataloader.prefetch_factor == 3
+    assert dataloader.persistent_workers is True
+    assert dataloader.pin_memory is True
+    assert dataloader.drop_last is True
+
+
+def test_ray_dataloader_omits_worker_only_options_without_workers():
+    trainer = RayDataLoaderMixin()
+    trainer.train_dataset = LengthDataset([8, 3, 5, 2])
+    trainer.args = SimpleNamespace(
+        per_device_train_batch_size=2,
+        group_by_length=False,
+        seed=17,
+        dataloader_num_workers=0,
+        dataloader_prefetch_factor=3,
+        dataloader_persistent_workers=True,
+        dataloader_pin_memory=False,
+    )
+    trainer.data_collator = lambda features: features
+
+    dataloader = trainer.get_train_dataloader()
+
+    assert dataloader.num_workers == 0

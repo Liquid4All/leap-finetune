@@ -4,8 +4,7 @@ import logging
 import ray
 import ray.data
 import torch
-from datasets import Dataset
-import pyarrow as pa
+from datasets import Dataset, Features, Sequence, Value
 from rich.console import Console
 from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from trl.data_utils import pack_dataset
@@ -268,26 +267,20 @@ def tokenize_and_pack_sft(
 
     # === 2. Pack or truncate ===
     if packing:
-        # Keep packing Arrow-native; the previous row list doubled peak memory.
-        if hasattr(ds, "to_arrow_refs"):
-            tables = ray.get(ds.to_arrow_refs())
-            if not tables:
-                return ds
-            table = pa.concat_tables(tables)
-            columns = [
-                name
-                for name in ("input_ids", "assistant_masks", "completion_mask")
-                if name in table.column_names
-            ]
-            hf_ds = Dataset(table.select(columns))
-        else:
-            hf_ds = Dataset.from_generator(ds.iter_rows)
-            columns = [
-                name
-                for name in ("input_ids", "assistant_masks", "completion_mask")
-                if name in hf_ds.column_names
-            ]
-            hf_ds = hf_ds.select_columns(columns)
+        # Packing requires full materialization into an HF Dataset
+        rows = []
+        features_dict = {"input_ids": Sequence(Value("int64"))}
+        for row in ds.iter_rows():
+            packed_row = {"input_ids": row["input_ids"]}
+            if "assistant_masks" in row:
+                packed_row["assistant_masks"] = row["assistant_masks"]
+                features_dict["assistant_masks"] = Sequence(Value("int64"))
+            if "completion_mask" in row:
+                packed_row["completion_mask"] = row["completion_mask"]
+                features_dict["completion_mask"] = Sequence(Value("int64"))
+            rows.append(packed_row)
+        features = Features(features_dict)
+        hf_ds = Dataset.from_list(rows, features=features)
         console.print(f"[dim]Tokenized {len(hf_ds):,} rows[/dim]")
         console.print(f"[dim]Packing sequences (BFD, max_length={max_length})...[/dim]")
         hf_ds = pack_dataset(hf_ds, seq_length=max_length, strategy="bfd")
@@ -347,10 +340,15 @@ def tokenize_dpo(
 
     # Column names must match TRL v1's DPO data collator:
     # prompt_ids, chosen_ids, rejected_ids (changed from *_input_ids in TRL 0.x)
+    # Include the actual collated sequence length so length grouping works for DPO.
     return {
         "prompt_ids": list(prompt_input_ids),
         "chosen_ids": list(chosen_input_ids),
         "rejected_ids": list(rejected_input_ids),
+        "length": max(
+            len(prompt_input_ids) + len(chosen_input_ids),
+            len(prompt_input_ids) + len(rejected_input_ids),
+        ),
     }
 
 
@@ -374,12 +372,7 @@ def tokenize_dpo_dataset(
             "max_completion_length": max_completion_length,
         },
     )
-
-    arrow_refs = ds.to_arrow_refs()
-    if not arrow_refs:
-        return ds
-
-    tables = ray.get(arrow_refs)
-    row_count = sum(table.num_rows for table in tables)
-    console.print(f"[dim]Tokenized {row_count:,} DPO rows[/dim]")
-    return ray.data.from_arrow(pa.concat_tables(tables))
+    # Keep tokenization lazy in Ray. The driver must not gather all tokenized
+    # DPO rows with ray.get(); Ray Train shards the dataset first, and each
+    # worker materializes only its local shard for the HF trainer.
+    return ds

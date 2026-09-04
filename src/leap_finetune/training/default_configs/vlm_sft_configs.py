@@ -34,6 +34,7 @@ DEFAULT_VLM_SFT = {
     "training_type": "vlm_sft",
     "max_image_tokens": None,  # None = processor default (256); set int to override
     "do_image_splitting": True,  # for VLMs, split large images into multiple tiles
+    "group_by_image_tiles": False,
     "output_dir": SFT_OUTPUT_PATH,
     "num_train_epochs": 3,
     "per_device_train_batch_size": 1,
@@ -50,6 +51,13 @@ DEFAULT_VLM_SFT = {
     "gradient_checkpointing": True,
     "remove_unused_columns": False,  # preserve pixel_values, spatial_shapes, pixel_attention_mask
     "dataloader_drop_last": True,  # avoid batch size mismatches in DDP
+    # Keep image/token collation off the training critical path. Two workers is
+    # the portable default across AMD and H100; increase explicitly on
+    # CPU-rich AMD nodes when image preprocessing is the bottleneck.
+    "dataloader_num_workers": 2,
+    "dataloader_prefetch_factor": 2,
+    "dataloader_persistent_workers": True,
+    "dataloader_pin_memory": True,
     "lr_multipliers": DEFAULT_LR_MULTIPLIERS,
     # No optimizer block here: VLMTrainer.create_optimizer() builds per-component
     # param groups that DeepSpeed's optimizer integration would discard.
